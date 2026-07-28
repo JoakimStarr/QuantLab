@@ -89,7 +89,13 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
             codes = await get_universe()
             codes = codes[:30]  # 控制规模
 
-        await _update_task(task_id, params=json.dumps({"n_codes": len(codes)}))
+        # 保留原始 params 中的 codes，追加 n_codes 摘要
+        async with async_session() as session:
+            r = await session.get(MiningTask, task_id)
+            existing_params = json.loads(r.params) if r and r.params else {}
+            existing_params["n_codes"] = len(codes)
+            await session.commit()
+        await _update_task(task_id, params=json.dumps(existing_params))
         # 拉取新闻 + 情绪分类
         news = await _fetch_news_for_universe(codes)
         sentiments = await _classify_sentiment(news)
@@ -166,10 +172,5 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
 
 
 async def _update_task(task_id: int, **kwargs):
-    async with async_session() as session:
-        r = await session.get(MiningTask, task_id)
-        if r is None:
-            return
-        for k, v in kwargs.items():
-            setattr(r, k, v)
-        await session.commit()
+    from app.services.mining.task_utils import update_task_status
+    await update_task_status(task_id, **kwargs)

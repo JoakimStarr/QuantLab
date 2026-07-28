@@ -3,12 +3,14 @@
 qlib.init 只能调用一次，本模块通过 _initialized 标志保证幂等。
 qlib 未安装时 init_qlib() 抛出 QlibNotAvailableError，调用方应捕获。
 """
+import asyncio
 import logging
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 _initialized = False
+_init_lock = asyncio.Lock()
 
 
 class QlibNotAvailableError(RuntimeError):
@@ -37,10 +39,14 @@ def init_qlib():
         raise QlibNotAvailableError(f"qlib 初始化失败: {e}") from e
 
 
-def is_qlib_available() -> bool:
-    """探测 qlib 是否可用（不抛异常）。"""
+async def is_qlib_available() -> bool:
+    """探测 qlib 是否可用（不抛异常）。在线程池中执行避免阻塞事件循环。"""
+    global _initialized
+    if _initialized:
+        return True
     try:
-        init_qlib()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, init_qlib)
         return True
     except QlibNotAvailableError:
         return False

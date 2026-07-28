@@ -44,7 +44,7 @@
               <Moon v-else />
             </el-icon>
           </button>
-          <div class="version-badge">v2.1.0</div>
+          <div class="version-badge">v2.0.0</div>
         </div>
       </transition>
     </div>
@@ -65,6 +65,7 @@ const menuItems = [
   { path: '/quant/strategy', title: '策略回测', icon: 'TrendCharts' },
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
+  { path: '/system/logs', title: '日志管理', icon: 'Document' },
 ]
 
 function toggleTheme() {

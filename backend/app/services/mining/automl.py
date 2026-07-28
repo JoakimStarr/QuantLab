@@ -125,10 +125,5 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
 
 
 async def _update_task(task_id: int, **kwargs):
-    async with async_session() as session:
-        r = await session.get(MiningTask, task_id)
-        if r is None:
-            return
-        for k, v in kwargs.items():
-            setattr(r, k, v)
-        await session.commit()
+    from app.services.mining.task_utils import update_task_status
+    await update_task_status(task_id, **kwargs)

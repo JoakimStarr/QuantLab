@@ -11,21 +11,28 @@ logger = logging.getLogger(__name__)
 
 
 async def list_factors(category: str = None, status: str = "active", sort_by: str = "ic",
-                       limit: int = 100, offset: int = 0) -> list[dict]:
-    """列出因子，支持按 IC 等排序。"""
+                       limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+    """列出因子，支持按 IC 等排序，返回 (items, total)。"""
     async with async_session() as session:
+        base_q = select(func.count()).select_from(Factor)
+        if category:
+            base_q = base_q.where(Factor.category == category)
+        if status:
+            base_q = base_q.where(Factor.status == status)
+        total_result = await session.execute(base_q)
+        total = total_result.scalar() or 0
+
         q = select(Factor)
         if category:
             q = q.where(Factor.category == category)
         if status:
             q = q.where(Factor.status == status)
-        # 排序
         sort_col = {"ic": Factor.ic, "rank_ic": Factor.rank_ic, "icir": Factor.icir,
                     "created_at": Factor.created_at}.get(sort_by, Factor.ic)
         q = q.order_by(sort_col.desc().nullslast()).limit(limit).offset(offset)
         result = await session.execute(q)
         rows = result.scalars().all()
-    return [_to_dict(r) for r in rows]
+    return [_to_dict(r) for r in rows], total
 
 
 async def get_factor(factor_id: int) -> dict:

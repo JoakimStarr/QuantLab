@@ -30,6 +30,10 @@
             <div class="stat-value">{{ backtestCount }}</div>
             <div class="stat-label">回测记录</div>
           </div>
+          <div class="stat-item">
+            <div class="stat-value">{{ latestDataDate || '--' }}</div>
+            <div class="stat-label">数据最新日期</div>
+          </div>
         </div>
       </div>
       <div class="hero-illustration">
@@ -89,16 +93,16 @@
     <!-- Statistics Cards -->
     <el-row :gutter="16" class="mb-24">
       <el-col :xs="12" :sm="6">
-        <StatCard label="因子库" :value="factorCount" suffix="个" icon="Coin" accent="#1a73e8" :trend="12.5" />
+        <StatCard label="因子库" :value="factorCount" suffix="个" icon="Coin" accent="#1a73e8" />
       </el-col>
       <el-col :xs="12" :sm="6">
-        <StatCard label="策略数" :value="strategyCount" suffix="个" icon="TrendCharts" accent="#00b894" :trend="8.3" />
+        <StatCard label="策略数" :value="strategyCount" suffix="个" icon="TrendCharts" accent="#00b894" />
       </el-col>
       <el-col :xs="12" :sm="6">
-        <StatCard label="挖掘任务" :value="miningCount" suffix="个" icon="MagicStick" accent="#f39c12" :trend="-2.1" />
+        <StatCard label="挖掘任务" :value="miningCount" suffix="个" icon="MagicStick" accent="#f39c12" />
       </el-col>
       <el-col :xs="12" :sm="6">
-        <StatCard label="回测记录" :value="backtestCount" suffix="条" icon="DataLine" accent="#e17055" :trend="15.7" />
+        <StatCard label="回测记录" :value="backtestCount" suffix="条" icon="DataLine" accent="#e17055" />
       </el-col>
     </el-row>
 
@@ -151,14 +155,15 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
 import { listFactors } from '@/api/factor'
-import { listStrategies, listBacktestResults } from '@/api/strategy'
+import { listStrategies, listAllBacktestResults } from '@/api/strategy'
 import { listMiningTasks } from '@/api/mining'
-import { getQlibStatus } from '@/api/quant'
+import { getQlibStatus, getQuantDataStatus } from '@/api/quant'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
@@ -170,11 +175,12 @@ const miningCount = ref(0)
 const backtestCount = ref(0)
 const recentMining = ref([])
 const recentBacktests = ref([])
+const latestDataDate = ref('')
 
 const typeLabel = { llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' }
-const typeTag = (t) => ({ llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[t] || '')
+const typeTag = (t) => ({ llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[t] || 'info')
 const statusLabel = { pending: '等待', running: '运行', done: '完成', failed: '失败' }
-const statusTag = (s) => ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' }[s] || '')
+const statusTag = (s) => ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' }[s] || 'info')
 
 // Chart configuration
 const chartOption = computed(() => ({
@@ -227,23 +233,38 @@ const chartOption = computed(() => ({
 
 async function loadAll() {
   try {
-    const [factors, strategies, mining, qlib] = await Promise.all([
+    const [factors, strategies, mining, qlib, dataStatus] = await Promise.all([
       listFactors({ limit: 1 }),
       listStrategies(),
       listMiningTasks({ limit: 5 }),
       getQlibStatus(),
+      getQuantDataStatus(),
     ])
     factorCount.value = factors?.total ?? 0
     strategyCount.value = strategies?.total ?? 0
     recentMining.value = mining?.items ?? []
     miningCount.value = mining?.total ?? 0
     qlibAvailable.value = qlib?.available ?? false
-  } catch {}
+    const items = dataStatus?.items ?? []
+    if (items.length) {
+      const latest = items
+        .filter(r => r.status === 'ok')
+        .map(r => r.latest_date)
+        .filter(Boolean)
+        .sort()
+        .reverse()[0]
+      if (latest) latestDataDate.value = latest
+    }
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('加载首页数据失败')
+  }
   try {
-    const data = await listBacktestResults(1, { limit: 5 })
+    const data = await listAllBacktestResults({ limit: 5 })
     recentBacktests.value = data?.items ?? []
     backtestCount.value = data?.total ?? 0
-  } catch {}
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('加载回测数据失败')
+  }
 }
 
 onMounted(loadAll)
@@ -357,7 +378,8 @@ onMounted(loadAll)
 
 .hero-stats {
   display: flex;
-  gap: var(--space-xl);
+  gap: var(--space-lg);
+  flex-wrap: wrap;
 
   @media (max-width: 767px) {
     gap: var(--space-md);
@@ -367,15 +389,17 @@ onMounted(loadAll)
 .stat-item {
   text-align: center;
   color: #fff;
+  min-width: 60px;
 }
 
 .stat-value {
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-bold);
   margin-bottom: var(--space-xs);
+  white-space: nowrap;
 
   @media (max-width: 767px) {
-    font-size: var(--font-size-xl);
+    font-size: var(--font-size-lg);
   }
 }
 

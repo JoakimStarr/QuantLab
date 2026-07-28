@@ -34,8 +34,8 @@ _USER_PROMPT_TEMPLATE = """请生成 {n} 个有 alpha 的 qlib 因子表达式�
 3. 只能使用上述算子与字段，禁止 import/exec 等
 4. 严禁使用负数 Ref（如 Ref($close, -5)）——那是未来数据，会造成 look-ahead bias
 
-请严格返回 JSON 数组，不要任何额外文字：
-[{{"name": "momentum_20", "expression": "Ref($close, -20) / $close - 1", "description": "20日动量"}}]
+请严格返回 JSON 对象（不要返回数组），不要任何额外文字：
+{{"factors": [{{"name": "momentum_20", "expression": "$close / Ref($close, 20) - 1", "description": "20日动量"}}]}}
 """
 
 
@@ -147,10 +147,5 @@ async def _save_metrics(factor_id: int, metrics: dict) -> None:
 
 
 async def _update_task(task_id: int, **kwargs):
-    async with async_session() as session:
-        r = await session.get(MiningTask, task_id)
-        if r is None:
-            return
-        for k, v in kwargs.items():
-            setattr(r, k, v)
-        await session.commit()
+    from app.services.mining.task_utils import update_task_status
+    await update_task_status(task_id, **kwargs)

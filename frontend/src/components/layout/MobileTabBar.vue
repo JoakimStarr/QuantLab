@@ -20,6 +20,7 @@ const tabItems = [
   { path: '/quant/strategy', label: '回测', icon: 'TrendCharts' },
   { path: '/quant/mining', label: '挖掘', icon: 'MagicStick' },
   { path: '/quant/data', label: '数据', icon: 'SetUp' },
+  { path: '/system/logs', label: '日志', icon: 'Document' },
 ]
 </script>
 

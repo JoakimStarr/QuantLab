@@ -115,11 +115,9 @@
 <script setup>
 import { ref } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 const appStore = useAppStore()
-const router = useRouter()
 
 const searchQuery = ref('')
 const notificationCount = ref(0)
@@ -127,8 +125,7 @@ const showMobileSearch = ref(false)
 
 function handleSearch() {
   if (searchQuery.value.trim()) {
-    ElMessage.info(`搜索: ${searchQuery.value}`)
-    // TODO: Implement actual search functionality
+    ElMessage.info('全局搜索功能开发中')
   }
 }
 
@@ -140,14 +137,13 @@ function handleMobileSearch() {
 function handleUserCommand(command) {
   switch (command) {
     case 'profile':
-      ElMessage.info('个人中心功能开发中')
+      ElMessage.info('个人中心')
       break
     case 'settings':
-      ElMessage.info('系统设置功能开发中')
+      ElMessage.info('系统设置')
       break
     case 'logout':
-      ElMessage.success('已退出登录')
-      // TODO: Implement actual logout
+      ElMessage.success('已退出')
       break
   }
 }

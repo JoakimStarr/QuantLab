@@ -1,9 +1,6 @@
 @use './variables' as *;
 @use './animations' as *;
 
-// === Google Fonts Import ===
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
 // === CSS Reset ===
 *,
 *::before,
@@ -622,7 +619,7 @@ img {
 
 // Loading spinner
 .el-loading-mask {
-  background-color: rgba(var(--bg-primary-rgb, 255, 255, 255), 0.9) !important;
+  background-color: rgba(255, 255, 255, 0.9) !important;
 }
 
 :root.dark .el-loading-mask {

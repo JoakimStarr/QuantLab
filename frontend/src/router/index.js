@@ -60,8 +60,31 @@ const routes = [
           keepAlive: true
         }
       },
+      {
+        path: 'system/logs',
+        name: 'SystemLogs',
+        component: () => import('@/views/quant/Logs.vue'),
+        meta: {
+          title: '日志管理',
+          icon: 'Document',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
+        path: ':pathMatch(.*)*',
+        name: 'NotFound',
+        component: () => import('@/views/quant/Dashboard.vue'),
+        meta: { title: '页面不存在' }
+      },
     ]
   }
 ]
 
-export default createRouter({ history: createWebHistory(), routes })
+export default createRouter({
+  history: createWebHistory(),
+  routes,
+  scrollBehavior(to, from, savedPosition) {
+    return savedPosition || { top: 0 }
+  }
+})

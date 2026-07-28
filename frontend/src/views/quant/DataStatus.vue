@@ -42,7 +42,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
@@ -51,12 +51,13 @@ import { getQuantDataStatus, syncQuantData, getQlibStatus } from '@/api/quant'
 const statusList = ref([])
 const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '' })
+let statusTimer = null
 
 async function loadStatus() {
   try {
     const data = await getQuantDataStatus()
     statusList.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载数据状态失败') }
 }
 
 async function loadQlib() {
@@ -64,7 +65,7 @@ async function loadQlib() {
     const data = await getQlibStatus()
     qlib.available = data?.available || false
     qlib.provider_uri = data?.provider_uri || ''
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('qlib 状态检查失败') }
 }
 
 async function syncData() {
@@ -72,13 +73,14 @@ async function syncData() {
   try {
     await syncQuantData({})
     ElMessage.success('数据同步已提交（后台执行）')
-    setTimeout(loadStatus, 5000)
-  } catch {} finally {
+    statusTimer = setTimeout(loadStatus, 5000)
+  } catch (e) { if (e !== 'cancel') ElMessage.error('数据同步提交失败') } finally {
     syncing.value = false
   }
 }
 
 onMounted(() => { loadStatus(); loadQlib() })
+onBeforeUnmount(() => { if (statusTimer) clearTimeout(statusTimer) })
 </script>
 
 <style scoped lang="scss">

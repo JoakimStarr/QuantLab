@@ -154,10 +154,5 @@ async def mine_with_symbolic(task_id: int) -> dict:
 
 
 async def _update_task(task_id: int, **kwargs):
-    async with async_session() as session:
-        r = await session.get(MiningTask, task_id)
-        if r is None:
-            return
-        for k, v in kwargs.items():
-            setattr(r, k, v)
-        await session.commit()
+    from app.services.mining.task_utils import update_task_status
+    await update_task_status(task_id, **kwargs)

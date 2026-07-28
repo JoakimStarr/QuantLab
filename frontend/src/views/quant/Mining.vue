@@ -83,43 +83,45 @@ const llmN = ref(10)
 const automlFactorIds = ref([])
 let pollTimer = null
 
-const typeLabel = { llm: 'LLM', symbolic: '符号回归', text: '文本', automl: 'AutoML' }
-const typeTag = (t) => ({ llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[t] || '')
-const statusLabel = { pending: '等待', running: '运行中', done: '完成', failed: '失败' }
-const statusTag = (s) => ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' }[s] || '')
+const typeLabelMap = { llm: 'LLM', symbolic: '符号回归', text: '文本', automl: 'AutoML' }
+const typeLabel = (t) => typeLabelMap[t] || t
+const typeTag = (t) => ({ llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[t] || 'info')
+const statusLabelMap = { pending: '等待', running: '运行中', done: '完成', failed: '失败' }
+const statusLabel = (s) => statusLabelMap[s] || s
+const statusTag = (s) => ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' }[s] || 'info')
 
 async function loadTasks() {
   try {
     const data = await listMiningTasks({ limit: 50 })
     tasks.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载挖掘任务失败') }
 }
 
 async function loadFactors() {
   try {
     const data = await listFactors({ status: 'active', limit: 200 })
     factorOptions.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载因子列表失败') }
 }
 
 async function loadQlib() {
-  try { const data = await getQlibStatus(); qlibAvailable.value = data?.available || false } catch {}
+  try { const data = await getQlibStatus(); qlibAvailable.value = data?.available || false } catch (e) { if (e !== 'cancel') ElMessage.error('qlib 状态检查失败') }
 }
 
 async function startLlm() {
-  try { const data = await mineLlm({ n_candidates: llmN }); ElMessage.success(`LLM 挖掘任务 #${data.task_id} 已提交`); loadTasks() } catch {}
+  try { const data = await mineLlm({ n_candidates: llmN.value }); if (data) { ElMessage.success(`LLM 挖掘任务 #${data.task_id} 已提交`); loadTasks() } } catch (e) { if (e !== 'cancel') ElMessage.error('LLM 挖掘启动失败') }
 }
 
 async function startSymbolic() {
-  try { const data = await mineSymbolic(); ElMessage.success(`符号回归任务 #${data.task_id} 已提交`); loadTasks() } catch {}
+  try { const data = await mineSymbolic(); if (data) { ElMessage.success(`符号回归任务 #${data.task_id} 已提交`); loadTasks() } } catch (e) { if (e !== 'cancel') ElMessage.error('符号回归启动失败') }
 }
 
 async function startText() {
-  try { const data = await mineText(); ElMessage.success(`文本因子任务 #${data.task_id} 已提交`); loadTasks() } catch {}
+  try { const data = await mineText(); if (data) { ElMessage.success(`文本因子任务 #${data.task_id} 已提交`); loadTasks() } } catch (e) { if (e !== 'cancel') ElMessage.error('文本因子启动失败') }
 }
 
 async function startAutoml() {
-  try { const data = await mineAutoml({ factor_ids: automlFactorIds.value }); ElMessage.success(`AutoML 任务 #${data.task_id} 已提交`); loadTasks() } catch {}
+  try { const data = await mineAutoml({ factor_ids: automlFactorIds.value }); if (data) { ElMessage.success(`AutoML 任务 #${data.task_id} 已提交`); loadTasks() } } catch (e) { if (e !== 'cancel') ElMessage.error('AutoML 启动失败') }
 }
 
 onMounted(() => {
@@ -134,7 +136,7 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 .page-title { font-size: var(--font-size-2xl); font-weight: 700; }
 .page-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .mining-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-md); }
-.mining-card { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); border: 1px solid var(--border-color, #e4e7ed); border-radius: var(--radius-sm); }
+.mining-card { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .mining-title { font-size: var(--font-size-lg); font-weight: 600; }
 .mining-desc { font-size: var(--font-size-base); color: var(--text-secondary); min-height: 40px; }
 </style>

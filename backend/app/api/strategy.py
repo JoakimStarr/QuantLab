@@ -16,8 +16,8 @@ router = APIRouter(prefix="/strategies", tags=["strategy"])
 
 @router.get("")
 async def list_strategies_api(status: str = Query("active")):
-    items = await list_strategies(status=status)
-    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+    items, total = await list_strategies(status=status)
+    return ApiResponse(ok=True, data={"items": items, "total": total})
 
 
 @router.post("")
@@ -62,6 +62,16 @@ async def _run_backtest_task(strategy_id: int, start: str, end: str):
         await run_strategy_backtest(strategy_id, start, end)
     except Exception as e:
         logger.exception("策略回测失败 strategy_id=%s", strategy_id)
+        # 更新策略状态为失败
+        from app.core.database import async_session
+        from app.models.strategy import Strategy
+        from sqlalchemy import select
+        async with async_session() as session:
+            r = await session.get(Strategy, strategy_id)
+            if r:
+                r.status = "backtest_failed"
+                r.description = (r.description or "") + f"\n[回测失败] {str(e)[:200]}"
+                await session.commit()
 
 
 @router.post("/{strategy_id}/backtest")
@@ -73,7 +83,7 @@ async def run_backtest_api(
 ):
     """触发策略回测（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，无法回测", 503)
     strategy = await get_strategy(strategy_id)
     if strategy is None:
@@ -97,3 +107,10 @@ async def get_result_api(result_id: int):
     if item is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
     return ApiResponse(ok=True, data=item)
+
+
+@router.get("/backtest-results")
+async def list_all_results_api(limit: int = Query(20, le=100)):
+    """全局最近回测结果（不限定策略）。"""
+    items = await list_backtest_results(strategy_id=None, limit=limit)
+    return ApiResponse(ok=True, data={"items": items, "total": len(items)})

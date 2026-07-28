@@ -8,7 +8,8 @@ function generateId() {
 
 const request = axios.create({
   baseURL: '/api/v1',
-  timeout: 30000
+  timeout: 30000,
+  paramsSerializer: { indexes: null }
 })
 
 request.interceptors.request.use(config => {

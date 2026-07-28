@@ -11,15 +11,17 @@ logger = logging.getLogger(__name__)
 async def daily_quant_data_update():
     """每日增量同步 qlib 股票数据（工作日 18:00）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         logger.info("qlib 不可用，跳过股票数据同步")
         return
     try:
         from app.services.quant.data_adapter import sync_to_qlib, get_universe
+        from app.core.config import settings
         # 读取上次同步日期作为增量起点
+        universe = settings.quant.get("universe", "csi300")
         async with async_session() as session:
             rec = await session.execute(
-                select(StockDataStatus).where(StockDataStatus.universe == "csi300")
+                select(StockDataStatus).where(StockDataStatus.universe == universe)
             )
             row = rec.scalar_one_or_none()
             start = row.latest_date if row and row.latest_date else "2020-01-01"

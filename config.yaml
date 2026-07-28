@@ -9,16 +9,13 @@ data:
   raw_dir: "data/raw"
   processed_dir: "data/processed"
   models_dir: "models"
-  fetch_timeout_seconds: 20
-  fetch_max_workers: 5
-  fetch_retry_times: 2
 
 ai_provider:
   primary:
     provider: "glm"
     base_url: "https://open.bigmodel.cn/api/paas/v4"
-    model: "glm-4-flash"
-    timeout_seconds: 8
+    model: "glm-4.7-flash"
+    timeout_seconds: 15
     max_tokens: 512
     temperature: 0.3
   fallback:
@@ -41,8 +38,6 @@ task:
 api:
   version: "v1"
   request_timeout: 30
-  rate_limit:
-    batch_predict_max: 10
 
 scheduler:
   quant_data_update_time: "18:00"

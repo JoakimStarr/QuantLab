@@ -15,12 +15,13 @@ class Settings:
 
     def _load(self):
         load_dotenv()
-        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-        config_path = PROJECT_ROOT / "config.yaml"
+        # 支持通过环境变量指定项目根目录（Docker 部署时需要）
+        self.PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT") or Path(__file__).resolve().parent.parent.parent.parent)
+        config_path = self.PROJECT_ROOT / "config.yaml"
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        self.app = cfg["app"]
-        self.data = cfg["data"]
+        self.app = cfg.get("app", {})
+        self.data = cfg.get("data", {})
         self.ai_provider = cfg.get("ai_provider", {})
         self.api = cfg.get("api", {})
         self.scheduler = cfg.get("scheduler", {})
@@ -33,14 +34,12 @@ class Settings:
 
     @property
     def db_path(self):
-        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-        return str(PROJECT_ROOT / self.data["db_path"])
+        return str(self.PROJECT_ROOT / self.data.get("db_path", "data/quantlab.db"))
 
     @property
     def qlib_provider_path(self):
         """qlib bin 数据目录的绝对路径"""
-        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-        return str(PROJECT_ROOT / self.quant.get("qlib_provider_uri", "data/qlib_bin/cn_data"))
+        return str(self.PROJECT_ROOT / self.quant.get("qlib_provider_uri", "data/qlib_bin/cn_data"))
 
 
 settings = Settings()

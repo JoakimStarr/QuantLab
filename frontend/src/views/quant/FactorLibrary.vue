@@ -67,7 +67,7 @@
         </el-form-item>
         <el-form-item label="表达式">
           <el-input v-model="addForm.expression" type="textarea" :rows="3"
-            placeholder="qlib 表达式，如 Ref($close, -20) / $close - 1" />
+            placeholder="qlib 表达式，如 $close / Ref($close, 20) - 1" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="addForm.description" placeholder="选填" />
@@ -82,7 +82,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
@@ -98,22 +98,24 @@ const syncing = ref(false)
 const showAdd = ref(false)
 const filter = reactive({ category: '', sort_by: 'ic' })
 const addForm = reactive({ name: '', expression: '', description: '' })
+let evalTimer = null
 
-const categoryLabel = { builtin: '内置', llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' }
-const categoryTag = (c) => ({ builtin: '', llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[c] || '')
+const categoryLabelMap = { builtin: '内置', llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' }
+const categoryLabel = (c) => categoryLabelMap[c] || c
+const categoryTag = (c) => ({ builtin: 'primary', llm: 'success', symbolic: 'warning', text: 'info', automl: 'danger' }[c] || 'info')
 
 async function loadFactors() {
   try {
     const data = await listFactors({ category: filter.category || undefined, sort_by: filter.sort_by, limit: 200 })
     factors.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载因子列表失败') }
 }
 
 async function loadQlib() {
   try {
     const data = await getQlibStatus()
     qlibAvailable.value = data?.available || false
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('qlib 状态检查失败') }
 }
 
 async function syncData() {
@@ -121,7 +123,7 @@ async function syncData() {
   try {
     await syncQuantData({})
     ElMessage.success('股票数据同步已提交（后台执行，耗时较长）')
-  } catch {} finally {
+  } catch (e) { if (e !== 'cancel') ElMessage.error('数据同步提交失败') } finally {
     syncing.value = false
   }
 }
@@ -130,9 +132,11 @@ async function seedBuiltin() {
   seeding.value = true
   try {
     const data = await seedBuiltinFactors()
-    ElMessage.success(`已添加 ${data.added} 个，跳过 ${data.skipped} 个`)
+    if (data) {
+      ElMessage.success(`已添加 ${data.added} 个，跳过 ${data.skipped} 个`)
+    }
     loadFactors()
-  } catch {} finally {
+  } catch (e) { if (e !== 'cancel') ElMessage.error('种子内置因子失败') } finally {
     seeding.value = false
   }
 }
@@ -149,7 +153,7 @@ async function doAdd() {
     showAdd.value = false
     addForm.name = ''; addForm.expression = ''; addForm.description = ''
     loadFactors()
-  } catch {} finally {
+  } catch (e) { if (e !== 'cancel') ElMessage.error('添加因子失败') } finally {
     adding.value = false
   }
 }
@@ -158,8 +162,8 @@ async function evaluate(id) {
   try {
     await evaluateFactor(id)
     ElMessage.success('因子评价已提交（后台执行），稍后刷新查看')
-    setTimeout(loadFactors, 5000)
-  } catch {}
+    evalTimer = setTimeout(loadFactors, 5000)
+  } catch (e) { if (e !== 'cancel') ElMessage.error('因子评价提交失败') }
 }
 
 async function disable(id) {
@@ -168,10 +172,11 @@ async function disable(id) {
     await disableFactor(id)
     ElMessage.success('已禁用')
     loadFactors()
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('禁用因子失败') }
 }
 
 onMounted(() => { loadFactors(); loadQlib() })
+onBeforeUnmount(() => { if (evalTimer) clearTimeout(evalTimer) })
 </script>
 
 <style scoped lang="scss">

@@ -25,6 +25,10 @@ export function listBacktestResults(strategyId, params) {
   return request.get('/strategies/' + strategyId + '/backtest-results', { params })
 }
 
+export function listAllBacktestResults(params) {
+  return request.get('/strategies/backtest-results', { params })
+}
+
 export function getBacktestResult(resultId) {
   return request.get('/strategies/backtest-results/' + resultId)
 }

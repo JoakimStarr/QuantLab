@@ -1,11 +1,7 @@
 """因子库 API：CRUD、评价、内置因子种子。"""
-import json
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
-from sqlalchemy import select, func
+from fastapi import APIRouter, Query, BackgroundTasks
 
-from app.core.database import get_db, async_session
 from app.core.errors import AppError
-from app.models.factor import Factor
 from app.schemas.common import ApiResponse
 from app.services.factor.library import (
     list_factors, get_factor, add_factor, disable_factor, update_factor_metrics,
@@ -24,9 +20,9 @@ async def list_factors_api(
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
 ):
-    items = await list_factors(category=category, status=status, sort_by=sort_by,
-                               limit=limit, offset=offset)
-    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+    items, total = await list_factors(category=category, status=status, sort_by=sort_by,
+                                      limit=limit, offset=offset)
+    return ApiResponse(ok=True, data={"items": items, "total": total})
 
 
 @router.get("/{factor_id}")
@@ -90,7 +86,7 @@ async def evaluate_factor_api(
 ):
     """触发因子评价（后台执行，结果写回因子库）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，无法评价因子", 503)
     factor = await get_factor(factor_id)
     if factor is None:

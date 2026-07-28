@@ -32,12 +32,14 @@ const emit = defineEmits(['chart-ready'])
 
 const chartRef = ref(null)
 let chartInstance = null
+let disposed = false
 
 onMounted(() => {
   initChart()
 })
 
 onUnmounted(() => {
+  disposed = true
   if (chartInstance) {
     chartInstance.dispose()
     chartInstance = null
@@ -47,10 +49,18 @@ onUnmounted(() => {
   }
 })
 
+// 当 loading 从 true 变为 false 时，chartRef DOM 才会出现，需要重新初始化
+watch(() => props.loading, (newVal) => {
+  if (!newVal) {
+    initChart()
+  }
+})
+
 function initChart() {
   nextTick(() => {
-    if (!chartRef.value) return
+    if (!chartRef.value || disposed) return
     import('echarts').then(echarts => {
+      if (disposed) return
       chartInstance = echarts.init(chartRef.value)
       emit('chart-ready', chartInstance)
       if (props.resize) {

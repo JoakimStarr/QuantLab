@@ -2,7 +2,7 @@
 import json
 import logging
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.core.database import async_session
 from app.core.config import settings
 from app.models.strategy import Strategy
@@ -12,12 +12,16 @@ from app.models.factor import Factor
 logger = logging.getLogger(__name__)
 
 
-async def list_strategies(status: str = "active") -> list[dict]:
+async def list_strategies(status: str = "active") -> tuple[list[dict], int]:
     async with async_session() as session:
+        count_result = await session.execute(
+            select(func.count()).select_from(Strategy).where(Strategy.status == status)
+        )
+        total = count_result.scalar() or 0
         result = await session.execute(
             select(Strategy).where(Strategy.status == status).order_by(Strategy.created_at.desc())
         )
-        return [_strategy_dict(r) for r in result.scalars().all()]
+        return [_strategy_dict(r) for r in result.scalars().all()], total
 
 
 async def get_strategy(strategy_id: int) -> dict:
@@ -119,6 +123,10 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     for fid in factor_ids:
         meta = factor_meta.get(fid)
         if not meta:
+            continue
+        # AutoML 因子不是合法 qlib 表达式，跳过并警告
+        if meta.get("expression", "").startswith("AutoML("):
+            logger.warning("跳过 AutoML 因子 %s (id=%s)，其表达式不可直接用于 qlib 回测", meta.get("name"), fid)
             continue
         factor_exprs[meta["name"]] = meta["expression"]
         weights[meta["name"]] = meta.get("ic") or 0.0

@@ -27,12 +27,9 @@
 </template>
 
 <script setup>
-import { useAppStore } from '@/stores/app'
 import Sidebar from './Sidebar.vue'
 import TopBar from './TopBar.vue'
 import MobileTabBar from './MobileTabBar.vue'
-
-const appStore = useAppStore()
 </script>
 
 <style scoped lang="scss">

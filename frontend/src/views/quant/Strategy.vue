@@ -110,6 +110,7 @@ const resultsList = ref([])
 const currentResult = ref(null)
 const chartRef = ref(null)
 let chartInstance = null
+let disposed = false
 
 const form = reactive({ name: '', factor_ids: [], combination_method: 'equal_weight', topk: 50, n_drop: 5 })
 
@@ -119,18 +120,18 @@ async function loadStrategies() {
   try {
     const data = await listStrategies()
     strategies.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载策略列表失败') }
 }
 
 async function loadFactors() {
   try {
     const data = await listFactors({ status: 'active', limit: 200 })
     factorOptions.value = data?.items || []
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载因子列表失败') }
 }
 
 async function loadQlib() {
-  try { const data = await getQlibStatus(); qlibAvailable.value = data?.available || false } catch {}
+  try { const data = await getQlibStatus(); qlibAvailable.value = data?.available || false } catch (e) { if (e !== 'cancel') ElMessage.error('qlib 状态检查失败') }
 }
 
 function openCreate() {
@@ -146,14 +147,14 @@ async function doCreate() {
     ElMessage.success('策略已创建')
     showCreate.value = false
     loadStrategies()
-  } catch {} finally { creating.value = false }
+  } catch (e) { if (e !== 'cancel') ElMessage.error('创建策略失败') } finally { creating.value = false }
 }
 
 async function triggerBacktest(id) {
   try {
     await runBacktest(id)
     ElMessage.success('回测已提交（后台执行），稍后查看结果')
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('回测提交失败') }
 }
 
 async function viewResults(strategyId) {
@@ -166,7 +167,7 @@ async function viewResults(strategyId) {
     } else {
       currentResult.value = null
     }
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载回测结果失败') }
 }
 
 async function loadResultDetail(resultId) {
@@ -185,12 +186,13 @@ async function loadResultDetail(resultId) {
       { label: '超额收益', value: m.excess_return != null ? (m.excess_return * 100).toFixed(2) + '%' : '--' },
     ]
     nextTick(() => initChart(m.nav_curve))
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('加载回测详情失败') }
 }
 
 function initChart(curve) {
   if (!curve || !chartRef.value) return
   import('echarts').then(echarts => {
+    if (disposed) return
     if (chartInstance) chartInstance.dispose()
     chartInstance = echarts.init(chartRef.value)
     const series = [{ name: '策略净值', type: 'line', data: curve.portfolio, smooth: true, lineStyle: { width: 2 }, itemStyle: { color: '#409EFF' } }]
@@ -212,11 +214,11 @@ async function archive(id) {
     await archiveStrategy(id)
     ElMessage.success('已归档')
     loadStrategies()
-  } catch {}
+  } catch (e) { if (e !== 'cancel') ElMessage.error('归档失败') }
 }
 
 onMounted(() => { loadStrategies(); loadFactors(); loadQlib() })
-onBeforeUnmount(() => { if (chartInstance) chartInstance.dispose() })
+onBeforeUnmount(() => { disposed = true; if (chartInstance) chartInstance.dispose() })
 </script>
 
 <style scoped lang="scss">

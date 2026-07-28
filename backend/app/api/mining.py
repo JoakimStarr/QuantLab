@@ -2,7 +2,7 @@
 import json
 import logging
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.database import get_db, async_session
 from app.core.errors import AppError
@@ -51,9 +51,17 @@ async def list_tasks_api(
         q = q.where(MiningTask.type == task_type)
     if status:
         q = q.where(MiningTask.status == status)
+    # 总数查询
+    count_q = select(func.count()).select_from(MiningTask)
+    if task_type:
+        count_q = count_q.where(MiningTask.type == task_type)
+    if status:
+        count_q = count_q.where(MiningTask.status == status)
+    count_result = await db.execute(count_q)
+    total = count_result.scalar() or 0
     result = await db.execute(q)
     items = [_task_dict(r) for r in result.scalars().all()]
-    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+    return ApiResponse(ok=True, data={"items": items, "total": total})
 
 
 @router.get("/tasks/{task_id}")
@@ -79,7 +87,7 @@ async def mine_llm_api(
 ):
     """启动 LLM 因子挖掘（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
     n = n_candidates or settings.mining.get("llm", {}).get("candidates_per_run", 10)
     task_id = await _create_task("llm", {"n_candidates": n})
@@ -100,7 +108,7 @@ async def _run_symbolic_task(task_id: int):
 async def mine_symbolic_api(background_tasks: BackgroundTasks):
     """启动符号回归因子挖掘（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
     task_id = await _create_task("symbolic", settings.mining.get("symbolic", {}))
     background_tasks.add_task(_run_symbolic_task, task_id)
@@ -126,7 +134,7 @@ async def mine_automl_api(
     if not factor_ids:
         raise AppError("VALIDATION_ERROR", "至少选择一个因子", 422)
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，组合需要数据", 503)
     task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method})
     background_tasks.add_task(_run_automl_task, task_id, factor_ids, method)
@@ -149,7 +157,7 @@ async def mine_text_api(
 ):
     """启动文本因子挖掘（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
-    if not is_qlib_available():
+    if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
     task_id = await _create_task("text", {"codes": codes})
     background_tasks.add_task(_run_text_task, task_id, codes)

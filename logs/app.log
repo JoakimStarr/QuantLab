@@ -504,3 +504,810 @@ ValueError: CSV 目录为空
 2026-07-28 14:22:32,773 [INFO] apscheduler.scheduler: Scheduler started
 2026-07-28 14:22:40,724 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
 2026-07-28 14:25:28,430 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:30:47,078 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:30:47,079 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:30:47,079 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:30:50,279 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 15:35:39,789 [INFO] app.services.quant.data_adapter: 开始同步 300 只股票到 qlib (2020-01-01 -> 2026-07-28)
+2026-07-28 15:35:39,908 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:39,914 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:39,917 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,026 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,042 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,045 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,132 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,155 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,159 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,251 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,272 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,283 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,379 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,397 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,400 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,501 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,504 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,512 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,614 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,615 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,628 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,727 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,731 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,756 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,845 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,846 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,874 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,961 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,963 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:40,993 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,073 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,075 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,107 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,188 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,189 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,238 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,305 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,314 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,358 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,444 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,446 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,472 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,580 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,681 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,685 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,806 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,809 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,811 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,915 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,928 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:41,934 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,022 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,056 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,057 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,137 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,172 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,176 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,261 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,293 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,298 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,381 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,430 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,498 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,557 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,625 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,671 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,752 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,782 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,876 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,900 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:42,994 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,016 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,121 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,137 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,253 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,256 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,370 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,373 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,436 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,493 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,495 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,546 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,605 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,619 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,675 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,719 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,738 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,773 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,837 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,850 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,896 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,948 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:43,971 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,014 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,061 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,096 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,138 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,176 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,224 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,254 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,308 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,337 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,384 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,428 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,475 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,519 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,560 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,593 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,638 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,678 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,715 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,766 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,795 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,840 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,867 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,917 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,953 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:44,982 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,047 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,076 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,105 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,162 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,186 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,227 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,283 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,306 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,340 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,406 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,415 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,466 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,528 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,537 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,592 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,651 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,656 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,714 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,776 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,783 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,826 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,905 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,908 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:45,941 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,024 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,026 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,062 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,148 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,153 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,182 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,264 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,267 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,279 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,382 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,389 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,501 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,533 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,535 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,653 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,661 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,713 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,775 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,790 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:46,861 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,006 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,040 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,129 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,163 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,256 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,281 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,372 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,406 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,499 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,531 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,640 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,685 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,806 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,808 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,915 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,924 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:47,925 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,043 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,050 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,053 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,165 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,173 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,192 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,294 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,298 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,318 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,421 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,426 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,443 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,542 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,544 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,573 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,668 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,670 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,716 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,797 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,799 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,854 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,928 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,932 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:48,971 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,047 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,051 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,087 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,171 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,179 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,232 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,279 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,289 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,346 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,398 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,404 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,470 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,531 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,535 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,594 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,646 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,652 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,705 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,768 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,769 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,829 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,892 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,894 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:49,953 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,023 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,027 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,075 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,149 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,161 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,205 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,281 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,285 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,323 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,404 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,411 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,454 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,531 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,546 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,574 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,655 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,670 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,698 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,779 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,796 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,813 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,902 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,917 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:50,938 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,020 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,050 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,062 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,148 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,180 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,183 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,274 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,301 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,312 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,392 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,499 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,532 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,612 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,652 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,734 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,764 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,852 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,886 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:51,992 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,023 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,116 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,138 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,243 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,265 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,372 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,394 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,433 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,508 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,516 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,560 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,629 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,651 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,687 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,743 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,784 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,851 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,881 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,934 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:52,983 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,005 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,049 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,108 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,133 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,174 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,249 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,257 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,297 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,372 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,389 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-28 15:35:53,408 [ERROR] app.api.quant_data: 数据同步失败
+Traceback (most recent call last):
+  File "/home/joakim/qunt_project/backend/app/api/quant_data.py", line 83, in _run_sync_task
+    summary = await sync_to_qlib(start_date, end_date, codes=codes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joakim/qunt_project/backend/app/services/quant/data_adapter.py", line 287, in sync_to_qlib
+    await asyncio.get_running_loop().run_in_executor(
+  File "/home/joakim/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joakim/qunt_project/backend/app/services/quant/data_adapter.py", line 175, in _dump_to_qlib_bin
+    raise ValueError("CSV 目录为空")
+ValueError: CSV 目录为空
+2026-07-28 15:41:43,782 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:41:44,283 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:41:44,283 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:41:44,283 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:42:06,041 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:42:06,486 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:42:06,487 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:42:06,487 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:42:15,712 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:42:16,156 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:42:16,156 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:42:16,156 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:43:09,297 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:43:09,733 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:43:09,733 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:43:09,733 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:43:19,159 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:43:19,622 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:43:19,623 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:43:19,623 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 15:44:38,135 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 15:48:04,269 [INFO] app.services.quant.data_adapter: 开始同步 300 只股票到 qlib (2020-01-01 -> 2026-07-28) [req=111726b05418]
+2026-07-28 15:48:04,344 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,354 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,359 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,418 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,429 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,443 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,514 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,520 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,526 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,586 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,588 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,603 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,668 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,669 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,676 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,744 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,746 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,753 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,824 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,825 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,837 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,900 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,909 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,912 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,978 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,985 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:04,988 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,059 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,060 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,065 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,124 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,137 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,139 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,184 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,205 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,217 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,254 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,268 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,287 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,331 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,335 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,358 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,407 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,412 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,435 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,476 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,482 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,504 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,550 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,558 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,580 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,615 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,638 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,644 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,683 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,718 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,721 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,757 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,780 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,796 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,834 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,848 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,870 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,899 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,928 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,947 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,984 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:05,995 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,019 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,063 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,067 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,092 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,149 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,152 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,170 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,240 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,255 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,314 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,331 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,437 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,454 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,507 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,531 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,581 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,607 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,660 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,677 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,735 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,756 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,801 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,822 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,878 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,888 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,957 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:06,970 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,126 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,167 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,200 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,230 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,238 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,264 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,307 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,310 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,338 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,375 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,377 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,407 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,447 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,453 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,475 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,510 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,534 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,548 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,577 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,608 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,621 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,652 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,684 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,700 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,716 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,758 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,773 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,788 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,833 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,845 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,866 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,913 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,923 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,945 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:07,988 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,002 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,015 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,072 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,077 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,091 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,143 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,148 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,164 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,209 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,216 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,233 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,275 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,282 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,308 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,340 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,347 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,389 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,408 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,418 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,475 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,490 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,497 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,579 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,630 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,655 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,676 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,724 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,760 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,765 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,840 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,864 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,922 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,962 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:08,997 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,019 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,051 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,074 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,153 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,162 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,188 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,241 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,256 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,273 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,342 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,361 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,368 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,438 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,442 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,515 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,541 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,616 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,625 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,700 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,719 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,778 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,794 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,871 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,894 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:09,988 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,003 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,111 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,215 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,235 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,302 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,403 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,482 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,500 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,585 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,624 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,711 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,726 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,791 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,866 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,868 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,933 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:10,984 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,022 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,110 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,125 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,204 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,224 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,302 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,379 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,396 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,475 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,479 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,554 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,572 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,648 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,676 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,731 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,751 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,765 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,811 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,843 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,869 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,911 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,955 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:11,964 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,004 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,031 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,056 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,132 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,240 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,255 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,296 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,345 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,364 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,388 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,427 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,451 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,516 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,535 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,602 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,641 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,702 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,707 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,732 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,794 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,807 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,832 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,901 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,926 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:12,938 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,048 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,060 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,130 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,140 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,142 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,235 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,258 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,367 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,451 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,575 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,727 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,841 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,911 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:13,992 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,072 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,141 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,238 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,315 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,394 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,696 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,795 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,804 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,908 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:14,916 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,004 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,112 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,210 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,309 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,396 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,486 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,499 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,580 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,614 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,660 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,691 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,765 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,772 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,861 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,863 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,956 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:15,976 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:48:16,060 [WARNING] app.services.quant.data_adapter: 拉取失败 unknown: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')) [req=111726b05418]
+2026-07-28 15:54:28,162 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 15:54:28,628 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 15:54:28,628 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 15:54:28,628 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:01:05,792 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:01:05,793 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:07:28,338 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:07:32,387 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:07:32,388 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:07:32,388 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:07:35,786 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:07:37,527 [INFO] httpx: HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 401 Unauthorized" [req=033c8f5b2213]
+2026-07-28 16:07:37,671 [INFO] httpx: HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 401 Unauthorized" [req=033c8f5b2213]
+2026-07-28 16:07:47,810 [INFO] httpx: HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 401 Unauthorized" [req=033c8f5b2213]
+2026-07-28 16:07:47,947 [INFO] httpx: HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 401 Unauthorized" [req=033c8f5b2213]
+2026-07-28 16:09:55,167 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:09:55,625 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:09:55,625 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:09:55,625 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:11:06,612 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:11:07,665 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:11:07,666 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:11:07,666 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:11:14,206 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:11:23,330 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=3da12632fb66]
+2026-07-28 16:11:23,485 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=3da12632fb66]
+2026-07-28 16:11:23,487 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: 调用失败: Client error '429 Too Many Requests' for url 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 [req=3da12632fb66]
+2026-07-28 16:13:18,321 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:13:18,322 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:13:18,322 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:13:21,839 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:13:24,201 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=373be4e3ba37]
+2026-07-28 16:13:31,566 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=373be4e3ba37]
+2026-07-28 16:13:32,708 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=373be4e3ba37]
+2026-07-28 16:13:41,709 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: API 速率限制 (429)，已等待 9s 重试 [req=373be4e3ba37]
+2026-07-28 16:14:38,773 [INFO] app.services.quant.backtest_engine: 回测: 2020-01-01~2024-12-31 topk=50 n_drop=5 freq=day benchmark=SH000300
+2026-07-28 16:14:52,017 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=9f47c49cf733]
+2026-07-28 16:14:55,323 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=9f47c49cf733]
+2026-07-28 16:15:06,573 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=9f47c49cf733]
+2026-07-28 16:15:06,582 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: 返回结果非合法JSON [req=9f47c49cf733]
+2026-07-28 16:16:15,662 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:16:16,131 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:16:16,131 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:16:16,131 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:16:48,321 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:16:48,761 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:16:48,761 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:16:48,761 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:17:34,141 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:17:46,419 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=8c4831228646]
+2026-07-28 16:17:47,664 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=8c4831228646]
+2026-07-28 16:17:53,953 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=8c4831228646]
+2026-07-28 16:18:02,956 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: API 速率限制 (429)，已等待 9s 重试 [req=8c4831228646]
+2026-07-28 16:19:23,116 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=35e639d7de8d]
+2026-07-28 16:19:26,369 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=35e639d7de8d]
+2026-07-28 16:19:32,668 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=35e639d7de8d]
+2026-07-28 16:19:41,670 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: API 速率限制 (429)，已等待 9s 重试 [req=35e639d7de8d]
+2026-07-28 16:23:29,893 [INFO] app.services.mining.symbolic: 符号回归表达式沙箱拒绝: 表达式过长（>500字符） [req=48231debcb89]
+2026-07-28 16:23:29,894 [INFO] app.services.mining.symbolic: 符号回归表达式沙箱拒绝: 表达式过长（>500字符） [req=48231debcb89]
+2026-07-28 16:23:29,894 [INFO] app.services.mining.symbolic: 符号回归表达式沙箱拒绝: 表达式过长（>500字符） [req=48231debcb89]
+2026-07-28 16:23:29,894 [INFO] app.services.mining.symbolic: 符号回归表达式沙箱拒绝: 表达式过长（>500字符） [req=48231debcb89]
+2026-07-28 16:23:29,894 [INFO] app.services.mining.symbolic: 符号回归表达式沙箱拒绝: 表达式过长（>500字符） [req=48231debcb89]
+2026-07-28 16:23:49,172 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=840466d0fcf6]
+2026-07-28 16:23:55,832 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=840466d0fcf6]
+2026-07-28 16:23:57,100 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=840466d0fcf6]
+2026-07-28 16:24:06,101 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: API 速率限制 (429)，已等待 9s 重试 [req=840466d0fcf6]
+2026-07-28 16:24:21,225 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=eb98311ea26f]
+2026-07-28 16:24:29,973 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 200 OK" [req=eb98311ea26f]
+2026-07-28 16:24:31,289 [INFO] httpx: HTTP Request: POST https://open.bigmodel.cn/api/paas/v4/chat/completions "HTTP/1.1 429 Too Many Requests" [req=eb98311ea26f]
+2026-07-28 16:24:40,291 [WARNING] app.services.ai.provider_router: AI Provider primary 调用失败: API 速率限制 (429)，已等待 9s 重试 [req=eb98311ea26f]
+2026-07-28 16:29:39,495 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:29:39,996 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:29:39,997 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:29:39,997 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:29:40,098 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:29:40,559 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:29:40,560 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:29:40,560 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:29:46,276 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:29:46,716 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:29:46,716 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:29:46,716 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:29:51,128 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:29:51,604 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:29:51,604 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:29:51,604 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:29:54,354 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:30:01,012 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:01,494 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:01,494 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:01,494 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:02,497 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:02,959 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:02,960 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:02,960 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:12,408 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:30:21,396 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:21,853 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:21,853 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:21,853 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:25,062 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:25,597 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:25,598 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:25,598 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:33,220 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:33,675 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:33,676 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:33,676 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:37,486 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:37,938 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:37,939 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:37,939 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:45,262 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:45,736 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:45,736 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:45,736 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:50,348 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:50,795 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:50,796 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:50,796 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:57,916 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:58,351 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:58,351 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:58,351 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:30:59,154 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:30:59,609 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:30:59,609 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:30:59,609 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:31:06,028 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:31:06,494 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:31:06,494 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:31:06,494 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:31:37,129 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:31:54,601 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:31:55,132 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:31:55,133 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:31:55,133 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:33:06,480 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 16:35:00,422 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:00,882 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:00,882 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:00,882 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:35:22,343 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:22,832 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:22,832 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:22,832 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:35:46,096 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:46,639 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:46,640 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:46,640 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:35:49,149 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:49,615 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:49,615 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:49,615 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:35:51,821 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:52,314 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:52,315 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:52,315 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:35:54,221 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:35:54,677 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:35:54,677 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:35:54,677 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:39:22,314 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:39:22,768 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:39:22,768 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:39:22,769 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 16:39:27,181 [INFO] apscheduler.scheduler: Scheduler has been shut down
+2026-07-28 16:39:27,648 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 16:39:27,648 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 16:39:27,648 [INFO] apscheduler.scheduler: Scheduler started

@@ -37,7 +37,12 @@ async def app_error_handler(request: Request, exc: AppError):
 
 
 async def general_error_handler(request: Request, exc: Exception):
+    import logging
+    from app.core.logging_config import request_id_var
+    rid = request_id_var.get("")
+    logger = logging.getLogger(__name__)
+    logger.exception("Unhandled exception [req=%s]: %s", rid, exc)
     return JSONResponse(
         status_code=500,
-        content={"ok": False, "error": {"code": "INTERNAL_ERROR", "message": str(exc), "status": 500}},
+        content={"ok": False, "error": {"code": "INTERNAL_ERROR", "message": "内部服务器错误", "status": 500}},
     )

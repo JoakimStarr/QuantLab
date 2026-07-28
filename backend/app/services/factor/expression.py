@@ -22,7 +22,7 @@ _QLIB_FIELDS = {"$open", "$close", "$high", "$low", "$volume", "$amount", "$fact
 
 # 严格禁止的标识符（词边界匹配，避免 "os" 误伤 "close"）
 _FORBIDDEN_WORDS = {"import", "exec", "eval", "open", "lambda", "os", "sys", "subprocess", "globals", "locals", "getattr", "setattr"}
-_FORBIDDEN_SUBSTR = {"__", "compile", "builtins"}
+_FORBIDDEN_SUBSTR = {"__", "compile", "builtins", "automl", "autogluon"}
 
 
 class ExpressionValidationError(ValueError):
