@@ -1,0 +1,122 @@
+// === Core Animations (Commonly Used) ===
+// These are loaded globally and used across the application
+
+// Fade animations (most common)
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// Scale animations
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// Pulse (for loading states)
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+// Skeleton loading (common)
+@keyframes skeletonLoading {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+// === Core Animation Classes ===
+
+.fade-in {
+  animation: fadeIn var(--duration-normal) var(--ease-out-expo);
+}
+
+.fade-in-up {
+  animation: fadeInUp var(--duration-normal) var(--ease-out-expo);
+}
+
+.fade-in-down {
+  animation: fadeInDown var(--duration-normal) var(--ease-out-expo);
+}
+
+.scale-in {
+  animation: scaleIn var(--duration-normal) var(--ease-out-expo);
+}
+
+.pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.skeleton-loading {
+  animation: skeletonLoading 1.5s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    var(--bg-secondary) 0%,
+    var(--bg-tertiary) 50%,
+    var(--bg-secondary) 100%
+  );
+  background-size: 200px 100%;
+  background-repeat: no-repeat;
+}
+
+// === Animation Delay Classes ===
+
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+
+// === Animation Duration Classes ===
+
+.duration-fast { animation-duration: var(--duration-fast); }
+.duration-normal { animation-duration: var(--duration-normal); }
+.duration-slow { animation-duration: var(--duration-slow); }
+
+// === Transition Utilities ===
+
+.transition-all {
+  transition: all var(--duration-normal) var(--ease-in-out);
+}
+
+.transition-transform {
+  transition: transform var(--duration-normal) var(--ease-in-out);
+}
+
+.transition-opacity {
+  transition: opacity var(--duration-normal) var(--ease-in-out);
+}
+
+.transition-colors {
+  transition: color var(--duration-normal) var(--ease-in-out),
+              background-color var(--duration-normal) var(--ease-in-out),
+              border-color var(--duration-normal) var(--ease-in-out);
+}

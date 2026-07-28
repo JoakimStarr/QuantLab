@@ -1,0 +1,14 @@
+{
+  "name": "quantlab-root",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && /home/joakim/miniconda3/bin/python -m uvicorn app.main:app --reload --port 8000",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "install:all": "cd frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

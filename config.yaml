@@ -1,0 +1,93 @@
+app:
+  name: "QuantLab"
+  version: "2.0.0"
+  debug: false
+  timezone: "Asia/Shanghai"
+
+data:
+  db_path: "data/quantlab.db"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  models_dir: "models"
+  fetch_timeout_seconds: 20
+  fetch_max_workers: 5
+  fetch_retry_times: 2
+
+ai_provider:
+  primary:
+    provider: "glm"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    model: "glm-4-flash"
+    timeout_seconds: 8
+    max_tokens: 512
+    temperature: 0.3
+  fallback:
+    provider: "siliconflow"
+    base_url: "https://api.siliconflow.cn/v1"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    timeout_seconds: 12
+    max_tokens: 512
+    temperature: 0.3
+  concurrent_providers: true
+  total_timeout_seconds: 10
+  retry_times: 1
+  cache_ttl: "day"
+  force_json_output: true
+
+task:
+  max_concurrent: 2
+  task_timeout_seconds: 300
+
+api:
+  version: "v1"
+  request_timeout: 30
+  rate_limit:
+    batch_predict_max: 10
+
+scheduler:
+  quant_data_update_time: "18:00"
+
+logging:
+  level: "INFO"
+  dir: "logs"
+  handlers:
+    app:   { filename: "app.log",    max_bytes: 10485760, backup_count: 30 }
+    api:   { filename: "api.jsonl",  format: "json" }
+    error: { filename: "error.log",  level: "ERROR" }
+    audit: { filename: "audit.jsonl",format: "json" }
+    perf:  { filename: "perf.jsonl", format: "json" }
+
+# ============================================================
+# 量化回测与AI因子挖掘
+# ============================================================
+quant:
+  qlib_provider_uri: "data/qlib_bin/cn_data"
+  universe: "csi300"
+  benchmark: "SH000300"
+  default_backtest_period:
+    start: "2020-01-01"
+    end: "2024-12-31"
+  topk: 50
+  n_drop: 5
+  cost_buy: 0.0013
+  cost_sell: 0.0023
+  fetch_interval_seconds: 1.2
+  fetch_max_workers: 3
+  adjust: "qfq"
+
+mining:
+  llm:
+    candidates_per_run: 10
+    ic_threshold: 0.03
+    allowed_ops: ["Ref", "Mean", "Std", "Max", "Min", "Sum", "Rank", "Corr", "Cov", "Delta", "Slope", "Resi", "WMA", "EMA", "$close", "$open", "$high", "$low", "$volume", "$factor"]
+  symbolic:
+    population: 1000
+    generations: 20
+    tournament_size: 20
+    parsimony_coefficient: 0.001
+    ic_threshold: 0.03
+  automl:
+    combo_method: "lightgbm"
+  text:
+    max_news_per_day: 50
+    sentiment_labels: ["positive", "neutral", "negative"]

@@ -1,0 +1,52 @@
+@use 'sass:map';
+
+$breakpoints: (
+  'mobile': 767px,
+  'tablet': 1023px,
+  'desktop': 1439px,
+);
+
+@mixin mobile {
+  @media (max-width: map.get($breakpoints, 'mobile')) {
+    @content;
+  }
+}
+
+@mixin tablet {
+  @media (max-width: map.get($breakpoints, 'tablet')) {
+    @content;
+  }
+}
+
+@mixin desktop {
+  @media (min-width: map.get($breakpoints, 'mobile') + 1) {
+    @content;
+  }
+}
+
+@mixin large {
+  @media (min-width: map.get($breakpoints, 'desktop') + 1) {
+    @content;
+  }
+}
+
+@mixin hover {
+  @media (hover: hover) {
+    &:hover {
+      @content;
+    }
+  }
+}
+
+@mixin card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border);
+  transition: box-shadow var(--duration-normal) var(--ease-in-out),
+              transform var(--duration-normal) var(--ease-in-out);
+  @include hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+}

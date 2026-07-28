@@ -1,0 +1,146 @@
+:root {
+  // === Brand Colors ===
+  --primary: #1a73e8;
+  --primary-light: #4a9af5;
+  --primary-dark: #0d47a1;
+  --primary-gradient: linear-gradient(135deg, #1a73e8, #6c5ce7);
+  --primary-gradient-soft: linear-gradient(135deg, rgba(26,115,232,0.08), rgba(108,92,231,0.08));
+  --primary-rgb: 26, 115, 232;
+
+  // === Status Colors ===
+  --success: #00b894;
+  --success-light: #55efc4;
+  --success-dark: #00a085;
+  --danger: #e17055;
+  --danger-light: #fab1a0;
+  --danger-dark: #d35400;
+  --warning: #fdcb6e;
+  --warning-light: #ffeaa7;
+  --warning-dark: #f39c12;
+  --info: #74b9ff;
+  --info-light: #a9d4ff;
+  --info-dark: #0984e3;
+
+  // === Text Colors ===
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-tertiary: #94a3b8;
+  --text-placeholder: #c0c4cc;
+  --text-inverse: #ffffff;
+
+  // === Background Colors ===
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --bg-card: #ffffff;
+  --bg-page: #f0f2f5;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.08);
+
+  // === Border Colors ===
+  --border: #e2e8f0;
+  --border-light: #f0f2f5;
+  --border-dark: #cbd5e1;
+
+  // === Spacing Scale ===
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  // === Typography ===
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-lg: 15px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 32px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.6;
+  --line-height-relaxed: 1.75;
+
+  // === Border Radius ===
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  // === Shadows ===
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12);
+  --shadow-xl: 0 20px 60px rgba(0,0,0,0.15);
+  --shadow-glow: 0 0 20px rgba(26,115,232,0.15);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  --shadow-modal: 0 8px 40px rgba(0,0,0,0.2);
+
+  // === Transitions & Animations ===
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --duration-slow: 500ms;
+  --duration-slower: 800ms;
+
+  // === Layout Dimensions ===
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 64px;
+  --topbar-height: 56px;
+  --footer-height: 40px;
+
+  // === Z-Index Scale ===
+  --z-dropdown: 1000;
+  --z-sticky: 1020;
+  --z-fixed: 1030;
+  --z-modal-backdrop: 1040;
+  --z-modal: 1050;
+  --z-popover: 1060;
+  --z-tooltip: 1070;
+}
+
+// === Dark Theme ===
+:root.dark {
+  // Text
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  --text-placeholder: #475569;
+  --text-inverse: #0f172a;
+
+  // Background
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --bg-card: #1e293b;
+  --bg-page: #0f172a;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.1);
+
+  // Border
+  --border: #334155;
+  --border-light: #1e293b;
+  --border-dark: #475569;
+
+  // Shadows (darker for dark theme)
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.3);
+  --shadow-xl: 0 20px 60px rgba(0,0,0,0.4);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-modal: 0 8px 40px rgba(0,0,0,0.5);
+
+  // Primary gradient adjustments
+  --primary-gradient-soft: linear-gradient(135deg, rgba(26,115,232,0.15), rgba(108,92,231,0.15));
+}
