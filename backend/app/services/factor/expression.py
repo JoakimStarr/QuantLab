@@ -29,13 +29,13 @@ class ExpressionValidationError(ValueError):
     pass
 
 
-def validate_expression(expr: str) -> str:
+def validate_expression(expr: str, max_length: int = 2000) -> str:
     """校验因子表达式安全性，返回清洗后的表达式。"""
     if not expr or not isinstance(expr, str):
         raise ExpressionValidationError("表达式为空")
     expr = expr.strip()
-    if len(expr) > 500:
-        raise ExpressionValidationError("表达式过长（>500字符）")
+    if len(expr) > max_length:
+        raise ExpressionValidationError(f"表达式过长（>{max_length}字符）")
 
     # 禁止危险关键字
     lower = expr.lower()

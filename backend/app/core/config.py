@@ -31,6 +31,7 @@ class Settings:
         self.task = cfg.get("task", {"max_concurrent": 2, "task_timeout_seconds": 300})
         self.glm_api_key = os.getenv("GLM_API_KEY", "")
         self.siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY", "")
+        self.opencodezen_api_key = os.getenv("OPENCODEZEN_API_KEY", "")
 
     @property
     def db_path(self):

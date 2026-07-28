@@ -117,3 +117,15 @@ Traceback (most recent call last):
   File "/home/joakim/qunt_project/backend/app/services/quant/data_adapter.py", line 175, in _dump_to_qlib_bin
     raise ValueError("CSV 目录为空")
 ValueError: CSV 目录为空
+2026-07-28 18:00:21,239 [ERROR] app.services.task.update_service: qlib 数据同步失败: CSV 目录为空
+Traceback (most recent call last):
+  File "/home/joakim/qunt_project/backend/app/services/task/update_service.py", line 31, in daily_quant_data_update
+    await sync_to_qlib(start, end, codes=codes)
+  File "/home/joakim/qunt_project/backend/app/services/quant/data_adapter.py", line 287, in sync_to_qlib
+    await asyncio.get_running_loop().run_in_executor(
+  File "/home/joakim/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joakim/qunt_project/backend/app/services/quant/data_adapter.py", line 175, in _dump_to_qlib_bin
+    raise ValueError("CSV 目录为空")
+ValueError: CSV 目录为空

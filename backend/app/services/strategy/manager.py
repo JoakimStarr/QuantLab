@@ -124,9 +124,11 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         meta = factor_meta.get(fid)
         if not meta:
             continue
-        # AutoML 因子不是合法 qlib 表达式，跳过并警告
-        if meta.get("expression", "").startswith("AutoML("):
-            logger.warning("跳过 AutoML 因子 %s (id=%s)，其表达式不可直接用于 qlib 回测", meta.get("name"), fid)
+        # 非合法 qlib 表达式因子（AutoML/TextSentiment 等占位符）跳过并警告
+        expr_str = meta.get("expression", "")
+        if expr_str.startswith("AutoML(") or expr_str.startswith("TextSentiment("):
+            logger.warning("跳过非 qlib 表达式因子 %s (id=%s, expr=%s...)，不可直接用于 qlib 回测",
+                           meta.get("name"), fid, expr_str[:30])
             continue
         factor_exprs[meta["name"]] = meta["expression"]
         weights[meta["name"]] = meta.get("ic") or 0.0

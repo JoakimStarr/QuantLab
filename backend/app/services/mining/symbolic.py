@@ -65,8 +65,9 @@ def _translate_program(prog_str: str, feature_names: list) -> str:
     # 替换函数名（先长后短避免误替）
     for gname in sorted(_FUNC_MAP, key=len, reverse=True):
         expr = expr.replace(gname, _FUNC_MAP[gname])
-    # 替换 Xi 为对应子表达式
-    for i, name in enumerate(feature_names):
+    # 替换 Xi 为对应子表达式（必须从大索引到小索引，避免 X1 误替 X10/X11 的子串）
+    for i in range(len(feature_names) - 1, -1, -1):
+        name = feature_names[i]
         sub_expr = _BASE_FEATURES[name]
         expr = expr.replace(f"X{i}", f"({sub_expr})")
     return expr
@@ -117,7 +118,7 @@ async def mine_with_symbolic(task_id: int) -> dict:
         for prog in top_progs:
             try:
                 expr = _translate_program(str(prog), feature_names)
-                validate_expression(expr)
+                validate_expression(expr, max_length=10000)
             except ExpressionValidationError as e:
                 logger.info("符号回归表达式沙箱拒绝: %s", e)
                 continue

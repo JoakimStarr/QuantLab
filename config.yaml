@@ -12,18 +12,25 @@ data:
 
 ai_provider:
   primary:
-    provider: "glm"
-    base_url: "https://open.bigmodel.cn/api/paas/v4"
-    model: "glm-4.7-flash"
-    timeout_seconds: 15
-    max_tokens: 512
+    provider: "opencodezen"
+    base_url: "https://opencode.ai/zen/v1"
+    model: "deepseek-v4-flash-free"  # DeepSeek 免费版（推理模型，需较大 max_tokens）
+    timeout_seconds: 60
+    max_tokens: 4096  # 推理模型 reasoning_content 占用大量 token，512 会导致 content 为空
     temperature: 0.3
   fallback:
+    provider: "glm"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    model: "glm-4-flash"  # 非推理免费模型，content 稳定（glm-4.7-flash 模型名无效会报 1305）
+    timeout_seconds: 30
+    max_tokens: 2048
+    temperature: 0.3
+  tertiary:
     provider: "siliconflow"
     base_url: "https://api.siliconflow.cn/v1"
     model: "Qwen/Qwen2.5-7B-Instruct"
-    timeout_seconds: 12
-    max_tokens: 512
+    timeout_seconds: 20
+    max_tokens: 2048
     temperature: 0.3
   concurrent_providers: true
   total_timeout_seconds: 10

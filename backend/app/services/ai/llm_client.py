@@ -44,16 +44,47 @@ class LLMClient:
     async def chat_completion(self, messages: list, force_json: bool = True) -> dict:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"model": self.model, "messages": messages, "temperature": self.temperature, "max_tokens": self.max_tokens}
-        if force_json:
+
+        # 免费模型可能不支持response_format，先尝试带response_format
+        use_response_format = force_json
+        if use_response_format:
             payload["response_format"] = {"type": "json_object"}
+
         last_error = None
+        content = None  # 预初始化，防止 JSONDecodeError 处理时未定义
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    # 如果是第二次尝试且之前返回空内容，尝试不使用response_format
+                    if attempt > 0 and use_response_format:
+                        payload.pop("response_format", None)
+                        use_response_format = False
+
                     resp = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
                     resp.raise_for_status()
                     data = resp.json()
-                    content = data["choices"][0]["message"]["content"]
+                    choice = data["choices"][0]
+                    content = choice.get("message", {}).get("content", "") or ""
+                    finish_reason = choice.get("finish_reason")
+                    reasoning = choice.get("message", {}).get("reasoning_content", "") or ""
+
+                    # 检查内容是否为空
+                    if not content or not content.strip():
+                        # 推理模型 reasoning 耗尽 max_tokens：content 永远为空，重试无意义
+                        if finish_reason == "length" and reasoning:
+                            raise ValueError(
+                                f"推理模型 reasoning 耗尽 max_tokens={self.max_tokens}"
+                                f"（reasoning 长度 {len(reasoning)}），"
+                                f"请增大 ai_provider.max_tokens 或改用非推理模型"
+                            )
+                        if attempt == 0 and "response_format" in payload:
+                            # 第一次返回空内容，可能是不支持response_format，下次尝试不使用
+                            payload.pop("response_format", None)
+                            use_response_format = False
+                            await asyncio.sleep(1)
+                            continue
+                        raise ValueError("模型返回空内容")
+
                     if force_json:
                         parsed = _extract_json(content)
                     else:
@@ -61,8 +92,14 @@ class LLMClient:
                     return {"content": parsed, "tokens": data.get("usage", {}).get("total_tokens", 0), "model": self.model, "provider": self.base_url}
             except httpx.TimeoutException:
                 last_error = AIProviderUnavailableError(f"请求超时 (timeout={self.timeout}s)")
-            except json.JSONDecodeError:
-                last_error = AIProviderUnavailableError(f"返回结果非合法JSON: {content[:200] if 'content' in dir() else '解析失败'}")
+            except json.JSONDecodeError as e:
+                content_preview = content[:200] if content else '空内容'
+                last_error = AIProviderUnavailableError(f"返回结果非合法JSON: {content_preview}")
+            except ValueError as e:
+                last_error = AIProviderUnavailableError(f"模型返回内容无效: {str(e)}")
+                # 推理模型 token 不足不可重试（重试结果相同），直接跳出让 router 切换 provider
+                if "推理模型 reasoning 耗尽" in str(e):
+                    break
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     wait = (attempt + 1) * 3
@@ -73,5 +110,5 @@ class LLMClient:
             except Exception as e:
                 last_error = AIProviderUnavailableError(f"调用失败: {e}")
             if attempt < 2:
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)  # 增加重试间隔，给API更多恢复时间
         raise last_error
