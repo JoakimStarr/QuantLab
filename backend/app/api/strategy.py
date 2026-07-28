@@ -41,6 +41,23 @@ async def create_strategy_api(
     return ApiResponse(ok=True, data=item)
 
 
+# 注意：字面量路由必须放在 {strategy_id} 参数路由之前，
+# 否则 /strategies/backtest-results 会被 /{strategy_id} 优先匹配并报 422。
+@router.get("/backtest-results/{result_id}")
+async def get_result_api(result_id: int):
+    item = await get_backtest_result(result_id)
+    if item is None:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
+    return ApiResponse(ok=True, data=item)
+
+
+@router.get("/backtest-results")
+async def list_all_results_api(limit: int = Query(20, le=100)):
+    """全局最近回测结果（不限定策略）。"""
+    items = await list_backtest_results(strategy_id=None, limit=limit)
+    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+
+
 @router.get("/{strategy_id}")
 async def get_strategy_api(strategy_id: int):
     item = await get_strategy(strategy_id)
@@ -98,19 +115,4 @@ async def run_backtest_api(
 @router.get("/{strategy_id}/backtest-results")
 async def list_results_api(strategy_id: int, limit: int = Query(20, le=100)):
     items = await list_backtest_results(strategy_id=strategy_id, limit=limit)
-    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
-
-
-@router.get("/backtest-results/{result_id}")
-async def get_result_api(result_id: int):
-    item = await get_backtest_result(result_id)
-    if item is None:
-        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
-    return ApiResponse(ok=True, data=item)
-
-
-@router.get("/backtest-results")
-async def list_all_results_api(limit: int = Query(20, le=100)):
-    """全局最近回测结果（不限定策略）。"""
-    items = await list_backtest_results(strategy_id=None, limit=limit)
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})

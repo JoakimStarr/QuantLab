@@ -1775,3 +1775,57 @@ ValueError: CSV 目录为空
 2026-07-28 18:26:43,271 [INFO] app.services.mining.llm_factor: 因子 rocp_5 IC=0.0025 未达标(阈值0.03) [req=226317a47320]
 2026-07-28 18:28:53,804 [INFO] app.services.mining.llm_factor: 因子 volatility_20 IC=-0.007 未达标(阈值0.03) [req=226317a47320]
 2026-07-28 18:31:15,681 [INFO] app.services.mining.llm_factor: 因子 volume_ratio_5_20 IC=-0.001 未达标(阈值0.03) [req=226317a47320]
+2026-07-28 18:32:28,614 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 18:32:28,614 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 18:32:28,614 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-28 18:32:33,680 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+2026-07-28 18:40:04,264 [INFO] apscheduler.scheduler: Scheduler has been shut down
+INFO:     Started server process [792216]
+INFO:     Waiting for application startup.
+2026-07-28 18:42:01,001 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-28 18:42:01,001 [INFO] apscheduler.scheduler: Added job "daily_quant_data_update" to job store "default"
+2026-07-28 18:42:01,001 [INFO] apscheduler.scheduler: Scheduler started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57428 - "GET /api/v1/strategies/backtest-results?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33958 - "GET /api/v1/strategies/backtest-results?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55664 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55672 - "GET /api/v1/strategies/1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55676 - "GET /api/v1/strategies/1/backtest-results HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55686 - "GET /api/v1/strategies/backtest-results/1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55700 - "GET /api/v1/strategies/backtest-results HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43744 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43738 - "GET /api/v1/factors?limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43756 - "GET /api/v1/mining/tasks?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43768 - "GET /api/v1/quant/data/status HTTP/1.1" 200 OK
+[792216:ThreadPoolExecutor-0_0](2026-07-28 18:43:05,683) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+/home/joakim/qunt_project/.venv/lib/python3.11/site-packages/mlflow/utils/autologging_utils/versioning.py:6: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import resource_filename
+[792216:ThreadPoolExecutor-0_0](2026-07-28 18:43:06,082) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[792216:ThreadPoolExecutor-0_0](2026-07-28 18:43:06,082) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/joakim/qunt_project/data/qlib_bin/cn_data')}
+2026-07-28 18:43:06,082 [INFO] app.services.quant.qlib_init: qlib 已初始化, provider_uri=/home/joakim/qunt_project/data/qlib_bin/cn_data
+INFO:     127.0.0.1:43760 - "GET /api/v1/quant/data/qlib-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43778 - "GET /api/v1/strategies/backtest-results?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43810 - "GET /api/v1/quant/data/qlib-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43794 - "GET /api/v1/factors?sort_by=ic&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49834 - "GET /api/v1/quant/data/qlib-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49806 - "GET /api/v1/factors?status=active&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49822 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49850 - "GET /api/v1/strategies/5/backtest-results?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49864 - "GET /api/v1/strategies/backtest-results/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49866 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46250 - "POST /api/v1/strategies?name=%E6%B5%8B%E8%AF%951&factor_ids=9&factor_ids=8&factor_ids=5&factor_ids=7&combination_method=ic_weight&topk=50&n_drop=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46258 - "GET /api/v1/strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46272 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46294 - "GET /api/v1/quant/data/qlib-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46288 - "GET /api/v1/factors?status=active&limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41148 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41150 - "POST /api/v1/mining/llm?n_candidates=30 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41154 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41156 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41170 - "POST /api/v1/mining/symbolic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41186 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41192 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39576 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39578 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55524 - "GET /api/v1/mining/tasks?limit=50 HTTP/1.1" 200 OK
