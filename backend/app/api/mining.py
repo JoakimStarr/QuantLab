@@ -1,6 +1,8 @@
 """AI 因子挖掘 API：LLM/符号回归挖掘任务管理。"""
 import json
 import logging
+import asyncio
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy import select, func
 
@@ -13,6 +15,39 @@ from app.schemas.common import ApiResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mining", tags=["mining"])
+
+
+def _task_timeout() -> int:
+    """挖掘任务超时秒数（来自 config.task.task_timeout_seconds，默认 300）。"""
+    return int(settings.task.get("task_timeout_seconds", 300))
+
+
+async def _safe_run_task(task_id: int, coro_factory, label: str) -> None:
+    """统一的挖掘任务执行包装器。
+
+    - 用 asyncio.wait_for 强制超时，超时即标记 failed
+    - 兜底捕获所有异常并更新状态为 failed（防止 BackgroundTasks 静默吞异常）
+    - 保证 task 状态不会卡在 running
+    """
+    timeout = _task_timeout()
+    try:
+        await asyncio.wait_for(coro_factory(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error("%s 任务超时 task_id=%s (timeout=%ss)", label, task_id, timeout)
+        await _mark_failed(task_id, f"任务超时 (timeout={timeout}s)")
+    except Exception as e:
+        logger.exception("%s 任务失败 task_id=%s", label, task_id)
+        await _mark_failed(task_id, str(e)[:500])
+
+
+async def _mark_failed(task_id: int, error: str) -> None:
+    """将挖掘任务标记为 failed（兜底，避免状态卡 running）。"""
+    try:
+        from app.services.mining.task_utils import update_task_status
+        await update_task_status(task_id, status="failed", error=error,
+                                 finished_at=datetime.now())
+    except Exception:
+        logger.exception("标记挖掘任务 failed 失败 task_id=%s", task_id)
 
 
 def _task_dict(r: MiningTask) -> dict:
@@ -73,11 +108,8 @@ async def get_task_api(task_id: int, db=Depends(get_db)):
 
 
 async def _run_llm_task(task_id: int, n: int):
-    try:
-        from app.services.mining.llm_factor import mine_with_llm
-        await mine_with_llm(task_id, n)
-    except Exception:
-        logger.exception("LLM 挖掘任务失败 task_id=%s", task_id)
+    from app.services.mining.llm_factor import mine_with_llm
+    await _safe_run_task(task_id, lambda: mine_with_llm(task_id, n), "LLM 挖掘")
 
 
 @router.post("/llm")
@@ -97,11 +129,8 @@ async def mine_llm_api(
 
 
 async def _run_symbolic_task(task_id: int):
-    try:
-        from app.services.mining.symbolic import mine_with_symbolic
-        await mine_with_symbolic(task_id)
-    except Exception:
-        logger.exception("符号回归挖掘任务失败 task_id=%s", task_id)
+    from app.services.mining.symbolic import mine_with_symbolic
+    await _safe_run_task(task_id, lambda: mine_with_symbolic(task_id), "符号回归挖掘")
 
 
 @router.post("/symbolic")
@@ -117,11 +146,12 @@ async def mine_symbolic_api(background_tasks: BackgroundTasks):
 
 
 async def _run_automl_task(task_id: int, factor_ids: list[int], method: str):
-    try:
-        from app.services.mining.automl import mine_with_automl
-        await mine_with_automl(task_id, factor_ids, method)
-    except Exception:
-        logger.exception("AutoML 组合任务失败 task_id=%s", task_id)
+    from app.services.mining.automl import mine_with_automl
+    await _safe_run_task(
+        task_id,
+        lambda: mine_with_automl(task_id, factor_ids, method),
+        "AutoML 组合",
+    )
 
 
 @router.post("/automl")
@@ -143,11 +173,8 @@ async def mine_automl_api(
 
 
 async def _run_text_task(task_id: int, codes: list[str]):
-    try:
-        from app.services.mining.text_factor import mine_with_text
-        await mine_with_text(task_id, codes)
-    except Exception:
-        logger.exception("文本因子挖掘任务失败 task_id=%s", task_id)
+    from app.services.mining.text_factor import mine_with_text
+    await _safe_run_task(task_id, lambda: mine_with_text(task_id, codes), "文本因子挖掘")
 
 
 @router.post("/text")

@@ -1,7 +1,9 @@
 version: '3.8'
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     volumes:
@@ -9,17 +11,16 @@ services:
       - ./data:/app/data
       - ./models:/app/models
       - ./logs:/app/logs
+      - ./backend/app:/app/app          # 挂载后端代码，便于开发热更新
+      - ./frontend/dist:/app/static      # 挂载前端构建产物，FastAPI 直接服务
     env_file:
       - .env
     environment:
       - PROJECT_ROOT=/app
+      - STATIC_DIR=/app/static
+      - TZ=Asia/Shanghai
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
     restart: unless-stopped
 
-  frontend:
-    build: ./frontend
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
+# frontend 服务已移除：FastAPI 通过 StaticFiles 直接服务前端构建产物
+# 如需前端热更新开发，在 frontend/ 目录下单独运行 `npm run dev`

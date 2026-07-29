@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import Column, Integer, String, TIMESTAMP, UniqueConstraint
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -13,7 +14,7 @@ class StockDataStatus(Base):
     latest_date = Column(String, nullable=True)
     row_count = Column(Integer, default=0)
     stock_count = Column(Integer, default=0)
-    last_updated = Column(TIMESTAMP, nullable=True, default=func.now())
+    last_updated = Column(TIMESTAMP, nullable=True, default=datetime.now)
     status = Column(String, default="ok")  # ok / syncing / failed / empty
     last_error = Column(String, nullable=True)
     qlib_dir = Column(String, nullable=True)

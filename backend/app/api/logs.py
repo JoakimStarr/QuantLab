@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 # 允许查询的日志文件白名单
-_ALLOWED_FILES = {"app.log", "error.log", "api.jsonl", "perf.jsonl"}
+_ALLOWED_FILES = {"app.log", "error.log", "api.jsonl", "perf.jsonl", "audit.jsonl"}
 
 # 文本日志行正则: "2026-07-28 15:34:23,123 [INFO] app.module: message [req=xxx]"
 _TEXT_LOG_RE = re.compile(

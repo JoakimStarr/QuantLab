@@ -15,6 +15,25 @@ logger = logging.getLogger(__name__)
 # 注意：Ref 负数=未来，label 用未来收益是正确的（预测目标）
 _DEFAULT_LABEL = "Ref($close, -1) / $close - 1"
 
+def _load_instruments(market: str) -> list:
+    """加载股票池代码列表，默认过滤北交所（bj 开头）股票。
+
+    通过 qlib D.list_instruments 获取成分股列表，
+    根据 settings.quant.include_bj 控制是否保留北交所股票。
+    """
+    from qlib.data import D
+    inst_list = D.instruments(market=market)
+    code_map = D.list_instruments(inst_list, freq="day")
+    codes = sorted(code_map.keys())
+
+    include_bj = settings.quant.get("include_bj", False)
+    if not include_bj:
+        original_count = len(codes)
+        codes = [c for c in codes if not c.lower().startswith("bj")]
+        if original_count != len(codes):
+            logger.info("过滤北交所股票: %d -> %d", original_count, len(codes))
+    return codes
+
 
 def load_factor_values(
     factor_expr: str,
@@ -26,7 +45,7 @@ def load_factor_values(
     init_qlib()
     from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = D.instruments(market=market)
+    instruments = _load_instruments(market)
     df = D.features(instruments, [factor_expr], start_time=start, end_time=end, freq="day")
     if df is None or df.empty:
         raise ValueError(f"因子 {factor_expr} 在 {start}~{end} 无数据")
@@ -39,7 +58,7 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
     init_qlib()
     from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = D.instruments(market=market)
+    instruments = _load_instruments(market)
     expr = label_expr or _DEFAULT_LABEL
     df = D.features(instruments, [expr], start_time=start, end_time=end, freq="day")
     if df is None or df.empty:
@@ -104,7 +123,7 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
     init_qlib()
     from qlib.data import D
     market = settings.quant.get("universe", "csi300")
-    instruments = D.instruments(market=market)
+    instruments = _load_instruments(market)
     start = factor_df.index.get_level_values("datetime").min()
     end = factor_df.index.get_level_values("datetime").max()
 

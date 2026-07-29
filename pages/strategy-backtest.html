@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>策略回测 — QuantLab</title>
+    <style id="theme-vars">
+/* QuantLab Quant Research Platform — Design Tokens
+   Single primary hue: deep indigo-blue (fintech / engineering tone)
+   No secondary/accent brand hues in free-explore mode. */
+
+:root,
+:root.light {
+  /* === Brand primary scale (single hue) === */
+  --brand-50: #eef3fb;
+  --brand-100: #d6e2f5;
+  --brand-200: #aec6ea;
+  --brand-300: #7fa3da;
+  --brand-400: #4f7fc8;
+  --brand-500: #2f5fbf;
+  --brand-600: #1f4ba0;
+  --brand-700: #193d82;
+  --brand-800: #163466;
+  --brand-900: #122a4f;
+
+  /* === Semantic aliases (required by apply-html-head-contract.mjs) === */
+  --brand-background: #f6f8fb;
+  --brand-foreground: #16213a;
+  --brand-card: #ffffff;
+  --brand-card-foreground: #16213a;
+  --brand-popover: #ffffff;
+  --brand-popover-foreground: #16213a;
+  --brand-primary: #1f4ba0;
+  --brand-primary-foreground: #ffffff;
+  --brand-muted: #eef2f7;
+  --brand-muted-foreground: #5b6b85;
+  --brand-border: #e3e9f1;
+  --brand-input: #e3e9f1;
+  --brand-ring: #1f4ba0;
+
+  /* === Surfaces === */
+  --brand-surface: #ffffff;
+  --brand-surface-2: #f1f4f9;
+  --brand-surface-3: #e9eef5;
+
+  /* === Ink (text) === */
+  --brand-ink: #16213a;
+  --brand-ink-2: #4a5872;
+  --brand-ink-3: #8493ab;
+
+  /* === State colors (semantic only, not brand) === */
+  --state-success: #1f9d6b;
+  --state-warning: #c8801c;
+  --state-error: #d24545;
+  --state-info: #2f7dc2;
+
+  /* === Up / Down (market semantic only) === */
+  --market-up: #1f9d6b;
+  --market-down: #d24545;
+
+  /* === Radius scale === */
+  --brand-radius-sm: 4px;
+  --brand-radius-md: 8px;
+  --brand-radius-lg: 12px;
+
+  /* === Shadows (subtle, alpha <= 0.05 for static) === */
+  --brand-shadow-1: 0 1px 2px rgba(22, 33, 58, 0.05), 0 1px 1px rgba(22, 33, 58, 0.03);
+  --brand-shadow-2: 0 8px 24px -8px rgba(22, 33, 58, 0.18);
+  --brand-shadow-3: 0 24px 60px -20px rgba(22, 33, 58, 0.28);
+
+  /* === Typography === */
+  --brand-font-sans: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --brand-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+}
+
+:root.dark {
+  --brand-background: #0e1525;
+  --brand-foreground: #e8edf5;
+  --brand-card: #161f33;
+  --brand-card-foreground: #e8edf5;
+  --brand-popover: #1a2438;
+  --brand-popover-foreground: #e8edf5;
+  --brand-primary: #4f7fc8;
+  --brand-primary-foreground: #0e1525;
+  --brand-muted: #1f2a40;
+  --brand-muted-foreground: #9aabc4;
+  --brand-border: #243049;
+  --brand-input: #243049;
+  --brand-ring: #4f7fc8;
+
+  --brand-surface: #161f33;
+  --brand-surface-2: #1f2a40;
+  --brand-surface-3: #283449;
+
+  --brand-ink: #e8edf5;
+  --brand-ink-2: #9aabc4;
+  --brand-ink-3: #64748b;
+
+  --state-success: #2bb67f;
+  --state-warning: #e0a23a;
+  --state-error: #e05858;
+  --state-info: #4f9dd6;
+
+  --market-up: #2bb67f;
+  --market-down: #e05858;
+
+  --brand-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --brand-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.4);
+  --brand-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.5);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--brand-background);
+    --color-foreground: var(--brand-foreground);
+    --color-card: var(--brand-card);
+    --color-card-foreground: var(--brand-card-foreground);
+    --color-popover: var(--brand-popover);
+    --color-popover-foreground: var(--brand-popover-foreground);
+    --color-primary: var(--brand-primary);
+    --color-primary-foreground: var(--brand-primary-foreground);
+    --color-muted: var(--brand-muted);
+    --color-muted-foreground: var(--brand-muted-foreground);
+    --color-border: var(--brand-border);
+    --color-input: var(--brand-input);
+    --color-ring: var(--brand-ring);
+    --radius-sm: var(--brand-radius-sm);
+    --radius-md: var(--brand-radius-md);
+    --radius-lg: var(--brand-radius-lg);
+  }
+  @layer base {
+    body { background: var(--brand-background); color: var(--brand-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--brand-background); }
+      .text-background { color: var(--brand-background); }
+      .border-background { border-color: var(--brand-background); }
+      .ring-background { --tw-ring-color: var(--brand-background); }
+      .bg-foreground { background-color: var(--brand-foreground); }
+      .text-foreground { color: var(--brand-foreground); }
+      .border-foreground { border-color: var(--brand-foreground); }
+      .ring-foreground { --tw-ring-color: var(--brand-foreground); }
+      .bg-card { background-color: var(--brand-card); }
+      .text-card { color: var(--brand-card); }
+      .border-card { border-color: var(--brand-card); }
+      .ring-card { --tw-ring-color: var(--brand-card); }
+      .bg-card-foreground { background-color: var(--brand-card-foreground); }
+      .text-card-foreground { color: var(--brand-card-foreground); }
+      .border-card-foreground { border-color: var(--brand-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--brand-card-foreground); }
+      .bg-popover { background-color: var(--brand-popover); }
+      .text-popover { color: var(--brand-popover); }
+      .border-popover { border-color: var(--brand-popover); }
+      .ring-popover { --tw-ring-color: var(--brand-popover); }
+      .bg-popover-foreground { background-color: var(--brand-popover-foreground); }
+      .text-popover-foreground { color: var(--brand-popover-foreground); }
+      .border-popover-foreground { border-color: var(--brand-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--brand-popover-foreground); }
+      .bg-primary { background-color: var(--brand-primary); }
+      .text-primary { color: var(--brand-primary); }
+      .border-primary { border-color: var(--brand-primary); }
+      .ring-primary { --tw-ring-color: var(--brand-primary); }
+      .bg-primary-foreground { background-color: var(--brand-primary-foreground); }
+      .text-primary-foreground { color: var(--brand-primary-foreground); }
+      .border-primary-foreground { border-color: var(--brand-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--brand-primary-foreground); }
+      .bg-muted { background-color: var(--brand-muted); }
+      .text-muted { color: var(--brand-muted); }
+      .border-muted { border-color: var(--brand-muted); }
+      .ring-muted { --tw-ring-color: var(--brand-muted); }
+      .bg-muted-foreground { background-color: var(--brand-muted-foreground); }
+      .text-muted-foreground { color: var(--brand-muted-foreground); }
+      .border-muted-foreground { border-color: var(--brand-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--brand-muted-foreground); }
+      .bg-border { background-color: var(--brand-border); }
+      .text-border { color: var(--brand-border); }
+      .border-border { border-color: var(--brand-border); }
+      .ring-border { --tw-ring-color: var(--brand-border); }
+      .bg-input { background-color: var(--brand-input); }
+      .text-input { color: var(--brand-input); }
+      .border-input { border-color: var(--brand-input); }
+      .ring-input { --tw-ring-color: var(--brand-input); }
+      .bg-ring { background-color: var(--brand-ring); }
+      .text-ring { color: var(--brand-ring); }
+      .border-ring { border-color: var(--brand-ring); }
+      .ring-ring { --tw-ring-color: var(--brand-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="h-screen font-sans antialiased">
+    <main class="flex h-screen overflow-hidden" data-viewport-mode="app-shell">
+      <!-- ===== Sidebar (aside) — 220px ===== -->
+      <aside class="w-[220px] flex-shrink-0 bg-card border-r border-border flex flex-col">
+        <!-- Logo -->
+        <div class="flex items-center gap-2 px-5 h-14 border-b border-border">
+          <i data-lucide="activity" class="w-5 h-5 text-primary"></i>
+          <span class="font-semibold text-foreground">QuantLab</span>
+          <span class="text-xs text-muted-foreground ml-auto">v2.0.0</span>
+        </div>
+        <!-- Nav -->
+        <nav class="flex-1 py-2 px-0">
+          <a data-dom-id="nav-dashboard" href="dashboard.html" class="flex items-center gap-3 h-[40px] rounded-md text-muted-foreground hover:bg-muted hover:text-foreground mx-2 my-[2px] px-3 text-sm transition-colors">
+            <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i>
+            <span>研究首页</span>
+          </a>
+          <a data-dom-id="nav-factor-library" href="factor-library.html" class="flex items-center gap-3 h-[40px] rounded-md text-muted-foreground hover:bg-muted hover:text-foreground mx-2 my-[2px] px-3 text-sm transition-colors">
+            <i data-lucide="coins" class="w-[18px] h-[18px]"></i>
+            <span>因子库</span>
+          </a>
+          <a data-dom-id="nav-strategy-backtest" href="strategy-backtest.html" class="flex items-center gap-3 h-[40px] rounded-md bg-primary/8 text-primary font-medium mx-2 my-[2px] px-3 text-sm border-l-[3px] border-primary transition-colors">
+            <i data-lucide="trending-up" class="w-[18px] h-[18px]"></i>
+            <span>策略回测</span>
+          </a>
+          <a data-dom-id="nav-factor-mining" href="factor-mining.html" class="flex items-center gap-3 h-[40px] rounded-md text-muted-foreground hover:bg-muted hover:text-foreground mx-2 my-[2px] px-3 text-sm transition-colors">
+            <i data-lucide="sparkles" class="w-[18px] h-[18px]"></i>
+            <span>AI 因子挖掘</span>
+          </a>
+        </nav>
+        <!-- Bottom -->
+        <div class="border-t border-border px-4 py-3 flex items-center justify-between">
+          <button id="sidebar-theme-toggle" class="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+            <i data-lucide="sun" class="w-4 h-4"></i>
+          </button>
+          <span class="text-xs text-muted-foreground">v2.0.0</span>
+        </div>
+      </aside>
+
+      <!-- ===== Right column ===== -->
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <!-- ===== Topbar — 56px ===== -->
+        <header class="h-14 flex-shrink-0 border-b border-border bg-card flex items-center px-6 gap-4">
+          <span class="text-sm text-muted-foreground">策略回测</span>
+          <div class="ml-2 relative">
+            <i data-lucide="search" class="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2"></i>
+            <input type="text" placeholder="搜索策略..." class="w-[320px] h-9 pl-9 pr-3 rounded-md bg-muted text-sm text-foreground placeholder:text-muted-foreground border border-border focus:outline-none focus:ring-1 focus:ring-ring">
+          </div>
+          <div class="ml-auto flex items-center gap-3">
+            <span class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground">
+              <span class="w-1.5 h-1.5 rounded-full bg-[var(--state-success)]"></span>
+              数据已同步
+            </span>
+            <button id="topbar-theme-toggle" class="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+              <i data-lucide="moon" class="w-4 h-4"></i>
+            </button>
+            <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-muted-foreground">Q</div>
+          </div>
+        </header>
+
+        <!-- ===== Scrollable main content ===== -->
+        <div class="flex-1 overflow-y-auto p-6" data-scroll-region="primary">
+
+          <!-- ===== 1. Page Header ===== -->
+          <div class="flex items-center justify-between mb-6">
+            <div>
+              <h1 class="text-2xl font-semibold text-foreground">策略回测</h1>
+              <p class="text-sm text-muted-foreground mt-1">配置和运行多因子策略回测</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <button data-dom-id="cta-refresh-strategies" class="inline-flex items-center gap-2 px-4 h-9 text-sm rounded-md border border-border bg-card text-foreground hover:bg-muted transition-colors">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                刷新
+              </button>
+              <button data-dom-id="cta-create-strategy" class="inline-flex items-center gap-2 px-4 h-9 text-sm rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                新建策略
+              </button>
+            </div>
+          </div>
+
+          <!-- ===== 2. Strategy List ===== -->
+          <div id="strategy-list" class="bg-card border border-border rounded-lg overflow-hidden mb-6">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-muted/50">
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground w-[60px]">ID</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">策略名称</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">因子</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground w-[100px]">组合方式</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground w-[100px]">topk/n_drop</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground w-[100px]">基准</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground w-[160px]">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="border-b border-border hover:bg-muted/30 transition-colors">
+                    <td class="px-4 py-2.5 font-mono text-muted-foreground">1</td>
+                    <td class="px-4 py-2.5 font-medium">多因子动量策略</td>
+                    <td class="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[200px]">momentum_20d, reversal_5d</td>
+                    <td class="px-4 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">等权</span></td>
+                    <td class="px-4 py-2.5 font-mono tabular-nums">50/5</td>
+                    <td class="px-4 py-2.5 text-xs">SH000300</td>
+                    <td class="px-4 py-2.5">
+                      <div class="flex items-center gap-2">
+                        <a data-dom-id="row-strategy-backtest" href="#" class="text-sm text-primary hover:underline">回测</a>
+                        <a data-dom-id="row-strategy-result" href="#" class="text-sm text-[var(--state-success)] hover:underline">结果</a>
+                        <a href="#" class="text-sm text-[var(--state-error)] hover:underline">归档</a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="border-b border-border hover:bg-muted/30 transition-colors bg-muted/20">
+                    <td class="px-4 py-2.5 font-mono text-muted-foreground">2</td>
+                    <td class="px-4 py-2.5 font-medium">LLM 增强动量</td>
+                    <td class="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[200px]">llm_factor_growth, momentum_20d</td>
+                    <td class="px-4 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">IC加权</span></td>
+                    <td class="px-4 py-2.5 font-mono tabular-nums">30/3</td>
+                    <td class="px-4 py-2.5 text-xs">SH000300</td>
+                    <td class="px-4 py-2.5">
+                      <div class="flex items-center gap-2">
+                        <a href="#" class="text-sm text-primary hover:underline">回测</a>
+                        <a href="#" class="text-sm text-[var(--state-success)] hover:underline">结果</a>
+                        <a href="#" class="text-sm text-[var(--state-error)] hover:underline">归档</a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="border-b border-border hover:bg-muted/30 transition-colors">
+                    <td class="px-4 py-2.5 font-mono text-muted-foreground">3</td>
+                    <td class="px-4 py-2.5 font-medium">低波动精选</td>
+                    <td class="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[200px]">volatility_20d, turnover_ratio</td>
+                    <td class="px-4 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">等权</span></td>
+                    <td class="px-4 py-2.5 font-mono tabular-nums">40/5</td>
+                    <td class="px-4 py-2.5 text-xs">SH000905</td>
+                    <td class="px-4 py-2.5">
+                      <div class="flex items-center gap-2">
+                        <a href="#" class="text-sm text-primary hover:underline">回测</a>
+                        <a href="#" class="text-sm text-[var(--state-success)] hover:underline">结果</a>
+                        <a href="#" class="text-sm text-[var(--state-error)] hover:underline">归档</a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="border-b border-border hover:bg-muted/30 transition-colors bg-muted/20">
+                    <td class="px-4 py-2.5 font-mono text-muted-foreground">4</td>
+                    <td class="px-4 py-2.5 font-medium">文本情绪 Alpha</td>
+                    <td class="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[200px]">text_sentiment_score</td>
+                    <td class="px-4 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">IC加权</span></td>
+                    <td class="px-4 py-2.5 font-mono tabular-nums">20/2</td>
+                    <td class="px-4 py-2.5 text-xs">SH000300</td>
+                    <td class="px-4 py-2.5">
+                      <div class="flex items-center gap-2">
+                        <a href="#" class="text-sm text-primary hover:underline">回测</a>
+                        <a href="#" class="text-sm text-[var(--state-success)] hover:underline">结果</a>
+                        <a href="#" class="text-sm text-[var(--state-error)] hover:underline">归档</a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="hover:bg-muted/30 transition-colors">
+                    <td class="px-4 py-2.5 font-mono text-muted-foreground">5</td>
+                    <td class="px-4 py-2.5 font-medium">AutoML 组合 v3</td>
+                    <td class="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[200px]">automl_combo_v3</td>
+                    <td class="px-4 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">等权</span></td>
+                    <td class="px-4 py-2.5 font-mono tabular-nums">60/8</td>
+                    <td class="px-4 py-2.5 text-xs">SH000300</td>
+                    <td class="px-4 py-2.5">
+                      <div class="flex items-center gap-2">
+                        <a href="#" class="text-sm text-primary hover:underline">回测</a>
+                        <a href="#" class="text-sm text-[var(--state-success)] hover:underline">结果</a>
+                        <a href="#" class="text-sm text-[var(--state-error)] hover:underline">归档</a>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ===== 3. Backtest Metrics ===== -->
+          <div id="backtest-metrics" class="mb-6">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-lg font-semibold text-foreground">最新回测结果 — 多因子动量策略</h2>
+              <span class="text-sm text-muted-foreground font-mono">2020-01-01 ~ 2024-12-31</span>
+            </div>
+            <div class="grid grid-cols-4 gap-4">
+              <!-- 年化收益 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">年化收益</div>
+                <div class="text-2xl font-semibold tabular-nums text-[var(--market-up)]">18.42%</div>
+              </div>
+              <!-- 年化波动 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">年化波动</div>
+                <div class="text-2xl font-semibold tabular-nums text-foreground">22.15%</div>
+              </div>
+              <!-- 夏普比率 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">夏普比率</div>
+                <div class="text-2xl font-semibold tabular-nums text-foreground">0.831</div>
+              </div>
+              <!-- 索提诺 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">索提诺</div>
+                <div class="text-2xl font-semibold tabular-nums text-foreground">1.124</div>
+              </div>
+              <!-- 最大回撤 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">最大回撤</div>
+                <div class="text-2xl font-semibold tabular-nums text-[var(--market-down)]">-12.38%</div>
+              </div>
+              <!-- 卡玛比率 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">卡玛比率</div>
+                <div class="text-2xl font-semibold tabular-nums text-foreground">1.488</div>
+              </div>
+              <!-- 胜率 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">胜率</div>
+                <div class="text-2xl font-semibold tabular-nums text-foreground">54.2%</div>
+              </div>
+              <!-- 超额收益 -->
+              <div class="bg-card border border-border rounded-lg p-4">
+                <div class="text-xs text-muted-foreground mb-1">超额收益</div>
+                <div class="text-2xl font-semibold tabular-nums text-[var(--market-up)]">6.75%</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 4. NAV Curve Chart ===== -->
+          <div class="bg-card border border-border rounded-lg p-5 mb-6">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-lg font-semibold text-foreground">净值曲线</h2>
+              <div class="flex items-center gap-4 text-sm text-muted-foreground">
+                <span class="flex items-center gap-1.5">
+                  <span class="w-4 h-[2px] bg-[var(--brand-primary)] inline-block"></span>
+                  策略净值
+                </span>
+                <span class="flex items-center gap-1.5">
+                  <span class="w-4 h-0 border-t-[1.5px] border-dashed border-[var(--brand-ink-3)] inline-block"></span>
+                  基准净值
+                </span>
+              </div>
+            </div>
+            <div style="height:320px; position:relative;">
+              <canvas id="navChart"></canvas>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // ===== NAV Chart =====
+      const ctx = document.getElementById('navChart');
+      if (ctx) {
+        const labels = ['2020-01','2020-04','2020-07','2020-10','2021-01','2021-04','2021-07','2021-10','2022-01','2022-04','2022-07','2022-10','2023-01','2023-04','2023-07','2023-10','2024-01','2024-04','2024-07','2024-10','2024-12'];
+        const strategyData = [1.00,0.92,1.08,1.15,1.22,1.18,1.30,1.28,1.20,1.25,1.35,1.30,1.40,1.50,1.55,1.60,1.68,1.75,1.82,1.90,1.95];
+        const benchmarkData = [1.00,0.95,1.05,1.10,1.14,1.10,1.16,1.14,1.08,1.12,1.15,1.12,1.16,1.20,1.22,1.24,1.26,1.27,1.28,1.28,1.28];
+
+        const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-primary').trim();
+        const ink3Color = getComputedStyle(document.documentElement).getPropertyValue('--brand-ink-3').trim();
+        const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-border').trim();
+        const cardColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-card').trim();
+
+        new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: '策略净值',
+                data: strategyData,
+                borderColor: primaryColor,
+                backgroundColor: primaryColor + '14',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: primaryColor
+              },
+              {
+                label: '基准净值',
+                data: benchmarkData,
+                borderColor: ink3Color,
+                borderWidth: 1.5,
+                borderDash: [6, 3],
+                fill: false,
+                tension: 0.3,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: ink3Color
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: cardColor,
+                titleColor: getComputedStyle(document.documentElement).getPropertyValue('--brand-foreground').trim(),
+                bodyColor: getComputedStyle(document.documentElement).getPropertyValue('--brand-foreground').trim(),
+                borderColor: borderColor,
+                borderWidth: 1,
+                padding: 10,
+                cornerRadius: 6,
+                callbacks: {
+                  label: function(ctx) {
+                    return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2);
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                grid: { color: borderColor, drawBorder: false },
+                ticks: { color: ink3Color, font: { size: 11 }, maxTicksLimit: 10 },
+                border: { display: false }
+              },
+              y: {
+                grid: { color: borderColor, drawBorder: false },
+                ticks: { color: ink3Color, font: { size: 11 }, callback: function(v) { return v.toFixed(1); } },
+                border: { display: false }
+              }
+            }
+          }
+        });
+      }
+    });
+    </script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

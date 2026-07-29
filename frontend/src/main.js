@@ -10,8 +10,8 @@ import './styles/global.scss'
 // ECharts configuration
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, PieChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
+import { LineChart, BarChart, PieChart, CandlestickChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent, TitleComponent, DataZoomComponent, AxisPointerComponent } from 'echarts/components'
 
 // Register ECharts components globally
 use([
@@ -19,10 +19,13 @@ use([
   LineChart,
   BarChart,
   PieChart,
+  CandlestickChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
-  TitleComponent
+  TitleComponent,
+  DataZoomComponent,
+  AxisPointerComponent
 ])
 
 const app = createApp(App)

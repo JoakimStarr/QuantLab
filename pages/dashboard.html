@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>研究首页 — QuantLab</title>
+    <style id="theme-vars">
+/* QuantLab Quant Research Platform — Design Tokens
+   Single primary hue: deep indigo-blue (fintech / engineering tone)
+   No secondary/accent brand hues in free-explore mode. */
+
+:root,
+:root.light {
+  /* === Brand primary scale (single hue) === */
+  --brand-50: #eef3fb;
+  --brand-100: #d6e2f5;
+  --brand-200: #aec6ea;
+  --brand-300: #7fa3da;
+  --brand-400: #4f7fc8;
+  --brand-500: #2f5fbf;
+  --brand-600: #1f4ba0;
+  --brand-700: #193d82;
+  --brand-800: #163466;
+  --brand-900: #122a4f;
+
+  /* === Semantic aliases (required by apply-html-head-contract.mjs) === */
+  --brand-background: #f6f8fb;
+  --brand-foreground: #16213a;
+  --brand-card: #ffffff;
+  --brand-card-foreground: #16213a;
+  --brand-popover: #ffffff;
+  --brand-popover-foreground: #16213a;
+  --brand-primary: #1f4ba0;
+  --brand-primary-foreground: #ffffff;
+  --brand-muted: #eef2f7;
+  --brand-muted-foreground: #5b6b85;
+  --brand-border: #e3e9f1;
+  --brand-input: #e3e9f1;
+  --brand-ring: #1f4ba0;
+
+  /* === Surfaces === */
+  --brand-surface: #ffffff;
+  --brand-surface-2: #f1f4f9;
+  --brand-surface-3: #e9eef5;
+
+  /* === Ink (text) === */
+  --brand-ink: #16213a;
+  --brand-ink-2: #4a5872;
+  --brand-ink-3: #8493ab;
+
+  /* === State colors (semantic only, not brand) === */
+  --state-success: #1f9d6b;
+  --state-warning: #c8801c;
+  --state-error: #d24545;
+  --state-info: #2f7dc2;
+
+  /* === Up / Down (market semantic only) === */
+  --market-up: #1f9d6b;
+  --market-down: #d24545;
+
+  /* === Radius scale === */
+  --brand-radius-sm: 4px;
+  --brand-radius-md: 8px;
+  --brand-radius-lg: 12px;
+
+  /* === Shadows (subtle, alpha <= 0.05 for static) === */
+  --brand-shadow-1: 0 1px 2px rgba(22, 33, 58, 0.05), 0 1px 1px rgba(22, 33, 58, 0.03);
+  --brand-shadow-2: 0 8px 24px -8px rgba(22, 33, 58, 0.18);
+  --brand-shadow-3: 0 24px 60px -20px rgba(22, 33, 58, 0.28);
+
+  /* === Typography === */
+  --brand-font-sans: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --brand-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+}
+
+:root.dark {
+  --brand-background: #0e1525;
+  --brand-foreground: #e8edf5;
+  --brand-card: #161f33;
+  --brand-card-foreground: #e8edf5;
+  --brand-popover: #1a2438;
+  --brand-popover-foreground: #e8edf5;
+  --brand-primary: #4f7fc8;
+  --brand-primary-foreground: #0e1525;
+  --brand-muted: #1f2a40;
+  --brand-muted-foreground: #9aabc4;
+  --brand-border: #243049;
+  --brand-input: #243049;
+  --brand-ring: #4f7fc8;
+
+  --brand-surface: #161f33;
+  --brand-surface-2: #1f2a40;
+  --brand-surface-3: #283449;
+
+  --brand-ink: #e8edf5;
+  --brand-ink-2: #9aabc4;
+  --brand-ink-3: #64748b;
+
+  --state-success: #2bb67f;
+  --state-warning: #e0a23a;
+  --state-error: #e05858;
+  --state-info: #4f9dd6;
+
+  --market-up: #2bb67f;
+  --market-down: #e05858;
+
+  --brand-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --brand-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.4);
+  --brand-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.5);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--brand-background);
+    --color-foreground: var(--brand-foreground);
+    --color-card: var(--brand-card);
+    --color-card-foreground: var(--brand-card-foreground);
+    --color-popover: var(--brand-popover);
+    --color-popover-foreground: var(--brand-popover-foreground);
+    --color-primary: var(--brand-primary);
+    --color-primary-foreground: var(--brand-primary-foreground);
+    --color-muted: var(--brand-muted);
+    --color-muted-foreground: var(--brand-muted-foreground);
+    --color-border: var(--brand-border);
+    --color-input: var(--brand-input);
+    --color-ring: var(--brand-ring);
+    --radius-sm: var(--brand-radius-sm);
+    --radius-md: var(--brand-radius-md);
+    --radius-lg: var(--brand-radius-lg);
+  }
+  @layer base {
+    body { background: var(--brand-background); color: var(--brand-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--brand-background); }
+      .text-background { color: var(--brand-background); }
+      .border-background { border-color: var(--brand-background); }
+      .ring-background { --tw-ring-color: var(--brand-background); }
+      .bg-foreground { background-color: var(--brand-foreground); }
+      .text-foreground { color: var(--brand-foreground); }
+      .border-foreground { border-color: var(--brand-foreground); }
+      .ring-foreground { --tw-ring-color: var(--brand-foreground); }
+      .bg-card { background-color: var(--brand-card); }
+      .text-card { color: var(--brand-card); }
+      .border-card { border-color: var(--brand-card); }
+      .ring-card { --tw-ring-color: var(--brand-card); }
+      .bg-card-foreground { background-color: var(--brand-card-foreground); }
+      .text-card-foreground { color: var(--brand-card-foreground); }
+      .border-card-foreground { border-color: var(--brand-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--brand-card-foreground); }
+      .bg-popover { background-color: var(--brand-popover); }
+      .text-popover { color: var(--brand-popover); }
+      .border-popover { border-color: var(--brand-popover); }
+      .ring-popover { --tw-ring-color: var(--brand-popover); }
+      .bg-popover-foreground { background-color: var(--brand-popover-foreground); }
+      .text-popover-foreground { color: var(--brand-popover-foreground); }
+      .border-popover-foreground { border-color: var(--brand-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--brand-popover-foreground); }
+      .bg-primary { background-color: var(--brand-primary); }
+      .text-primary { color: var(--brand-primary); }
+      .border-primary { border-color: var(--brand-primary); }
+      .ring-primary { --tw-ring-color: var(--brand-primary); }
+      .bg-primary-foreground { background-color: var(--brand-primary-foreground); }
+      .text-primary-foreground { color: var(--brand-primary-foreground); }
+      .border-primary-foreground { border-color: var(--brand-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--brand-primary-foreground); }
+      .bg-muted { background-color: var(--brand-muted); }
+      .text-muted { color: var(--brand-muted); }
+      .border-muted { border-color: var(--brand-muted); }
+      .ring-muted { --tw-ring-color: var(--brand-muted); }
+      .bg-muted-foreground { background-color: var(--brand-muted-foreground); }
+      .text-muted-foreground { color: var(--brand-muted-foreground); }
+      .border-muted-foreground { border-color: var(--brand-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--brand-muted-foreground); }
+      .bg-border { background-color: var(--brand-border); }
+      .text-border { color: var(--brand-border); }
+      .border-border { border-color: var(--brand-border); }
+      .ring-border { --tw-ring-color: var(--brand-border); }
+      .bg-input { background-color: var(--brand-input); }
+      .text-input { color: var(--brand-input); }
+      .border-input { border-color: var(--brand-input); }
+      .ring-input { --tw-ring-color: var(--brand-input); }
+      .bg-ring { background-color: var(--brand-ring); }
+      .text-ring { color: var(--brand-ring); }
+      .border-ring { border-color: var(--brand-ring); }
+      .ring-ring { --tw-ring-color: var(--brand-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="h-screen font-sans antialiased">
+    <main class="flex h-screen overflow-hidden" data-viewport-mode="app-shell">
+      <!-- ===== 侧边栏 ===== -->
+      <aside class="w-[220px] flex-shrink-0 bg-card border-r border-border flex flex-col">
+        <!-- Logo -->
+        <div class="flex items-center gap-2.5 px-5 h-14 border-b border-border">
+          <i data-lucide="activity" class="w-[20px] h-[20px] text-primary"></i>
+          <span class="font-semibold text-foreground text-[15px]">QuantLab</span>
+        </div>
+        <div class="px-5 pt-2 pb-3">
+          <span class="text-xs text-muted-foreground">v2.0.0</span>
+        </div>
+
+        <!-- 导航菜单 -->
+        <nav class="flex-1 px-0 space-y-0.5">
+          <a data-dom-id="nav-dashboard" href="dashboard.html"
+             class="flex items-center gap-3 h-10 mx-2 px-3 rounded-lg font-medium text-primary bg-primary/8 border-l-[3px] border-l-primary">
+            <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i>
+            <span class="text-[14px]">研究首页</span>
+          </a>
+          <a data-dom-id="nav-factor-library" href="factor-library.html"
+             class="flex items-center gap-3 h-10 mx-2 px-3 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground border-l-[3px] border-l-transparent transition-colors">
+            <i data-lucide="coins" class="w-[18px] h-[18px]"></i>
+            <span class="text-[14px]">因子库</span>
+          </a>
+          <a data-dom-id="nav-strategy-backtest" href="strategy-backtest.html"
+             class="flex items-center gap-3 h-10 mx-2 px-3 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground border-l-[3px] border-l-transparent transition-colors">
+            <i data-lucide="trending-up" class="w-[18px] h-[18px]"></i>
+            <span class="text-[14px]">策略回测</span>
+          </a>
+          <a data-dom-id="nav-factor-mining" href="factor-mining.html"
+             class="flex items-center gap-3 h-10 mx-2 px-3 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground border-l-[3px] border-l-transparent transition-colors">
+            <i data-lucide="sparkles" class="w-[18px] h-[18px]"></i>
+            <span class="text-[14px]">AI 因子挖掘</span>
+          </a>
+        </nav>
+
+        <!-- 底部 -->
+        <div class="px-5 py-3 border-t border-border flex items-center justify-between">
+          <button class="text-muted-foreground hover:text-foreground transition-colors" aria-label="切换主题">
+            <i data-lucide="sun" class="w-[18px] h-[18px]"></i>
+          </button>
+          <span class="text-xs text-muted-foreground">v2.0.0</span>
+        </div>
+      </aside>
+
+      <!-- ===== 右侧主区域 ===== -->
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <!-- 顶栏 -->
+        <header class="h-14 bg-card border-b border-border flex items-center justify-between px-6 flex-shrink-0">
+          <!-- 左侧面包屑 -->
+          <div class="flex items-center gap-2 text-sm text-muted-foreground">
+            <i data-lucide="layout-dashboard" class="w-[16px] h-[16px]"></i>
+            <span class="text-foreground font-medium">研究首页</span>
+          </div>
+
+          <!-- 中间搜索框 -->
+          <div class="relative" style="width:320px;">
+            <i data-lucide="search" class="w-[16px] h-[16px] text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2"></i>
+            <input type="text" placeholder="搜索因子、策略..."
+                   class="w-full h-9 pl-9 pr-4 text-sm bg-muted border-0 rounded-lg outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring transition-shadow">
+          </div>
+
+          <!-- 右侧状态 -->
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <span class="inline-block w-2 h-2 rounded-full" style="background-color:var(--state-success);"></span>
+              <span>qlib 已就绪</span>
+            </div>
+            <button class="text-muted-foreground hover:text-foreground transition-colors" aria-label="切换主题">
+              <i data-lucide="sun" class="w-[18px] h-[18px]"></i>
+            </button>
+            <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+              <i data-lucide="user" class="w-4 h-4 text-muted-foreground"></i>
+            </div>
+          </div>
+        </header>
+
+        <!-- ===== 可滚动内容区 ===== -->
+        <div class="flex-1 overflow-y-auto p-6" data-scroll-region="primary">
+          <!-- 页面标题 -->
+          <div class="mb-6">
+            <h1 class="text-2xl font-semibold text-foreground">研究首页</h1>
+            <p class="text-sm text-muted-foreground mt-1">AI 驱动的因子挖掘与策略回测系统</p>
+          </div>
+
+          <!-- ===== KPI 概览行 ===== -->
+          <div id="kpi-row" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <!-- 因子总数 -->
+            <div class="bg-card border border-border rounded-lg p-5">
+              <div class="flex items-start justify-between">
+                <div>
+                  <p class="text-sm text-muted-foreground mb-1">因子总数</p>
+                  <p class="text-3xl font-semibold tabular-nums text-foreground">128</p>
+                  <p class="text-xs text-muted-foreground mt-1.5">内置 12 / LLM 45 / 符号 38</p>
+                </div>
+                <i data-lucide="coins" class="w-[20px] h-[20px] text-muted-foreground mt-0.5"></i>
+              </div>
+            </div>
+            <!-- 策略数量 -->
+            <div class="bg-card border border-border rounded-lg p-5">
+              <div class="flex items-start justify-between">
+                <div>
+                  <p class="text-sm text-muted-foreground mb-1">策略数量</p>
+                  <p class="text-3xl font-semibold tabular-nums text-foreground">24</p>
+                  <p class="text-xs text-muted-foreground mt-1.5">活跃 18 / 归档 6</p>
+                </div>
+                <i data-lucide="trending-up" class="w-[20px] h-[20px] text-muted-foreground mt-0.5"></i>
+              </div>
+            </div>
+            <!-- 挖掘任务 -->
+            <div class="bg-card border border-border rounded-lg p-5">
+              <div class="flex items-start justify-between">
+                <div>
+                  <p class="text-sm text-muted-foreground mb-1">挖掘任务</p>
+                  <p class="text-3xl font-semibold tabular-nums text-foreground">56</p>
+                  <p class="text-xs text-muted-foreground mt-1.5">今日 3 / 运行中 1</p>
+                </div>
+                <i data-lucide="sparkles" class="w-[20px] h-[20px] text-muted-foreground mt-0.5"></i>
+              </div>
+            </div>
+            <!-- 回测记录 -->
+            <div class="bg-card border border-border rounded-lg p-5">
+              <div class="flex items-start justify-between">
+                <div>
+                  <p class="text-sm text-muted-foreground mb-1">回测记录</p>
+                  <p class="text-3xl font-semibold tabular-nums text-foreground">312</p>
+                  <p class="text-xs text-muted-foreground mt-1.5">近 7 日 42</p>
+                </div>
+                <i data-lucide="bar-chart-3" class="w-[20px] h-[20px] text-muted-foreground mt-0.5"></i>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 市场概览图 ===== -->
+          <div class="bg-card border border-border rounded-lg p-5 mb-6">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-[15px] font-medium text-foreground">市场概览 — CSI300</h2>
+              <div class="flex items-center gap-1">
+                <button data-dom-id="cta-market-range-1m" class="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground font-medium">1M</button>
+                <button class="px-3 py-1 text-xs rounded-md text-muted-foreground hover:bg-muted transition-colors">3M</button>
+                <button class="px-3 py-1 text-xs rounded-md text-muted-foreground hover:bg-muted transition-colors">6M</button>
+                <button class="px-3 py-1 text-xs rounded-md text-muted-foreground hover:bg-muted transition-colors">1Y</button>
+              </div>
+            </div>
+            <div style="height:280px;">
+              <canvas id="marketChart"></canvas>
+            </div>
+          </div>
+
+          <!-- ===== 最近挖掘任务 ===== -->
+          <div id="recent-tasks" class="bg-card border border-border rounded-lg mb-6">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 class="text-[15px] font-medium text-foreground">最近挖掘任务</h2>
+              <a data-dom-id="cta-view-all-tasks" href="#" class="text-sm text-primary hover:underline">查看全部</a>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-muted-foreground border-b border-border">
+                    <th class="px-5 py-2 font-medium">类型</th>
+                    <th class="px-5 py-2 font-medium">状态</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">通过</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">候选</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">最佳IC</th>
+                    <th class="px-5 py-2 font-medium">时间</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border">
+                  <tr data-dom-id="row-task-select" class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:var(--brand-primary);color:var(--brand-primary-foreground);">LLM</span></td>
+                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(31,157,107,0.12);color:var(--state-success);">完成</span></td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">12</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">34</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0.0423</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2026-07-28 14:23</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(200,128,28,0.12);color:var(--state-warning);">符号</span></td>
+                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(200,128,28,0.12);color:var(--state-warning);">运行中</span></td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">5</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">18</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0.0387</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2026-07-28 13:10</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(47,125,194,0.12);color:var(--state-info);">文本</span></td>
+                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(31,157,107,0.12);color:var(--state-success);">完成</span></td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">8</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">22</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0.0512</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2026-07-28 10:45</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(210,69,69,0.12);color:var(--state-error);">AutoML</span></td>
+                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(210,69,69,0.12);color:var(--state-error);">失败</span></td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">6</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">—</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2026-07-28 09:30</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:var(--brand-primary);color:var(--brand-primary-foreground);">LLM</span></td>
+                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-xs font-medium" style="background-color:rgba(31,157,107,0.12);color:var(--state-success);">完成</span></td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">15</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">41</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0.0478</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2026-07-27 22:15</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ===== 最近回测结果 ===== -->
+          <div id="recent-backtests" class="bg-card border border-border rounded-lg">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 class="text-[15px] font-medium text-foreground">最近回测结果</h2>
+              <a href="#" class="text-sm text-primary hover:underline">查看全部</a>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-muted-foreground border-b border-border">
+                    <th class="px-5 py-2 font-medium">策略</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">夏普</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">年化</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">回撤</th>
+                    <th class="px-5 py-2 font-medium text-right tabular-nums font-mono">卡玛</th>
+                    <th class="px-5 py-2 font-medium">区间</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border">
+                  <tr data-dom-id="row-backtest-select" class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10 text-foreground font-medium">多因子增强 Alpha</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">1.82</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">23.45%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">-8.32%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">2.82</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2025-01 ~ 2026-07</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10 text-foreground font-medium">动量反转混合</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">1.56</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">18.90%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">-10.15%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">1.86</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2025-03 ~ 2026-07</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10 text-foreground font-medium">舆情情感因子</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">1.34</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">15.67%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">-12.80%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">1.22</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2025-06 ~ 2026-07</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10 text-foreground font-medium">短周期量价策略</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">0.78</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">8.23%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">-15.40%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">0.53</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2025-01 ~ 2026-07</td>
+                  </tr>
+                  <tr class="hover:bg-muted/40 transition-colors">
+                    <td class="px-5 py-2.5 h-10 text-foreground font-medium">行业中性对冲</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">2.05</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-up);">12.34%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono" style="color:var(--market-down);">-4.50%</td>
+                    <td class="px-5 py-2.5 text-right tabular-nums font-mono">2.74</td>
+                    <td class="px-5 py-2.5 text-muted-foreground">2025-06 ~ 2026-07</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+    (function(){
+      /* ===== Chart.js — CSI300 净值走势 ===== */
+      const ctx = document.getElementById('marketChart');
+      if(!ctx) return;
+
+      const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-primary').trim();
+      const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-border').trim();
+      const cardColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-card').trim();
+      const mutedColor = getComputedStyle(document.documentElement).getPropertyValue('--brand-muted-foreground').trim();
+
+      /* 30 个模拟净值数据点 (1.0 → ~1.15 波动) */
+      const navData = [
+        1.000, 1.012, 0.998, 1.025, 1.018, 1.032, 1.028, 1.041, 1.035, 1.048,
+        1.042, 1.056, 1.050, 1.063, 1.058, 1.072, 1.065, 1.078, 1.082, 1.090,
+        1.085, 1.095, 1.098, 1.105, 1.098, 1.110, 1.108, 1.118, 1.122, 1.128
+      ];
+
+      /* 30 个日期标签 */
+      const labels = Array.from({length:30},(_,i)=>{
+        const d = new Date(2026,6,1);
+        d.setDate(d.getDate()+i);
+        return d.toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'});
+      });
+
+      /* 填充色 8% 透明度 */
+      const fillColor = primaryColor.replace('#','rgba(') ? 
+        'rgba(' + parseInt(primaryColor.slice(1,3),16) + ',' + parseInt(primaryColor.slice(3,5),16) + ',' + parseInt(primaryColor.slice(5,7),16) + ',0.08)' :
+        primaryColor + '14';
+
+      new Chart(ctx, {
+        type:'line',
+        data:{
+          labels: labels,
+          datasets:[{
+            label:'CSI300 净值',
+            data: navData,
+            borderColor: primaryColor,
+            backgroundColor: fillColor,
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            pointHoverBackgroundColor: primaryColor
+          }]
+        },
+        options:{
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction:{
+            intersect: false,
+            mode: 'index'
+          },
+          plugins:{
+            legend:{ display:false },
+            tooltip:{
+              backgroundColor: cardColor,
+              titleColor: mutedColor,
+              bodyColor: getComputedStyle(document.documentElement).getPropertyValue('--brand-foreground').trim(),
+              borderColor: borderColor,
+              borderWidth: 1,
+              padding: 10,
+              displayColors: false,
+              callbacks:{
+                label: function(ctx){ return '净值: ' + ctx.parsed.y.toFixed(4); }
+              }
+            }
+          },
+          scales:{
+            x:{
+              grid:{
+                color: borderColor,
+                drawBorder: false
+              },
+              ticks:{
+                color: mutedColor,
+                font:{ size: 11 },
+                maxTicksLimit: 8
+              }
+            },
+            y:{
+              grid:{
+                color: borderColor,
+                drawBorder: false
+              },
+              ticks:{
+                color: mutedColor,
+                font:{ size: 11 },
+                callback: function(v){ return v.toFixed(2); }
+              }
+            }
+          }
+        }
+      });
+    })();
+    </script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

@@ -33,4 +33,23 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
-.env
+*.env
+# Database
+data/*.db
+
+# qlib bin 数据（量大且可重新生成）
+data/qlib_bin/
+data/raw/
+data/processed/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyc
+
+# 备份文件
+*.bak
+*.bak.*
+
+# Local logs
+logs/

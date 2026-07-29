@@ -8,6 +8,7 @@ class SyncDataRequest(BaseModel):
     end_date: Optional[str] = None    # 默认今天
     codes: Optional[list[str]] = None  # 默认 config.universe
     universe: Optional[str] = None     # 覆盖 config.universe
+    days: Optional[int] = None         # akshare增量同步天数（默认30）
 
 
 class QlibStatusResponse(BaseModel):

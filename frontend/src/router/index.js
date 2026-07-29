@@ -61,6 +61,26 @@ const routes = [
         }
       },
       {
+        path: 'quant/factor-compare',
+        name: 'FactorCompare',
+        component: () => import('@/views/quant/FactorCompare.vue'),
+        meta: {
+          title: '因子对比',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
+        path: 'quant/backtest-compare',
+        name: 'BacktestCompare',
+        component: () => import('@/views/quant/BacktestCompare.vue'),
+        meta: {
+          title: '回测对比',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
         path: 'system/logs',
         name: 'SystemLogs',
         component: () => import('@/views/quant/Logs.vue'),

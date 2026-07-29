@@ -1,45 +1,45 @@
 :root {
-  // === Brand Colors ===
-  --primary: #1a73e8;
-  --primary-light: #4a9af5;
-  --primary-dark: #0d47a1;
-  --primary-gradient: linear-gradient(135deg, #1a73e8, #6c5ce7);
-  --primary-gradient-soft: linear-gradient(135deg, rgba(26,115,232,0.08), rgba(108,92,231,0.08));
-  --primary-rgb: 26, 115, 232;
+  // === Brand Colors（对齐 pages 设计稿：深靛蓝 fintech 风格）===
+  --primary: #1f4ba0;
+  --primary-light: #4f7fc8;
+  --primary-dark: #193d82;
+  --primary-gradient: linear-gradient(135deg, #1f4ba0, #2f5fbf);
+  --primary-gradient-soft: linear-gradient(135deg, rgba(31,75,160,0.08), rgba(47,95,191,0.08));
+  --primary-rgb: 31, 75, 160;
 
-  // === Status Colors ===
-  --success: #00b894;
-  --success-light: #55efc4;
-  --success-dark: #00a085;
-  --danger: #e17055;
-  --danger-light: #fab1a0;
-  --danger-dark: #d35400;
-  --warning: #fdcb6e;
-  --warning-light: #ffeaa7;
-  --warning-dark: #f39c12;
-  --info: #74b9ff;
-  --info-light: #a9d4ff;
-  --info-dark: #0984e3;
+  // === Status Colors（对齐设计稿语义色）===
+  --success: #1f9d6b;
+  --success-light: #3fb88a;
+  --success-dark: #187d55;
+  --danger: #d24545;
+  --danger-light: #e06a6a;
+  --danger-dark: #b03838;
+  --warning: #c8801c;
+  --warning-light: #d99a3f;
+  --warning-dark: #a06814;
+  --info: #2f7dc2;
+  --info-light: #5a99d0;
+  --info-dark: #246a9f;
 
-  // === Text Colors ===
-  --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --text-tertiary: #94a3b8;
+  // === Text Colors（对齐设计稿墨色）===
+  --text-primary: #16213a;
+  --text-secondary: #5b6b85;
+  --text-tertiary: #8493ab;
   --text-placeholder: #c0c4cc;
   --text-inverse: #ffffff;
 
-  // === Background Colors ===
+  // === Background Colors（对齐设计稿表面色）===
   --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #f1f5f9;
+  --bg-secondary: #f6f8fb;
+  --bg-tertiary: #f1f4f9;
   --bg-card: #ffffff;
-  --bg-page: #f0f2f5;
-  --bg-hover: rgba(0, 0, 0, 0.04);
-  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-page: #f6f8fb;
+  --bg-hover: rgba(22, 33, 58, 0.04);
+  --bg-active: rgba(22, 33, 58, 0.08);
 
   // === Border Colors ===
-  --border: #e2e8f0;
-  --border-light: #f0f2f5;
+  --border: #e3e9f1;
+  --border-light: #eef2f7;
   --border-dark: #cbd5e1;
 
   // === Spacing Scale ===
@@ -51,9 +51,9 @@
   --space-2xl: 48px;
   --space-3xl: 64px;
 
-  // === Typography ===
-  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  // === Typography（对齐设计稿字体栈）===
+  --font-family: 'Inter', 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   --font-size-xs: 11px;
   --font-size-sm: 12px;
   --font-size-base: 13px;
@@ -69,21 +69,21 @@
   --line-height-normal: 1.6;
   --line-height-relaxed: 1.75;
 
-  // === Border Radius ===
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  // === Border Radius（对齐设计稿圆角）===
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-xl: 20px;
   --radius-full: 9999px;
 
-  // === Shadows ===
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12);
-  --shadow-xl: 0 20px 60px rgba(0,0,0,0.15);
-  --shadow-glow: 0 0 20px rgba(26,115,232,0.15);
-  --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
-  --shadow-modal: 0 8px 40px rgba(0,0,0,0.2);
+  // === Shadows（对齐设计稿阴影：更克制）===
+  --shadow-sm: 0 1px 2px rgba(22, 33, 58, 0.05), 0 1px 1px rgba(22, 33, 58, 0.03);
+  --shadow-md: 0 8px 24px -8px rgba(22, 33, 58, 0.18);
+  --shadow-lg: 0 24px 60px -20px rgba(22, 33, 58, 0.28);
+  --shadow-xl: 0 20px 60px rgba(22, 33, 58, 0.15);
+  --shadow-glow: 0 0 20px rgba(31, 75, 160, 0.15);
+  --shadow-card: 0 1px 2px rgba(22, 33, 58, 0.05), 0 1px 1px rgba(22, 33, 58, 0.03);
+  --shadow-modal: 0 8px 40px rgba(22, 33, 58, 0.2);
 
   // === Transitions & Animations ===
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -110,28 +110,28 @@
   --z-tooltip: 1070;
 }
 
-// === Dark Theme ===
+// === Dark Theme（对齐设计稿暗色主题）===
 :root.dark {
   // Text
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
+  --text-primary: #e8edf5;
+  --text-secondary: #8493ab;
+  --text-tertiary: #5b6b85;
   --text-placeholder: #475569;
-  --text-inverse: #0f172a;
+  --text-inverse: #0e1525;
 
   // Background
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
-  --bg-card: #1e293b;
-  --bg-page: #0f172a;
+  --bg-primary: #161f33;
+  --bg-secondary: #0e1525;
+  --bg-tertiary: #1a2540;
+  --bg-card: #161f33;
+  --bg-page: #0e1525;
   --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-active: rgba(255, 255, 255, 0.1);
 
   // Border
-  --border: #334155;
-  --border-light: #1e293b;
-  --border-dark: #475569;
+  --border: #1a2540;
+  --border-light: #161f33;
+  --border-dark: #2a3855;
 
   // Shadows (darker for dark theme)
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.3);
@@ -142,5 +142,5 @@
   --shadow-modal: 0 8px 40px rgba(0,0,0,0.5);
 
   // Primary gradient adjustments
-  --primary-gradient-soft: linear-gradient(135deg, rgba(26,115,232,0.15), rgba(108,92,231,0.15));
+  --primary-gradient-soft: linear-gradient(135deg, rgba(31,75,160,0.15), rgba(47,95,191,0.15));
 }

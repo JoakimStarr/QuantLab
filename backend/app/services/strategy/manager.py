@@ -80,6 +80,15 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     for name, expr in factor_exprs.items():
         factor_values[name] = load_factor_values(expr, start, end)
     score_df = combine_factors(factor_values, weights=weights, method=combination_method)
+    # 默认过滤北交所股票（防御性，factor_eval 已过滤）
+    include_bj = settings.quant.get("include_bj", False)
+    if not include_bj and score_df is not None and not score_df.empty:
+        inst_codes = score_df.index.get_level_values("instrument")
+        bj_mask = inst_codes.str.startswith(("bj", "BJ"))
+        if bj_mask.any():
+            before = len(inst_codes.unique())
+            score_df = score_df[~bj_mask]
+            logger.info("回测过滤北交所股票: %d -> %d", before, len(score_df.index.get_level_values("instrument").unique()))
     bt = run_backtest(score_df, start=start, end=end, topk=topk, n_drop=n_drop,
                       benchmark=benchmark, rebalance_freq=rebalance_freq)
     returns = bt.get("returns")
@@ -120,6 +129,7 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     factor_meta = await _load_factor_expressions(factor_ids)
     factor_exprs = {}
     weights = {}
+    skip_reasons = []
     for fid in factor_ids:
         meta = factor_meta.get(fid)
         if not meta:
@@ -129,11 +139,17 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         if expr_str.startswith("AutoML(") or expr_str.startswith("TextSentiment("):
             logger.warning("跳过非 qlib 表达式因子 %s (id=%s, expr=%s...)，不可直接用于 qlib 回测",
                            meta.get("name"), fid, expr_str[:30])
+            skip_reasons.append(f"{meta.get('name')}(id={fid},expr={expr_str[:20]})")
             continue
         factor_exprs[meta["name"]] = meta["expression"]
         weights[meta["name"]] = meta.get("ic") or 0.0
     if not factor_exprs:
-        raise ValueError("未找到有效因子表达式")
+        raise ValueError(
+            f"未找到有效因子表达式。策略包含 {len(factor_ids)} 个因子，"
+            f"但全部为 AutoML/TextSentiment 占位符（无法直接用于qlib回测）。"
+            f"请在策略中至少添加一个 builtin/llm/symbolic 类型的因子。"
+            f"已跳过的因子: {', '.join(skip_reasons)}"
+        )
 
     # sync CPU 密集计算放入线程池
     loop = asyncio.get_running_loop()

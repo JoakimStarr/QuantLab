@@ -8,6 +8,7 @@ from app.services.strategy.manager import (
     list_strategies, get_strategy, create_strategy, archive_strategy,
     run_strategy_backtest, list_backtest_results, get_backtest_result,
 )
+from app.services.strategy import backtest_status
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,10 @@ async def archive_strategy_api(strategy_id: int):
 async def _run_backtest_task(strategy_id: int, start: str, end: str):
     try:
         await run_strategy_backtest(strategy_id, start, end)
+        backtest_status.set_completed(strategy_id)
     except Exception as e:
         logger.exception("策略回测失败 strategy_id=%s", strategy_id)
+        backtest_status.set_failed(strategy_id, str(e))
         # 更新策略状态为失败
         from app.core.database import async_session
         from app.models.strategy import Strategy
@@ -105,11 +108,19 @@ async def run_backtest_api(
     strategy = await get_strategy(strategy_id)
     if strategy is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
+    backtest_status.set_running(strategy_id)
     background_tasks.add_task(_run_backtest_task, strategy_id, start_date, end_date)
     return ApiResponse(ok=True, data={
         "message": f"策略 {strategy_id} 回测已提交（后台执行）",
         "strategy_id": strategy_id,
     })
+
+
+@router.get("/{strategy_id}/backtest-status")
+async def get_backtest_status_api(strategy_id: int):
+    """获取策略回测状态。"""
+    status = backtest_status.get_status(strategy_id)
+    return ApiResponse(ok=True, data={"strategy_id": strategy_id, **status})
 
 
 @router.get("/{strategy_id}/backtest-results")

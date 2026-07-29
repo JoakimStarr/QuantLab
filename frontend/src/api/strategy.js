@@ -32,3 +32,11 @@ export function listAllBacktestResults(params) {
 export function getBacktestResult(resultId) {
   return request.get('/strategies/backtest-results/' + resultId)
 }
+
+export function getBacktestStatus(strategyId) {
+  return request.get('/strategies/' + strategyId + '/backtest-status')
+}
+
+export function getAllBacktestStatuses() {
+  return request.get('/strategies/backtest-statuses')
+}

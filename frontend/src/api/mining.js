@@ -5,8 +5,8 @@ export function mineLlm(params) {
   return request.post('/mining/llm', null, { params })
 }
 
-export function mineSymbolic() {
-  return request.post('/mining/symbolic')
+export function mineSymbolic(params) {
+  return request.post('/mining/symbolic', null, { params })
 }
 
 export function mineAutoml(params) {

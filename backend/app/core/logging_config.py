@@ -106,12 +106,12 @@ def setup_logging():
     perf_logger.addHandler(perf_handler)
     perf_logger.propagate = False
 
-    # --- stdout handler（开发模式）---
-    if settings.app.get("debug", False):
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(level)
-        console_handler.setFormatter(text_fmt)
-        console_handler.addFilter(rid_filter)
-        root_logger.addHandler(console_handler)
+    # --- stdout handler（始终启用，确保 docker logs 可见）---
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(text_fmt)
+    console_handler.addFilter(rid_filter)
+    root_logger.addHandler(console_handler)
+    api_logger.addHandler(console_handler)  # propagate=False 不继承 root handler
 
     return root_logger
