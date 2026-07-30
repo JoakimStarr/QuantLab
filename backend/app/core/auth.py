@@ -134,6 +134,13 @@ async def optional_user(
 
 
 def warn_insecure_config() -> None:
-    """启动时输出安全配置告警。"""
+    """启动时输出安全配置告警。
+
+    开发环境（APP_ENV=development）降为 DEBUG，避免无鉴权/默认口令告警刷屏
+    （本地开发本就预期如此）；生产环境保持 WARNING 以提醒加固。
+    """
+    import os
+    is_dev = os.getenv("APP_ENV", "development") == "development"
+    level = logging.DEBUG if is_dev else logging.WARNING
     for w in settings.validate_security():
-        logger.warning("[安全] %s", w)
+        logger.log(level, "[安全] %s", w)

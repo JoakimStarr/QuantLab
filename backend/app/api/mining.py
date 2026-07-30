@@ -27,7 +27,8 @@ def _get_mining_sem() -> asyncio.Semaphore:
     if _mining_sem is None:
         max_concurrent = int((settings.task or {}).get("max_concurrent", 2))
         _mining_sem = asyncio.Semaphore(max_concurrent)
-        logger.info("挖掘任务并发上限: %d", max_concurrent)
+        # 这是配置上限而非当前运行数；DEBUG 级避免每次 reload 重复刷屏
+        logger.debug("挖掘任务并发上限配置: %d（同时运行的任务不会超过此值）", max_concurrent)
     return _mining_sem
 
 
