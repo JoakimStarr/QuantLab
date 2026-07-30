@@ -30,4 +30,7 @@ class BacktestResult(Base):
 
     created_at = Column(TIMESTAMP, default=func.now())
 
-    __table_args__ = (Index("idx_backtest_strategy", "strategy_id"),)
+    __table_args__ = (
+        Index("idx_backtest_strategy", "strategy_id"),
+        Index("idx_backtest_created_at", "created_at"),
+    )

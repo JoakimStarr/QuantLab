@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import asyncio
 import logging
 from fastapi import APIRouter, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -37,6 +38,17 @@ async def compare_factors_api(
     return ApiResponse(ok=True, data=result)
 
 
+@router.get("/decay-check")
+async def decay_check_api():
+    """手动触发因子衰减检测（添加13: 因子衰减监控）"""
+    from app.core.database import async_session
+    from app.services.quant.factor_monitor import detect_all_factors_decay
+
+    async with async_session() as session:
+        result = await detect_all_factors_decay(db_session=session)
+    return ApiResponse(ok=True, data=result)
+
+
 @router.get("/{factor_id}/decay")
 async def factor_decay_api(factor_id: int, max_lag: int = Query(20, le=40)):
     """因子 IC 衰减分析（添加6: 因子衰减分析）"""
@@ -50,7 +62,7 @@ async def factor_decay_api(factor_id: int, max_lag: int = Query(20, le=40)):
 async def export_factors_api(
     category: str = Query(None),
     status: str = Query("active"),
-    format: str = Query("csv", regex="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
 ):
     """因子导出（添加7: 因子导出）"""
     items, total = await list_factors(category=category, status=status, limit=500)
@@ -122,4 +134,113 @@ async def auto_import_factors_api(
         "imported": imported,
         "skipped": skipped,
         "total_imported": len(imported),
+    })
+
+
+@router.post("/seed-alpha158")
+async def seed_alpha158_api():
+    """导入 Alpha158 基准因子集（158 个 qlib 标准因子）。"""
+    from app.services.factor.alpha158 import seed_alpha158
+    result = await seed_alpha158()
+    if not result.get("ok"):
+        return ApiResponse(ok=False, error={"code": "ALPHA158_SEEDED", "message": result.get("error", "已导入"), "status": 400})
+    return ApiResponse(ok=True, data=result)
+
+
+@router.get("/{factor_id}/quantile-analysis")
+async def quantile_analysis_api(
+    factor_id: int,
+    n_groups: int = Query(5, ge=2, le=10),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+):
+    """因子分组收益评价（分层回测）：按因子值分 n_groups 组，返回各组净值、多空收益与单调性。"""
+    from app.core.config import settings
+    from app.services.quant.qlib_init import is_qlib_available
+    from app.services.factor.library import get_factor
+    from app.services.quant.factor_eval import (
+        load_factor_values, load_label, compute_quantile_returns,
+    )
+
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+    factor = await get_factor(factor_id)
+    if not factor:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "因子不存在", "status": 404})
+
+    period = settings.quant.get("default_backtest_period", {})
+    start = start_date or period.get("start", "2020-01-01")
+    end = end_date or period.get("end", "2024-12-31")
+
+    def _compute_quantile():
+        factor_df = load_factor_values(factor["expression"], start, end)
+        return_df = load_label(start, end)
+        return compute_quantile_returns(factor_df, return_df, n_groups=n_groups)
+
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(None, _compute_quantile)
+    except Exception as e:
+        logger.warning("分组收益数据加载失败 factor_id=%s: %s", factor_id, e)
+        return ApiResponse(ok=False, error={"code": "DATA_LOAD_ERROR", "message": str(e), "status": 500})
+
+    if "error" in result:
+        return ApiResponse(ok=False, error={"code": "NO_DATA", "message": result["error"], "status": 400})
+    return ApiResponse(ok=True, data=result)
+
+
+@router.post("/{factor_id}/neutralize")
+async def neutralize_factor_api(
+    factor_id: int,
+    method: str = Query("market_cap", pattern="^(market_cap|industry|both)$"),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+):
+    """因子中性化：对比中性化前后 IC 指标
+
+    method: market_cap(市值中性化) / industry(行业+市值中性化) / both(同 industry)
+    """
+    from app.core.config import settings
+    from app.services.quant.qlib_init import is_qlib_available
+    from app.services.factor.library import get_factor
+    from app.services.quant.factor_eval import (
+        load_factor_values, load_label, compute_ic,
+    )
+
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+    factor = await get_factor(factor_id)
+    if not factor:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "因子不存在", "status": 404})
+
+    period = settings.quant.get("default_backtest_period", {})
+    start = start_date or period.get("start", "2020-01-01")
+    end = end_date or period.get("end", "2024-12-31")
+
+    # 统一映射：both 等价于 industry（行业+市值）
+    neutralize_method = "industry" if method in ("industry", "both") else "market_cap"
+
+    def _compute_neutralize():
+        factor_df_before = load_factor_values(factor["expression"], start, end)
+        label_df = load_label(start, end)
+        ic_before = compute_ic(factor_df_before, label_df)
+        factor_df_after = load_factor_values(
+            factor["expression"], start, end, neutralize=neutralize_method
+        )
+        ic_after = compute_ic(factor_df_after, label_df)
+        return ic_before, ic_after
+
+    try:
+        ic_before, ic_after = await asyncio.get_running_loop().run_in_executor(None, _compute_neutralize)
+    except Exception as e:
+        logger.warning("因子中性化失败 factor_id=%s: %s", factor_id, e)
+        return ApiResponse(ok=False, error={"code": "NEUTRALIZE_ERROR", "message": str(e), "status": 500})
+
+    return ApiResponse(ok=True, data={
+        "factor_id": factor_id,
+        "factor_name": factor.get("name"),
+        "method": method,
+        "ic_before": ic_before,
+        "ic_after": ic_after,
+        "eval_start": start,
+        "eval_end": end,
     })

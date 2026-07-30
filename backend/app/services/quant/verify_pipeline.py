@@ -51,7 +51,8 @@ async def main():
     print("\n[3/6] 因子评价（内置动量因子）...")
     from app.services.quant.factor_eval import evaluate_factor
     try:
-        metrics = evaluate_factor("Ref($close, -20) / $close - 1", "2024-01-01", "2024-06-01")
+        # Ref 正数=过去：过去 20 日动量（负数 Ref 是未来数据，会导致 look-ahead bias）
+        metrics = evaluate_factor("Ref($close, 20) / $close - 1", "2024-01-01", "2024-06-01")
         print(f"  ✓ IC={metrics.get('ic')} RankIC={metrics.get('rank_ic')} ICIR={metrics.get('icir')}")
     except Exception as e:
         print(f"  ✗ 因子评价失败: {e}")
@@ -61,7 +62,7 @@ async def main():
     from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors, run_backtest
     try:
-        f1 = load_factor_values("Ref($close, -20) / $close - 1", "2024-01-01", "2024-06-01")
+        f1 = load_factor_values("Ref($close, 20) / $close - 1", "2024-01-01", "2024-06-01")
         f2 = load_factor_values("Std($close / Ref($close, 1) - 1, 20)", "2024-01-01", "2024-06-01")
         score = combine_factors({"mom": f1, "vol": f2}, method="equal_weight")
         bt = run_backtest(score, start="2024-01-01", end="2024-06-01", topk=30, n_drop=3)

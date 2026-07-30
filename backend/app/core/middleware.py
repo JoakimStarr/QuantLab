@@ -45,9 +45,19 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
 
 def setup_cors(app):
+    from app.core.config import settings
+    # CORS 来源可配：环境变量 CORS_ORIGINS（逗号分隔）或 config.api.cors_origins
+    import os
+    cors_env = os.getenv("CORS_ORIGINS", "")
+    if cors_env:
+        origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    else:
+        origins = (settings.api or {}).get("cors_origins") or [
+            "http://localhost:3000", "http://127.0.0.1:3000",
+        ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

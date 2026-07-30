@@ -29,19 +29,25 @@ class WebSocketManager:
         logger.info("WebSocket 连接已断开，当前连接数: %d", len(self._connections))
 
     async def broadcast(self, event_type: str, data: dict):
-        """广播消息到所有连接"""
-        if not self._connections:
+        """广播消息到所有连接。
+
+        锁内只 snapshot 连接集合，锁外逐个发送，避免慢/死连接阻塞其它连接与 connect/disconnect。
+        """
+        async with self._lock:
+            snapshot = list(self._connections)
+        if not snapshot:
             return
         message = json.dumps({"type": event_type, "data": data}, ensure_ascii=False, default=str)
         dead = set()
-        async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(message)
-                except Exception as e:
-                    logger.debug("发送失败，标记为断开: %s", e)
-                    dead.add(ws)
-            self._connections -= dead
+        for ws in snapshot:
+            try:
+                await ws.send_text(message)
+            except Exception as e:
+                logger.debug("发送失败，标记为断开: %s", e)
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_to(self, ws: WebSocket, event_type: str, data: dict):
         """发送消息到单个连接"""

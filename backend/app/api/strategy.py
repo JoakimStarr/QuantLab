@@ -31,13 +31,14 @@ async def create_strategy_api(
     rebalance_freq: str = Query("day"),
     benchmark: str = Query(None),
     description: str = Query(None),
+    orthogonalize: int = Query(0, description="是否启用因子正交化 0/1"),
 ):
     if not factor_ids:
         raise AppError("VALIDATION_ERROR", "至少选择一个因子", 422)
     item = await create_strategy(
         name=name, factor_ids=factor_ids, combination_method=combination_method,
         topk=topk, n_drop=n_drop, rebalance_freq=rebalance_freq,
-        benchmark=benchmark, description=description,
+        benchmark=benchmark, description=description, orthogonalize=orthogonalize,
     )
     return ApiResponse(ok=True, data=item)
 

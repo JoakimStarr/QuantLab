@@ -32,7 +32,8 @@ async def get_strategy(strategy_id: int) -> dict:
 
 async def create_strategy(name: str, factor_ids: list[int], combination_method: str = "equal_weight",
                           topk: int = None, n_drop: int = None, rebalance_freq: str = "day",
-                          benchmark: str = None, description: str = None) -> dict:
+                          benchmark: str = None, description: str = None,
+                          orthogonalize: int = 0) -> dict:
     topk = topk or settings.quant.get("topk", 50)
     n_drop = n_drop or settings.quant.get("n_drop", 5)
     benchmark = benchmark or settings.quant.get("benchmark", "SH000300")
@@ -41,6 +42,7 @@ async def create_strategy(name: str, factor_ids: list[int], combination_method: 
             name=name, factor_ids=json.dumps(factor_ids),
             combination_method=combination_method, topk=topk, n_drop=n_drop,
             rebalance_freq=rebalance_freq, benchmark=benchmark, description=description,
+            orthogonalize=orthogonalize,
         )
         session.add(s)
         await session.commit()
@@ -68,7 +70,7 @@ async def _load_factor_expressions(factor_ids: list[int]) -> dict:
 
 def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method: str,
                            topk: int, n_drop: int, benchmark: str, rebalance_freq: str,
-                           start: str, end: str) -> dict:
+                           start: str, end: str, orthogonalize: int = 0) -> dict:
     """同步执行回测计算（在 executor 中调用，不阻塞事件循环）。"""
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values
@@ -79,7 +81,7 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     factor_values = {}
     for name, expr in factor_exprs.items():
         factor_values[name] = load_factor_values(expr, start, end)
-    score_df = combine_factors(factor_values, weights=weights, method=combination_method)
+    score_df = combine_factors(factor_values, weights=weights, method=combination_method, orthogonalize=bool(orthogonalize))
     # 默认过滤北交所股票（防御性，factor_eval 已过滤）
     include_bj = settings.quant.get("include_bj", False)
     if not include_bj and score_df is not None and not score_df.empty:
@@ -157,7 +159,7 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         None, _compute_backtest_sync,
         factor_exprs, weights, strategy["combination_method"],
         strategy["topk"], strategy["n_drop"], strategy["benchmark"],
-        strategy["rebalance_freq"], start, end,
+        strategy["rebalance_freq"], start, end, strategy.get("orthogonalize", 0),
     )
     metrics = computed["metrics"]
     nav_curve = computed["nav_curve"]
@@ -207,6 +209,7 @@ def _strategy_dict(r: Strategy) -> dict:
         "combination_method": r.combination_method,
         "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
         "benchmark": r.benchmark, "status": r.status,
+        "orthogonalize": r.orthogonalize,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 

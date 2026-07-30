@@ -5,6 +5,8 @@ import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
+import { useAuthStore } from './stores/auth'
+import { ElMessage } from 'element-plus'
 import './styles/global.scss'
 
 // ECharts configuration
@@ -29,14 +31,29 @@ use([
 ])
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
 app.use(ElementPlus, {
   size: 'default'
 })
 
+// 全局错误边界：未捕获异常弹 toast 而非白屏
+app.config.errorHandler = (err, instance, info) => {
+  console.error('[Vue Error]', err, info)
+  try {
+    ElMessage.error('页面发生异常：' + (err?.message || String(err)))
+  } catch (e) {
+    console.error('[ErrorHandler] toast 失败:', e)
+  }
+}
+
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
 
-app.mount('#app')
+// 挂载前探测鉴权状态，确保路由守卫拿到正确结果
+const authStore = useAuthStore()
+authStore.fetchStatus().finally(() => {
+  app.mount('#app')
+})

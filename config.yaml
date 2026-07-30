@@ -1,6 +1,6 @@
 ai_provider:
   cache_ttl: day
-  concurrent_providers: true
+  # 顺序 fallback：primary 失败后逐个尝试，避免免费模型超时占用预算
   fallback:
     base_url: https://open.bigmodel.cn/api/paas/v4
     max_tokens: 2048
@@ -10,7 +10,7 @@ ai_provider:
     timeout_seconds: 30
   force_json_output: true
   primary:
-    base_url: https://opencode.ai/zen/v1
+    base_url: https://opencode.ai/zen/v1/
     max_tokens: 4096
     model: deepseek-v4-flash-free
     provider: opencodezen
@@ -25,6 +25,7 @@ ai_provider:
     temperature: 0.3
     timeout_seconds: 20
   total_timeout_seconds: 10
+  route_budget_seconds: 120          # ProviderRouter 多 provider 总预算，避免重试吃光任务超时
 api:
   request_timeout: 30
   version: v1
@@ -85,8 +86,9 @@ mining:
     - $factor
     candidates_per_run: 10
     ic_threshold: 0.03
+    eval_timeout_seconds: 60          # 单因子 IC 评价超时，超时跳过该因子
   symbolic:
-    generations: 20
+    generations: 30
     ic_threshold: 0.03
     parsimony_coefficient: 0.001
     population: 1000
@@ -102,6 +104,7 @@ quant:
   benchmark: SH000300
   cost_buy: 0.0013
   cost_sell: 0.0023
+  slippage_bps: 5            # 滑点（基点），0=关闭。买入按+slippage成交，卖出按-slippage
   data_source: akshare
   default_backtest_period:
     end: '2024-12-31'
@@ -110,6 +113,12 @@ quant:
   fetch_max_workers: 3
   include_bj: false
   n_drop: 5
+  portfolio_optimizer:
+    enabled: false
+    max_industry_exposure: 0.2
+    max_weight: 0.05
+    method: mean_variance       # max_return / min_tracking_error / mean_variance（max_sharpe 为 mean_variance 别名）
+    risk_aversion: 0.5          # 均值-方差风险厌恶系数，越大越保守
   qlib_provider_uri: data/qlib_bin/cn_data
   topk: 50
   universe: csi300
@@ -117,4 +126,14 @@ scheduler:
   quant_data_update_time: '18:00'
 task:
   max_concurrent: 2
-  task_timeout_seconds: 300
+  cpu_workers: 4              # CPU 进程池大小（因子评价/CV 训练真并行）
+  io_workers: 8               # IO 线程池大小（akshare/qlib 同步数据读取）
+  task_timeout_seconds: 300          # 默认超时（兼容旧配置）
+  timeouts:
+    llm: 300                         # LLM 单轮挖掘
+    llm_iterative: 600               # LLM 迭代挖掘基础超时（n_rounds=1）
+    llm_iterative_per_round: 180     # 每增加一轮追加秒数
+    symbolic: 1800                   # 1000×30 GP 需要长超时
+    text: 900                        # 30 股串行抓新闻 + LLM 情绪
+    automl: 600                      # AutoML 训练 + SHAP
+    optimize: 600                    # 因子优化（含 walk-forward 评价）

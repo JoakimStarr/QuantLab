@@ -3,6 +3,8 @@ from .factor import Factor
 from .strategy import Strategy
 from .backtest_result import BacktestResult
 from .mining_task import MiningTask
+from .sync_history import SyncHistory
+from .task_result import TaskResult
 
 __all__ = [
     "StockDataStatus",
@@ -10,4 +12,6 @@ __all__ = [
     "Strategy",
     "BacktestResult",
     "MiningTask",
+    "SyncHistory",
+    "TaskResult",
 ]

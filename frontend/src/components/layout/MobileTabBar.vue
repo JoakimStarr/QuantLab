@@ -60,4 +60,9 @@ const tabItems = [
   font-size: var(--font-size-xs);
   line-height: 1;
 }
+
+// 桌面端隐藏移动底栏（>=768px）
+@media (min-width: 768px) {
+  .mobile-tabbar { display: none; }
+}
 </style>

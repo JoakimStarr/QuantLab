@@ -7,9 +7,9 @@
           <h1 class="page-title">AI 因子挖掘</h1>
           <p class="page-subtitle">大模型与遗传编程驱动的因子发现</p>
         </div>
-        <span class="model-badge">
+        <span class="model-badge" v-if="aiProviders.length">
           <span class="model-badge__dot"></span>
-          GLM-4.7-flash 就绪
+          {{ aiBadgeText }}
         </span>
       </header>
 
@@ -42,6 +42,11 @@
             <el-form label-position="top" class="config-form">
               <el-form-item label="候选数量">
                 <el-input-number v-model="form.candidates" :min="1" :max="50" controls-position="right" />
+              </el-form-item>
+
+              <el-form-item label="迭代轮数" v-if="selectedMode === 'llm'">
+                <el-input-number v-model="form.nRounds" :min="1" :max="5" controls-position="right" />
+                <div class="form-hint">大于 1 时启用迭代挖掘：每轮反馈给 LLM 逐轮改进</div>
               </el-form-item>
 
               <el-form-item label="IC 阈值">
@@ -216,6 +221,7 @@ import { ElMessage } from 'element-plus'
 import { MagicStick, Operation, ChatLineSquare, Connection, VideoPlay, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask } from '@/api/mining'
+import { getAiStatus } from '@/api/auth'
 import { listFactors } from '@/api/factor'
 
 // 挖掘方式定义
@@ -238,13 +244,31 @@ const universeOptions = [
 ]
 
 // 默认表单值（重置用）
+const todayStr = () => new Date().toISOString().slice(0, 10)
 const defaultForm = () => ({
   candidates: 10,
+  nRounds: 1,
   icThreshold: 0.03,
-  startDate: '2024-01-01',
-  endDate: '2026-07-27',
+  startDate: '2020-01-01',
+  endDate: todayStr(),
   universe: 'csi300'
 })
+
+// AI Provider 动态状态（badge 显示真实可用模型）
+const aiProviders = ref([])
+const aiBadgeText = computed(() => {
+  if (!aiProviders.value.length) return ''
+  const models = aiProviders.value.map(p => p.model).join(' / ')
+  return `${models} 就绪`
+})
+async function loadAiStatus() {
+  try {
+    const data = await getAiStatus()
+    aiProviders.value = data?.providers ?? []
+  } catch {
+    aiProviders.value = []
+  }
+}
 
 const selectedMode = ref('llm')
 const form = reactive(defaultForm())
@@ -395,7 +419,7 @@ async function startMining() {
   try {
     let data
     if (selectedMode.value === 'llm') {
-      data = await mineLlm({ n_candidates: form.candidates })
+      data = await mineLlm({ n_candidates: form.candidates, n_rounds: form.nRounds })
     } else if (selectedMode.value === 'symbolic') {
       data = await mineSymbolic({ population: 1000, generations: 20 })
     } else if (selectedMode.value === 'text') {
@@ -662,6 +686,12 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-sm);
   display: inline-block;
   margin: 4px;
+}
+.form-hint {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  line-height: 1.4;
 }
 .actions {
   display: flex;

@@ -8,7 +8,9 @@
       </div>
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
+        <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
         <el-button type="primary" :icon="Plus" @click="onAdd">新增因子</el-button>
+        <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
     </header>
 
@@ -21,6 +23,7 @@
         <el-option label="符号" value="symbolic" />
         <el-option label="文本" value="text" />
         <el-option label="AutoML" value="automl" />
+        <el-option label="Alpha158" value="alpha158" />
       </el-select>
       <el-select v-model="sortBy" class="filter-toolbar__select">
         <el-option label="按IC" value="ic" />
@@ -43,6 +46,7 @@
         :default-sort="defaultSort"
         @sort-change="handleSortChange"
         @selection-change="handleSelectionChange"
+        :row-class-name="decayRowClass"
       >
         <el-table-column type="selection" width="48" />
         <el-table-column prop="name" label="因子名称" min-width="160" sortable>
@@ -87,9 +91,11 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" align="center">
+        <el-table-column label="操作" width="220" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="onEvaluate(row)">评价</el-button>
+            <el-button link type="success" size="small" @click="onQuantile(row)">分层</el-button>
+            <el-button link type="warning" size="small" @click="onNeutralize(row)">中性化</el-button>
             <el-button link type="danger" size="small" @click="onDisable(row)">禁用</el-button>
           </template>
         </el-table-column>
@@ -98,24 +104,193 @@
         </template>
       </el-table>
     </section>
+    <!-- 分层收益对话框 -->
+    <el-dialog v-model="showQuantile" :title="`分层收益评价 — ${quantileFactor?.name ?? ''}`" width="780px">
+      <div v-loading="quantileLoading" style="min-height:320px">
+        <div v-if="quantileResult" style="margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap">
+          <span>分组数：{{ quantileResult.n_groups }}</span>
+          <span>单调性评分：<b :style="{color: quantileResult.monotonicity_score > 0 ? 'var(--success)' : 'var(--danger)'}">{{ quantileResult.monotonicity_score.toFixed(3) }}</b></span>
+          <span>多空净值：<b>{{ quantileResult.long_short_nav?.[quantileResult.long_short_nav.length-1]?.toFixed(3) }}</b></span>
+        </div>
+        <v-chart v-if="quantileResult && !quantileLoading" :option="quantileChartOption" style="height:360px;width:100%" autoresize />
+        <el-empty v-else-if="!quantileLoading" description="暂无分层收益数据" :image-size="64" />
+      </div>
+    </el-dialog>
+
+    <!-- 因子中性化对话框 -->
+    <el-dialog v-model="showNeutralize" :title="`因子中性化 — ${neutralizeFactorData?.name ?? ''}`" width="560px">
+      <div v-loading="neutralizeLoading" style="min-height:200px">
+        <el-form-item label="中性化方法" v-if="!neutralizeLoading">
+          <el-radio-group v-model="neutralizeMethod" @change="onNeutralizeMethodChange">
+            <el-radio label="market_cap">市值中性化</el-radio>
+            <el-radio label="industry">行业+市值中性化</el-radio>
+            <el-radio label="both">两者</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-table v-if="neutralizeResult" :data="neutralizeTableData" border style="width:100%">
+          <el-table-column prop="metric" label="指标" width="120" />
+          <el-table-column prop="before" label="中性化前" align="right" />
+          <el-table-column prop="after" label="中性化后" align="right" />
+          <el-table-column prop="delta" label="变化" align="right" />
+        </el-table>
+        <el-empty v-else-if="!neutralizeLoading" description="暂无中性化结果" :image-size="64" />
+      </div>
+    </el-dialog>
   </PageContainer>
 </template>
 
 <script setup>
+defineOptions({ name: 'FactorLibrary' })
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Plus, Refresh, Download, Warning } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
-import { listFactors } from '@/api/factor'
+import VChart from 'vue-echarts'
+import { useFactorStore } from '@/stores/factor'
 import { syncQuantData } from '@/api/quant'
+import { seedAlpha158, getQuantileAnalysis, neutralizeFactor, decayCheck } from '@/api/factor'
 
 const router = useRouter()
+const factorStore = useFactorStore()
 
-// 因子列表与加载状态
-const factors = ref([])
-const loading = ref(false)
+// 因子列表与加载状态（从全局 store 读取，5 分钟缓存）
+const factors = computed(() => factorStore.factors)
+const loading = computed(() => factorStore.loading)
 const syncing = ref(false)
+const seedingAlpha158 = ref(false)
+const decayChecking = ref(false)
+const decayMap = ref({})  // factor_id -> is_decaying
+
+// === 分层收益评价 ===
+const showQuantile = ref(false)
+const quantileLoading = ref(false)
+const quantileFactor = ref(null)
+const quantileResult = ref(null)
+
+// === 因子中性化 ===
+const showNeutralize = ref(false)
+const neutralizeLoading = ref(false)
+const neutralizeFactorData = ref(null)
+const neutralizeResult = ref(null)
+const neutralizeMethod = ref('market_cap')
+
+const neutralizeTableData = computed(() => {
+  const r = neutralizeResult.value
+  if (!r) return []
+  const before = r.ic_before || {}
+  const after = r.ic_after || {}
+  const metrics = [
+    { key: 'ic', label: 'IC' },
+    { key: 'rank_ic', label: 'RankIC' },
+    { key: 'icir', label: 'ICIR' },
+    { key: 'ir', label: 'IR' },
+  ]
+  return metrics.map(m => {
+    const b = before[m.key]
+    const a = after[m.key]
+    const delta = (b != null && a != null) ? Number(a) - Number(b) : null
+    return {
+      metric: m.label,
+      before: b != null ? Number(b).toFixed(4) : '—',
+      after: a != null ? Number(a).toFixed(4) : '—',
+      delta: delta != null ? (delta >= 0 ? '+' : '') + delta.toFixed(4) : '—',
+    }
+  })
+})
+
+async function onNeutralize(row) {
+  neutralizeFactorData.value = row
+  neutralizeResult.value = null
+  neutralizeMethod.value = 'market_cap'
+  showNeutralize.value = true
+  await fetchNeutralize()
+}
+
+async function onNeutralizeMethodChange() {
+  await fetchNeutralize()
+}
+
+async function fetchNeutralize() {
+  if (!neutralizeFactorData.value) return
+  neutralizeLoading.value = true
+  try {
+    const data = await neutralizeFactor(neutralizeFactorData.value.id, {
+      method: neutralizeMethod.value,
+    })
+    neutralizeResult.value = data
+  } catch (e) {
+    ElMessage.error('中性化分析失败: ' + (e?.message || e))
+  } finally {
+    neutralizeLoading.value = false
+  }
+}
+
+async function onSeedAlpha158() {
+  seedingAlpha158.value = true
+  try {
+    const data = await seedAlpha158()
+    ElMessage.success(`Alpha158 导入成功：${data?.count ?? 0} 个因子`)
+    await loadFactors()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    seedingAlpha158.value = false
+  }
+}
+
+async function onQuantile(row) {
+  quantileFactor.value = row
+  quantileResult.value = null
+  showQuantile.value = true
+  quantileLoading.value = true
+  try {
+    const data = await getQuantileAnalysis(row.id, { n_groups: 5 })
+    quantileResult.value = data
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    quantileLoading.value = false
+  }
+}
+
+const quantileChartOption = computed(() => {
+  const r = quantileResult.value
+  if (!r) return {}
+  const dates = r.dates || []
+  const groupNav = r.group_nav || {}
+  const colors = ['#c0392b', '#e67e22', '#bdc3c7', '#27ae60', '#2980b9']
+  const series = []
+  const n = r.n_groups || 5
+  for (let g = 1; g <= n; g++) {
+    series.push({
+      name: `G${g}`,
+      type: 'line',
+      data: groupNav[String(g)] || [],
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { width: 1.5, color: colors[(g - 1) % colors.length] },
+      itemStyle: { color: colors[(g - 1) % colors.length] }
+    })
+  }
+  series.push({
+    name: '多空',
+    type: 'line',
+    data: r.long_short_nav || [],
+    smooth: true,
+    showSymbol: false,
+    lineStyle: { width: 2.5, color: '#8e44ad', type: 'dashed' },
+    itemStyle: { color: '#8e44ad' }
+  })
+  return {
+    grid: { top: 40, right: 24, bottom: 30, left: 50 },
+    tooltip: { trigger: 'axis' },
+    legend: { top: 4, textStyle: { fontSize: 11 } },
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10, hideOverlap: true } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, formatter: v => Number(v).toFixed(2) } },
+    series
+  }
+})
 
 // 前端筛选与排序
 const filterCategory = ref('')
@@ -160,7 +335,8 @@ const categoryMap = {
   llm: { label: 'LLM', badge: 'success' },
   symbolic: { label: '符号', badge: 'warning' },
   text: { label: '文本', badge: 'info' },
-  automl: { label: 'AutoML', badge: 'danger' }
+  automl: { label: 'AutoML', badge: 'danger' },
+  alpha158: { label: 'Alpha158', badge: 'primary' }
 }
 const categoryLabel = (c) => categoryMap[c]?.label || c || '—'
 const categoryBadge = (c) => categoryMap[c]?.badge || 'muted'
@@ -205,16 +381,39 @@ function numClass(val) {
   return n > 0 ? 'is-positive' : 'is-negative'
 }
 
-// 加载因子列表：GET /factors?limit=100
-async function loadFactors() {
-  loading.value = true
+// 检测因子衰减：调用 /factors/decay-check，标记衰减行
+async function onDecayCheck() {
+  decayChecking.value = true
   try {
-    const data = await listFactors({ limit: 100 })
-    factors.value = data?.items || []
+    const data = await decayCheck()
+    const map = {}
+    ;(data?.decaying_factors || []).forEach(f => {
+      if (f.factor_id != null) map[f.factor_id] = true
+    })
+    decayMap.value = map
+    if ((data?.decaying ?? 0) > 0) {
+      ElMessage.warning(`检测到 ${data.decaying} 个衰减因子，已标红显示`)
+    } else {
+      ElMessage.success('因子衰减检测完成，全部健康')
+    }
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('加载因子列表失败')
+    ElMessage.error('衰减检测失败')
   } finally {
-    loading.value = false
+    decayChecking.value = false
+  }
+}
+
+// 行样式：衰减因子标红
+function decayRowClass({ row }) {
+  return decayMap.value[row.id] ? 'row--decaying' : ''
+}
+
+// 加载因子列表：通过全局 store（带缓存），失败时提示
+async function loadFactors() {
+  try {
+    await factorStore.fetchList()
+  } catch {
+    ElMessage.error('加载因子列表失败')
   }
 }
 
@@ -224,8 +423,8 @@ async function syncData() {
   try {
     await syncQuantData({})
     ElMessage.success('数据同步已提交，后台执行中')
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('数据同步提交失败')
+  } catch {
+    ElMessage.error('数据同步提交失败')
   } finally {
     syncing.value = false
   }
@@ -390,5 +589,13 @@ onMounted(loadFactors)
 // 末行底边由外层卡片边框承担，避免双线
 .factor-table :deep(.el-table__body tr:last-child td.el-table__cell) {
   border-bottom: 0;
+}
+
+// 衰减因子行标红
+.factor-table :deep(.el-table__body tr.row--decaying td.el-table__cell) {
+  background: rgba(210, 69, 69, 0.08) !important;
+}
+.factor-table :deep(.el-table__body tr.row--decaying:hover > td.el-table__cell) {
+  background: rgba(210, 69, 69, 0.14) !important;
 }
 </style>

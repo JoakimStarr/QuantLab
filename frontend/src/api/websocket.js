@@ -11,10 +11,16 @@ class WSClient {
     this.maxReconnectAttempts = 5
     this.baseDelay = 3000
     this.shouldReconnect = true
+    this.token = undefined
   }
 
-  /** 建立 WebSocket 连接 */
-  connect() {
+  /** 建立 WebSocket 连接
+   * @param {string} token - 鉴权 token（后端开启鉴权时必传）
+   */
+  connect(token) {
+    if (token !== undefined) {
+      this.token = token
+    }
     if (this.ws) {
       if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
         return
@@ -23,7 +29,8 @@ class WSClient {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const url = `${protocol}//${host}/ws`
+    const query = token ? `?token=${encodeURIComponent(token)}` : ''
+    const url = `${protocol}//${host}/ws${query}`
 
     try {
       this.ws = new WebSocket(url)
@@ -73,7 +80,7 @@ class WSClient {
     const delay = this.baseDelay * this.reconnectAttempts
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.connect()
+      this.connect(this.token)
     }, delay)
   }
 

@@ -113,11 +113,121 @@ async def _auto_retry_sync(universes: list):
     """对被中断的 universe 列表自动触发后台重试同步。"""
     import asyncio
     from app.schemas.quant import SyncDataRequest
+    from app.services.data.sync_runner import run_sync_task
 
-    # 延迟导入，避免 core -> api 循环依赖
-    from app.api.quant_data import _run_sync_task
-
+    pending = []
     for universe in universes:
         logger.info("recover: 自动重试 universe=%s", universe)
         req = SyncDataRequest(universe=universe)
-        asyncio.create_task(_run_sync_task(req))
+        t = asyncio.create_task(run_sync_task(req))
+        # 保留引用并记录异常，避免任务异常被静默吞没
+        t.add_done_callback(
+            lambda fut: fut.exception() and logger.error("recover: 自动重试失败: %s", fut.exception())
+        )
+        pending.append(t)
+    return pending
+
+
+async def reap_stale_mining():
+    """运行时回收僵尸挖掘任务：running 状态超过最大超时 2 倍的标记为 failed。
+
+   弥补 _safe_run_task 超时对纯同步阻塞调用可能失效的场景，避免任务永久卡 running。
+    """
+    from datetime import timedelta
+    from app.core.database import async_session
+    from app.core.config import settings
+    from app.models.mining_task import MiningTask
+
+    task_cfg = settings.task or {}
+    timeouts = task_cfg.get("timeouts", {}) or {}
+    base = int(task_cfg.get("task_timeout_seconds", 300))
+    max_timeout = max([int(v) for v in timeouts.values()] + [base]) * 2
+    threshold = datetime.now() - timedelta(seconds=max_timeout)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(MiningTask).where(
+                MiningTask.status == "running",
+                MiningTask.started_at < threshold,
+            )
+        )
+        stale = result.scalars().all()
+        for rec in stale:
+            rec.status = "failed"
+            rec.error = f"运行超时被 reaper 回收 (>{max_timeout}s)"
+            rec.finished_at = datetime.now()
+            logger.warning("reaper: 回收僵尸挖掘任务 task_id=%s type=%s", rec.id, rec.type)
+        if stale:
+            await session.commit()
+            logger.info("reaper: 共回收 %d 个僵尸挖掘任务", len(stale))
+
+async def rerun_pending_mining() -> None:
+    """重启后重跑状态为 pending/running 的挖掘任务（进程崩溃恢复）。
+
+    策略：running 视为崩溃残留，重置为 pending 后重新提交；
+    pending 直接重新提交。仅重试近 N 天的任务避免无限堆积。
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import select, update
+    from app.core.database import async_session
+    from app.models.mining_task import MiningTask
+    try:
+        async with async_session() as session:
+            cutoff = datetime.now() - timedelta(days=3)
+            stmt = select(MiningTask).where(
+                MiningTask.status.in_(["pending", "running"]),
+                MiningTask.created_at >= cutoff,
+            )
+            result = await session.execute(stmt)
+            tasks = result.scalars().all()
+            if not tasks:
+                return
+            logger.info("恢复 %d 个未完成挖掘任务", len(tasks))
+            for t in tasks:
+                # 重置 running -> pending，清理错误信息
+                t.status = "pending"
+                t.error = None
+                t.started_at = None
+            await session.commit()
+            # 重新提交（延迟导入避免循环依赖）
+            for t in tasks:
+                await _resubmit_mining(t.id, t.type, t.params)
+    except Exception:
+        logger.exception("重跑未完成任务失败")
+
+
+async def _resubmit_mining(task_id: int, task_type: str, params_json: str) -> None:
+    """重新提交挖掘任务到 BackgroundTasks 等价通道。
+
+    复用 mining API 的执行逻辑：通过 asyncio.create_task 在后台跑。
+    """
+    import json
+    import asyncio
+    from app.services.mining.task_utils import update_task_status
+    try:
+        params = json.loads(params_json) if params_json else {}
+    except Exception:
+        params = {}
+    # 根据类型派发（与 api/mining.py 保持一致的入口）
+    async def _run():
+        try:
+            if task_type == "llm":
+                from app.services.mining.llm_factor import mine_with_llm_iterative
+                n_rounds = params.get("n_rounds", 1)
+                n_candidates = params.get("n_candidates")
+                await mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n_candidates)
+            elif task_type == "symbolic":
+                from app.services.mining.symbolic import mine_with_symbolic
+                await mine_with_symbolic(task_id, **{k: v for k, v in params.items() if k in ("n_candidates", "ic_threshold")})
+            elif task_type == "automl":
+                from app.services.mining.automl import mine_with_automl
+                await mine_with_automl(task_id, **{k: v for k, v in params.items() if k in ("factor_ids", "method")})
+            elif task_type == "text":
+                from app.services.mining.text_factor import mine_with_text
+                await mine_with_text(task_id, **{k: v for k, v in params.items() if k in ("max_news_per_day",)})
+            else:
+                logger.warning("未知任务类型 %s，跳过 task_id=%s", task_type, task_id)
+        except Exception as e:
+            logger.exception("重跑任务失败 task_id=%s", task_id)
+            await update_task_status(task_id, status="failed", error=str(e)[:500])
+    asyncio.create_task(_run())

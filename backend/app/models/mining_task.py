@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, Text, TIMESTAMP, Index
+from datetime import datetime
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -22,4 +23,7 @@ class MiningTask(Base):
     finished_at = Column(TIMESTAMP, nullable=True)
     created_at = Column(TIMESTAMP, default=func.now())
 
-    __table_args__ = (Index("idx_mining_type_status", "type", "status"),)
+    __table_args__ = (
+        Index("idx_mining_type_status", "type", "status"),
+        Index("idx_mining_created_at", "created_at"),
+    )

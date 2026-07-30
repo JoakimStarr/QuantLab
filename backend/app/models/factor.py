@@ -35,4 +35,5 @@ class Factor(Base):
     __table_args__ = (
         Index("idx_factor_category_status", "category", "status"),
         Index("idx_factor_ic", "ic"),
+        Index("idx_factor_name", "name"),
     )

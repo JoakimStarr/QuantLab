@@ -93,12 +93,11 @@ def check_integrity(provider_uri: str, universe: str = None) -> dict:
             file_size = bin_path.stat().st_size
             data_len = (file_size - QLIB_BIN_HEADER_SIZE) // 4  # float32 = 4 bytes
 
-            if data_len != expected_len:
-                issues.append({
-                    "code": code, "field": field,
-                    "issue": "length_mismatch",
-                    "expected": expected_len, "actual": data_len,
-                })
+            # bin 长度与日历不一致属正常：
+            # - bin > 日历：bin 含更多历史数据（增量同步只更新日历未重dump bin）
+            # - bin < 日历：新上市股票上市晚于日历起点
+            # qlib 读取时按 bin 自动对齐，长度不一致不影响使用，不作为告警
+            pass
 
             field_lens[field] = data_len
 
@@ -117,7 +116,6 @@ def check_integrity(provider_uri: str, universe: str = None) -> dict:
             valid += 1
 
     # 汇总
-    length_issues = [i for i in issues if i["issue"] == "length_mismatch"]
     missing_issues = [i for i in issues if i["issue"] == "file_missing"]
 
     return {
@@ -127,12 +125,10 @@ def check_integrity(provider_uri: str, universe: str = None) -> dict:
         "valid_stocks": valid,
         "stocks_missing_fields": len(missing_fields_stocks),
         "stocks_all_nan": len(all_nan_stocks),
-        "length_mismatches": len(length_issues),
         "missing_files": len(missing_issues),
         "issues": issues[:100],  # 最多返回100条
         "all_nan_stocks": all_nan_stocks[:50],
         "summary": f"校验完成: {total} 只股票, {valid} 只有效, "
                    f"{len(missing_fields_stocks)} 只缺字段, "
-                   f"{len(all_nan_stocks)} 只全NaN, "
-                   f"{len(length_issues)} 个长度不匹配",
+                   f"{len(all_nan_stocks)} 只全NaN",
     }

@@ -2,17 +2,27 @@ from contextlib import asynccontextmanager
 import os
 import logging
 from datetime import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, Query
 from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi import HTTPException
 from sqlalchemy import select, text
 from app.core.database import init_db, async_session
 from app.core.logging_config import setup_logging
 from app.core.middleware import setup_middleware
-from app.core.errors import AppError, app_error_handler, general_error_handler
+from app.core.errors import (
+    AppError, app_error_handler, general_error_handler,
+    validation_error_handler, http_exception_handler,
+)
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.recovery import recover_stale_sync, recover_stale_mining
+from app.core.auth import warn_insecure_config, verify_token
+from app.core.ratelimit import limiter
 from app.api.router import api_router
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +30,37 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    warn_insecure_config()
+    settings.enforce_production_security()
     await init_db()
     await recover_stale_sync()
     await recover_stale_mining()
+    from app.core.recovery import rerun_pending_mining
+    await rerun_pending_mining()
     await start_scheduler()
     yield
     await stop_scheduler()
+    from app.core.executor import shutdown_executors
+    shutdown_executors()
 
 
-app = FastAPI(title="QuantLab", version="2.0.0", lifespan=lifespan)
+from app.core.config import settings as _settings
+_app_kwargs = {"title": "QuantLab", "version": "2.0.0", "lifespan": lifespan}
+if _settings.app_env != "development":
+    _app_kwargs["docs_url"] = None
+    _app_kwargs["redoc_url"] = None
+    _app_kwargs["openapi_url"] = None
+app = FastAPI(**_app_kwargs)
+
+# slowapi 限流
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 setup_middleware(app)
+app.add_middleware(SlowAPIMiddleware)
 app.add_exception_handler(AppError, app_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, general_error_handler)
 app.include_router(api_router, prefix="/api/v1")
 
@@ -92,11 +121,18 @@ async def spa_fallback(full_path: str):
 
 # WebSocket 端点（添加13: WebSocket 实时推送）
 from app.core.websocket_manager import ws_manager
-from fastapi import WebSocket
+from app.core.config import settings
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    """WebSocket 实时推送：同步进度、回测进度等"""
+async def websocket_endpoint(ws: WebSocket, token: str = Query(None)):
+    """WebSocket 实时推送：同步进度、回测进度等。
+
+    AUTH_ENABLED 时需通过 ?token=<jwt> 校验。
+    """
+    if settings.auth_enabled:
+        if not token or verify_token(token) is None:
+            await ws.close(code=4401)
+            return
     await ws_manager.connect(ws)
     try:
         while True:

@@ -53,3 +53,17 @@ __pycache__/
 
 # Local logs
 logs/
+
+# 临时探针 / IDE 配置
+_probe.py
+.trae/
+
+# 缓存数据（可重新生成）
+backend/data/*.json
+htmlcov/
+.coverage
+.coverage.*
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.claude/

@@ -99,7 +99,7 @@ async def get_index_kline(
         if period == "1w":
             df = _resample_kline(df, "W")
         elif period == "1M":
-            df = _resample_kline(df, "M")
+            df = _resample_kline(df, "ME")
 
         # 限制返回条数
         df = df.tail(limit)
@@ -140,7 +140,11 @@ async def get_index_kline(
 
 
 def _resample_kline(df, freq: str):
-    """按周/月聚合K线"""
+    """按周/月聚合K线（兼容 pandas 2.2+ 频率别名）"""
+    import pandas as _pd
+    # pandas 2.2+ removed legacy aliases: W->W, M->ME
+    if freq == "M" and _pd.__version__ >= "2.2":
+        freq = "ME"
     df = df.set_index("date")
     agg = {
         "open": "first",

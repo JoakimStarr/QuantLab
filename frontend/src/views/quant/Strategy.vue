@@ -66,6 +66,7 @@
             <div class="row-actions">
               <a class="link link--primary" @click.stop="triggerBacktest(row)">回测</a>
               <a class="link link--success" @click.stop="viewResults(row)">结果</a>
+              <a class="link link--warning" @click.stop="openWalkForward(row)">Walk-forward</a>
               <a class="link link--danger" @click.stop="archive(row)">归档</a>
             </div>
           </template>
@@ -132,6 +133,10 @@
             <el-option label="IC加权" value="ic_weight" />
           </el-select>
         </el-form-item>
+        <el-form-item label="因子正交化">
+          <el-switch v-model="form.orthogonalize" :active-value="1" :inactive-value="0" />
+          <span style="margin-left:12px;color:var(--text-tertiary);font-size:var(--font-size-sm)">启用后按 IC 排序做 Gram-Schmidt 截面正交化，降低共线性</span>
+        </el-form-item>
         <el-form-item label="topk">
           <el-input-number v-model="form.topk" :min="5" :max="300" />
         </el-form-item>
@@ -158,10 +163,84 @@
         <el-button type="primary" :loading="creating" @click="doCreate">创建</el-button>
       </template>
     </el-dialog>
+
+    <!-- Walk-forward 滚动回测对话框（添加14） -->
+    <el-dialog v-model="wfDialog.visible" title="Walk-forward 滚动回测" width="760px" :close-on-click-modal="false">
+      <el-form label-position="top" v-if="wfDialog.result?.status !== 'done'">
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <el-form-item label="训练窗口" style="flex:1; min-width:180px;">
+            <el-input v-model="wfDialog.form.trainWindow" placeholder="如 730D" />
+          </el-form-item>
+          <el-form-item label="测试窗口" style="flex:1; min-width:180px;">
+            <el-input v-model="wfDialog.form.testWindow" placeholder="如 180D" />
+          </el-form-item>
+          <el-form-item label="滚动步长" style="flex:1; min-width:180px;">
+            <el-input v-model="wfDialog.form.step" placeholder="如 180D" />
+          </el-form-item>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <el-form-item label="每期剔除数" style="flex:1; min-width:180px;">
+            <el-input-number v-model="wfDialog.form.nDrop" :min="0" :max="20" controls-position="right" />
+          </el-form-item>
+          <el-form-item label="调仓频率" style="flex:1; min-width:180px;">
+            <el-select v-model="wfDialog.form.rebalance" style="width:100%;">
+              <el-option label="每日" value="day" />
+              <el-option label="每周" value="week" />
+              <el-option label="每月" value="month" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <div class="wf-result" v-if="wfDialog.result">
+        <el-alert v-if="wfDialog.result.status === 'running'" type="info" :closable="false" title="回测进行中，请稍候..." />
+        <el-alert v-else-if="wfDialog.result.status === 'failed'" type="error" :closable="false" :title="String(wfDialog.result.error || '回测失败')" />
+        <template v-else-if="wfDialog.result.status === 'done' && wfDialog.result.result">
+          <h4 class="wf-section-title">样本外整体指标</h4>
+          <div class="wf-metrics" v-if="wfDialog.result.result.oos_metrics">
+            <div class="wf-metric-card" v-for="(val, key) in wfDialog.result.result.oos_metrics" :key="key">
+              <div class="wf-metric-label">{{ wfLabel(key) }}</div>
+              <div class="wf-metric-value">{{ wfFmt(key, val) }}</div>
+            </div>
+          </div>
+          <h4 class="wf-section-title" v-if="wfDialog.result.result.consistency">跨窗一致性</h4>
+          <div class="wf-metrics" v-if="wfDialog.result.result.consistency">
+            <div class="wf-metric-card" v-for="(val, key) in wfDialog.result.result.consistency" :key="key">
+              <div class="wf-metric-label">{{ wfLabel(key) }}</div>
+              <div class="wf-metric-value">{{ wfFmt(key, val) }}</div>
+            </div>
+          </div>
+          <h4 class="wf-section-title">各窗口明细 ({{ wfDialog.result.result.n_windows || 0 }} 窗)</h4>
+          <el-table :data="wfDialog.result.result.windows || []" size="small" max-height="320">
+            <el-table-column prop="window_idx" label="#" width="50" />
+            <el-table-column label="测试期" min-width="170">
+              <template #default="{ row }">{{ row.test_start }} ~ {{ row.test_end }}</template>
+            </el-table-column>
+            <el-table-column prop="best_topk" label="topk" width="70" />
+            <el-table-column label="训练夏普" width="90">
+              <template #default="{ row }">{{ wfFmt('sharpe', row.train_sharpe) }}</template>
+            </el-table-column>
+            <el-table-column label="测试夏普" width="90">
+              <template #default="{ row }">{{ wfFmt('sharpe', row.test_sharpe) }}</template>
+            </el-table-column>
+            <el-table-column label="年化" width="90">
+              <template #default="{ row }">{{ wfFmt('annual_return', row.test_annual_return) }}</template>
+            </el-table-column>
+            <el-table-column label="最大回撤" width="100">
+              <template #default="{ row }">{{ wfFmt('max_drawdown', row.test_max_dd) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="closeWalkForward">关闭</el-button>
+        <el-button v-if="wfDialog.result?.status !== 'done'" type="primary" :loading="wfDialog.submitting" @click="submitWalkForward">开始回测</el-button>
+      </template>
+    </el-dialog>
   </PageContainer>
 </template>
 
 <script setup>
+defineOptions({ name: 'QuantStrategy' })
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -171,11 +250,13 @@ import PageContainer from '@/components/common/PageContainer.vue'
 import {
   listStrategies, createStrategy, runBacktest,
   listBacktestResults, getBacktestResult,
-  getAllBacktestStatuses
+  getAllBacktestStatuses,
+  runWalkForward, getWalkForwardResults
 } from '@/api/strategy'
-import { listFactors } from '@/api/factor'
+import { useFactorStore } from '@/stores/factor'
 
 const router = useRouter()
+const factorStore = useFactorStore()
 
 // === 策略列表与选中 ===
 const strategies = ref([])
@@ -231,7 +312,8 @@ const form = reactive({
   topk: 50,
   n_drop: 5,
   rebalance_freq: 'week',
-  benchmark: 'SH000300'
+  benchmark: 'SH000300',
+  orthogonalize: 0
 })
 
 // === 轮询控制 ===
@@ -405,8 +487,8 @@ async function loadStrategies() {
 // === 加载因子选项（供新建对话框选择） ===
 async function loadFactors() {
   try {
-    const data = await listFactors({ status: 'active', limit: 200 })
-    factorOptions.value = data?.items || []
+    await factorStore.fetchList()
+    factorOptions.value = factorStore.activeFactors
   } catch (e) {
     // 静默失败，不阻塞主流程
   }
@@ -450,7 +532,8 @@ async function triggerBacktest(row) {
   } catch (e) { /* ignore */ }
 
   try {
-    await runBacktest(row.id, { start_date: '2024-01-01', end_date: '2026-07-27' })
+    const today = new Date().toISOString().slice(0, 10)
+    await runBacktest(row.id, { start_date: '2020-01-01', end_date: today })
     ElMessage.success('回测已启动')
     // 立即刷新状态并启动轮询
     await loadBacktestStatuses()
@@ -514,9 +597,94 @@ function openCreate() {
     topk: 50,
     n_drop: 5,
     rebalance_freq: 'week',
-    benchmark: 'SH000300'
+    benchmark: 'SH000300',
+    orthogonalize: 0
   })
   showCreate.value = true
+}
+
+// === Walk-forward 滚动回测（添加14） ===
+const wfDialog = reactive({
+  visible: false,
+  submitting: false,
+  strategyId: null,
+  result: null,
+  form: { trainWindow: '730D', testWindow: '180D', step: '180D', nDrop: 5, rebalance: 'day' },
+})
+let wfTimer = null
+
+function openWalkForward(row) {
+  wfDialog.strategyId = row.id
+  wfDialog.visible = true
+  wfDialog.submitting = false
+  wfDialog.result = null
+  Object.assign(wfDialog.form, { trainWindow: '730D', testWindow: '180D', step: '180D', nDrop: 5, rebalance: 'day' })
+}
+
+function closeWalkForward() {
+  wfDialog.visible = false
+  stopWfPolling()
+}
+
+async function submitWalkForward() {
+  if (!wfDialog.strategyId) return
+  wfDialog.submitting = true
+  try {
+    await runWalkForward(wfDialog.strategyId, {
+      train_window: wfDialog.form.trainWindow,
+      test_window: wfDialog.form.testWindow,
+      step: wfDialog.form.step,
+      n_drop: wfDialog.form.nDrop,
+      rebalance: wfDialog.form.rebalance,
+    })
+    wfDialog.result = { status: 'running' }
+    ElMessage.success('Walk-forward 回测已启动')
+    startWfPolling()
+  } catch (e) {
+    ElMessage.error('Walk-forward 启动失败')
+  } finally {
+    wfDialog.submitting = false
+  }
+}
+
+function startWfPolling() {
+  if (wfTimer) clearInterval(wfTimer)
+  let attempts = 0
+  wfTimer = setInterval(async () => {
+    attempts++
+    if (attempts > 120) { stopWfPolling(); return }
+    try {
+      const data = await getWalkForwardResults(wfDialog.strategyId)
+      if (data && data.status && data.status !== 'running') {
+        wfDialog.result = data
+        stopWfPolling()
+      } else if (data) {
+        wfDialog.result = data
+      }
+    } catch (e) { /* ignore */ }
+  }, 3000)
+}
+
+function stopWfPolling() {
+  if (wfTimer) { clearInterval(wfTimer); wfTimer = null }
+}
+
+const _WF_LABELS = {
+  total_return: '总收益', annual_return: '年化收益', annual_volatility: '年化波动',
+  sharpe: '夏普', max_drawdown: '最大回撤', n_days: '天数',
+  sharpe_mean: '夏普均值', sharpe_std: '夏普标准差', sharpe_min: '夏普最小',
+  sharpe_max: '夏普最大', positive_ratio: '正收益占比',
+}
+function wfLabel(k) { return _WF_LABELS[k] || k }
+function wfFmt(k, v) {
+  if (v == null || v === '') return '--'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '--'
+  if (k === 'n_days') return String(Math.round(n))
+  if (['total_return', 'annual_return', 'annual_volatility', 'max_drawdown', 'positive_ratio'].includes(k)) {
+    return (n * 100).toFixed(2) + '%'
+  }
+  return n.toFixed(4)
 }
 
 async function doCreate() {
@@ -545,6 +713,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopPolling()
   stopStatusPolling()
+  stopWfPolling()
 })
 </script>
 
@@ -800,4 +969,22 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 320px;
 }
+
+/* Walk-forward 样式 */
+.link--warning { color: var(--warning, #c8801c); }
+.wf-result { margin-top: 8px; }
+.wf-section-title {
+  font-size: 14px; font-weight: 600; color: var(--text-primary, #1f2329);
+  margin: 16px 0 8px;
+}
+.wf-metrics {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+.wf-metric-card {
+  background: var(--bg-tertiary, #f5f6f7); border-radius: 6px;
+  padding: 8px 12px;
+}
+.wf-metric-label { font-size: 12px; color: var(--text-tertiary, #8a9099); }
+.wf-metric-value { font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
 </style>

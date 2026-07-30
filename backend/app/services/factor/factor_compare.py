@@ -52,12 +52,22 @@ def _compute_comparison_sync(factors, start: str, end: str) -> dict:
 
     for f in factors:
         try:
-            factor_df = load_factor_values(f.expression, start, end)
+            try:
+                factor_df = load_factor_values(f.expression, start, end)
+            except FileNotFoundError as e:
+                # AutoML bundle 丢失：跳过该因子但记录错误，避免整体 500
+                logger.warning("因子 %s 加载失败（AutoML 模型缺失）: %s", f.name, e)
+                results.append({
+                    "id": f.id, "name": f.name, "expression": f.expression,
+                    "category": f.category,
+                    "error": f"AutoML 模型不可用: {e}",
+                })
+                continue
             label_df = load_label(start, end)
             ic_metrics = compute_ic(factor_df, label_df)
 
             # 衰减曲线
-            decay = f.decay
+            decay = json.loads(f.decay) if f.decay else None
             if not decay:
                 try:
                     decay = compute_decay(factor_df, label_df, max_lag=10)
@@ -86,7 +96,8 @@ def _compute_comparison_sync(factors, start: str, end: str) -> dict:
             merged = factor_df.join(label_df, how="inner").dropna()
             if not merged.empty:
                 daily_ic = merged.groupby(level="datetime").apply(
-                    lambda g: g["factor"].corr(g["label"]) if len(g) >= 2 else np.nan
+                    lambda g: g["factor"].corr(g["label"]) if len(g) >= 2 else np.nan,
+                    include_groups=False,
                 ).dropna()
                 for date, ic_val in daily_ic.items():
                     ic_timeseries.append({
@@ -140,9 +151,13 @@ async def get_factor_decay(factor_id: int, max_lag: int = 20) -> dict:
         end = period.get("end", "2024-12-31")
 
         loop = asyncio.get_running_loop()
-        decay = await loop.run_in_executor(
-            None, _compute_decay_sync, f.expression, start, end, max_lag
-        )
+        try:
+            decay = await loop.run_in_executor(
+                None, _compute_decay_sync, f.expression, start, end, max_lag
+            )
+        except FileNotFoundError as e:
+            # AutoML bundle 丢失等不可恢复错误：返回友好错误而非 500
+            return {"error": f"AutoML 模型不可用: {e}"}
 
         # 更新数据库
         async with async_session() as session:

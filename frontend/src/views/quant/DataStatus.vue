@@ -109,6 +109,9 @@
           <el-button type="warning" @click="doSyncIndices" :loading="indexSyncing" :disabled="!qlib.available || indexSyncing">
             {{ indexSyncing ? '指数同步中...' : '同步指数' }}
           </el-button>
+          <el-button type="primary" @click="doSyncIndustry" :loading="industrySyncing" :disabled="industrySyncing">
+            {{ industrySyncing ? '行业同步中...' : '同步行业' }}
+          </el-button>
           <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
             {{ integrityChecking ? '校验中...' : '数据校验' }}
           </el-button>
@@ -333,11 +336,12 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getQuantDataStatus, syncQuantData, getQlibStatus, switchDataSource, getDataPreview, getSyncHistory, eodSync, getDataSource, syncIndices, integrityCheck } from '@/api/quant'
+import { getQuantDataStatus, syncQuantData, getQlibStatus, switchDataSource, getDataPreview, getSyncHistory, eodSync, getDataSource, syncIndices, integrityCheck, syncIndustry } from '@/api/quant'
 
 const statusList = ref([])
 const loading = ref(false)
@@ -359,6 +363,7 @@ const eodSyncing = ref(false)
 const eodResult = ref(null)
 const eodForm = reactive({ universe: 'csi300', days: 5, overwrite: false })
 const indexSyncing = ref(false)
+const industrySyncing = ref(false)
   const integrityChecking = ref(false)
   const showIntegrityDialog = ref(false)
   const integrityResult = ref(null)
@@ -570,6 +575,18 @@ async function doSyncIndices() {
   }
 }
 
+async function doSyncIndustry() {
+  industrySyncing.value = true
+  try {
+    const data = await syncIndustry()
+    ElMessage.success(`行业分类同步成功：${data?.industries ?? 0} 个行业, ${data?.stocks ?? 0} 只股票`)
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    industrySyncing.value = false
+  }
+}
+
 async function doIntegrityCheck() {
   integrityChecking.value = true
   showIntegrityDialog.value = true
@@ -577,14 +594,9 @@ async function doIntegrityCheck() {
   try {
     const data = await integrityCheck()
     integrityResult.value = data
-    if (data?.ok) {
-      ElMessage.success(data.summary || '校验完成')
-    } else {
-      ElMessage.error(data?.error || '校验失败')
-    }
+    ElMessage.success(data?.summary || '校验完成')
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('数据校验失败: ' + (e?.message || e))
-    integrityResult.value = { ok: false, error: String(e) }
+    integrityResult.value = { ok: false, error: String(e?.message || e) }
   } finally {
     integrityChecking.value = false
   }

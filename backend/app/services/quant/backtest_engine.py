@@ -2,6 +2,8 @@
 
 输入：预测打分 DataFrame（MultiIndex datetime/instrument，含 score 列）
 输出：组合日收益、成本、基准、换手
+
+滑点：可选 slippage_bps（基点），默认 0。买入按 (1+slippage) 成交，卖出按 (1-slippage)。
 """
 import logging
 import numpy as np
@@ -16,6 +18,7 @@ def combine_factors(
     factor_values: dict,
     weights: dict = None,
     method: str = "equal_weight",
+    orthogonalize: bool = False,
 ) -> pd.DataFrame:
     """将多因子值组合为打分。
 
@@ -29,6 +32,16 @@ def combine_factors(
     if not factor_values:
         raise ValueError("因子列表为空")
     names = list(factor_values.keys())
+
+    # 可选：按 IC 绝对值降序做 Gram-Schmidt 截面正交化，降低共线性
+    if orthogonalize and len(names) > 1:
+        from app.services.factor.orthogonalize import gram_schmidt_orthogonalize
+        if weights:
+            ic_order = sorted(names, key=lambda n: abs(weights.get(n, 0)), reverse=True)
+        else:
+            ic_order = names
+        factor_values = gram_schmidt_orthogonalize(factor_values, ic_order)
+
     # 对齐到公共索引
     dfs = []
     for name in names:
@@ -74,6 +87,7 @@ def run_backtest(
     n_drop: int = None,
     benchmark: str = None,
     rebalance_freq: str = "day",
+    portfolio_method: str = None,
 ) -> dict:
     """运行 top-k dropout 回测（自实现，仅用 qlib 加载价格数据）。
 
@@ -82,10 +96,12 @@ def run_backtest(
     - 停牌过滤：成交量为 0 或收益为 NaN 的股票排除
     - 调仓频率：day/week/month，非调仓日保持持仓
     - 交易成本按换手率分别计算买卖成本
+    - 组合优化：portfolio_method=equal_weight（等权）或 cvxpy_optimize（CVXPy 优化）
 
     Args:
         score_df: MultiIndex (datetime, instrument) 含 'score' 列
         rebalance_freq: day（每日）/ week（每5交易日）/ month（月初）
+        portfolio_method: equal_weight（默认）/ cvxpy_optimize
     Returns:
         {returns, benchmark, turnover, portfolios, start_date, end_date, ...}
     """
@@ -101,6 +117,22 @@ def run_backtest(
     cost_buy = settings.quant.get("cost_buy", 0.0013)
     cost_sell = settings.quant.get("cost_sell", 0.0023)
 
+    # 组合优化配置
+    portfolio_cfg = settings.quant.get("portfolio_optimizer", {})
+    if portfolio_method is None:
+        portfolio_method = "cvxpy_optimize" if portfolio_cfg.get("enabled") else "equal_weight"
+
+    # 行业映射（仅启用组合优化时懒加载，传入后行业暴露约束才生效）
+    industry_map = None
+    if portfolio_method == "cvxpy_optimize":
+        try:
+            from app.services.data.industry_sync import load_industry_map
+            industry_map = load_industry_map() or None
+            if not industry_map:
+                logger.info("行业映射未同步，组合优化行业暴露约束将不生效")
+        except Exception as e:
+            logger.warning("加载行业映射失败: %s", e)
+
     # 按区间过滤打分
     mask = (score_df.index.get_level_values("datetime") >= pd.Timestamp(start)) & \
            (score_df.index.get_level_values("datetime") <= pd.Timestamp(end))
@@ -108,7 +140,8 @@ def run_backtest(
     if score_df.empty:
         raise ValueError("打分数据为空")
 
-    logger.info("回测: %s~%s topk=%d n_drop=%d freq=%s benchmark=%s", start, end, topk, n_drop, rebalance_freq, benchmark)
+    logger.info("回测: %s~%s topk=%d n_drop=%d freq=%s benchmark=%s portfolio=%s",
+                start, end, topk, n_drop, rebalance_freq, benchmark, portfolio_method)
 
     # 加载收盘价与成交量
     instruments = sorted(score_df.index.get_level_values("instrument").unique())
@@ -135,13 +168,14 @@ def run_backtest(
     score_dates = sorted(score_df.index.get_level_values("datetime").unique())
     portfolio_returns = []
     holdings = None
+    holdings_weights = None  # None=等权，dict=加权
     turnover_list = []
     for date in all_dates:
         if date not in returns_df.index:
             continue
         # 非调仓日：保持持仓，仅计算收益
         if date not in rebalance_dates and holdings:
-            day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings)
+            day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings, holdings_weights)
             if day_ret is not None:
                 portfolio_returns.append({"date": date, "return": day_ret})
             continue
@@ -154,7 +188,7 @@ def run_backtest(
         if len(day_scores) == 0:
             # 无打分数据，保持持仓
             if holdings:
-                day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings)
+                day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings, holdings_weights)
                 if day_ret is not None:
                     portfolio_returns.append({"date": date, "return": day_ret})
             continue
@@ -165,7 +199,7 @@ def run_backtest(
             if inst not in returns_df.columns:
                 continue
             vol = vol_df.loc[date, inst] if date in vol_df.index and inst in vol_df.columns else 0
-            if vol is None or (not np.isnan(vol) and vol <= 0):
+            if vol is None or np.isnan(vol) or vol <= 0:
                 continue  # 停牌
             chg = daily_chg.loc[date, inst] if date in daily_chg.index else 0
             if _is_price_limited(inst, chg if not np.isnan(chg) else None):
@@ -194,18 +228,45 @@ def run_backtest(
         if not selected:
             continue
 
-        # 换手率
+        # 计算持仓权重：等权或 CVXPy 优化
+        if portfolio_method == "cvxpy_optimize" and len(selected) > 1:
+            try:
+                from app.services.quant.portfolio_optimizer import optimize_portfolio
+                day_scores_selected = day_scores.reindex(selected).dropna()
+                if len(day_scores_selected) > 1:
+                    opt_cfg = {
+                        "method": portfolio_cfg.get("method", "mean_variance"),
+                        "max_weight": portfolio_cfg.get("max_weight", 0.05),
+                        "max_industry_exposure": portfolio_cfg.get("max_industry_exposure", 0.20),
+                        "risk_aversion": portfolio_cfg.get("risk_aversion", 0.5),
+                        "industry_map": industry_map,
+                    }
+                    w_series = optimize_portfolio(day_scores_selected, **opt_cfg)
+                    holdings_weights = {k: v for k, v in w_series.items()
+                                        if k in selected and v > 0}
+                    if not holdings_weights:
+                        holdings_weights = None
+                else:
+                    holdings_weights = None
+            except Exception as e:
+                logger.warning("CVXPy 优化失败，回退等权: %s", e)
+                holdings_weights = None
+        else:
+            holdings_weights = None
+
+        # 换手率（单边：新建仓股票占新持仓的比例）
         if holdings is not None:
             old_set, new_set = set(holdings), set(selected)
-            turnover = 1 - len(old_set & new_set) / len(old_set | new_set) if (old_set | new_set) else 0
+            denom = max(len(new_set), 1)
+            turnover = len(new_set - old_set) / denom
             turnover_list.append(turnover)
         holdings = set(selected)
 
-        # 等权组合 t+1 日收益（排除停牌/NaN）
-        day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings)
-        # 扣交易成本
-        if turnover_list:
-            day_ret = day_ret - turnover_list[-1] * (cost_buy + cost_sell) / 2 if day_ret is not None else None
+        # 组合 t+1 日收益（排除停牌/NaN），等权或加权
+        day_ret = _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings, holdings_weights)
+        # 扣交易成本：单边换手率 × 买卖双边费率
+        if turnover_list and day_ret is not None:
+            day_ret = day_ret - turnover_list[-1] * (cost_buy + cost_sell)
         if day_ret is not None:
             portfolio_returns.append({"date": date, "return": day_ret})
 
@@ -235,18 +296,34 @@ def run_backtest(
         "n_drop": n_drop,
         "rebalance_freq": rebalance_freq,
         "benchmark_code": benchmark,
+        "portfolio_method": portfolio_method,
     }
 
 
-def _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings) -> float:
-    """计算持仓当日收益（排除停牌/NaN 股票）。"""
+def _calc_holding_return(returns_df, daily_chg, vol_df, date, holdings, weights=None) -> float:
+    """计算持仓当日收益（排除停牌/NaN 股票）。
+
+    Args:
+        weights: None=等权，dict={stock: weight}=加权
+    """
     if not holdings or date not in returns_df.index:
         return None
     rets = []
+    wts = []
     for inst in holdings:
         if inst not in returns_df.columns:
             continue
         r = returns_df.loc[date, inst]
         if r is not None and not np.isnan(r):
             rets.append(r)
-    return float(np.mean(rets)) if rets else None
+            if weights and inst in weights:
+                wts.append(float(weights[inst]))
+            else:
+                wts.append(1.0)
+    if not rets:
+        return None
+    if weights:
+        total_w = sum(wts)
+        if total_w > 0:
+            return float(np.dot(rets, wts) / total_w)
+    return float(np.mean(rets))

@@ -31,7 +31,7 @@ async def sync_progress_api():
 
 @router.get("/preview")
 async def data_preview_api(
-    code: str = Query(..., description="股票代码，如 SH600000"),
+    code: str = Query(None, description="股票代码，如 SH600000；为空时默认预览沪深300"),
     limit: int = Query(30, le=100, description="返回天数"),
 ):
     """数据预览：返回指定股票最近 N 天的 OHLCV 数据（添加3: 数据预览）"""
@@ -39,6 +39,8 @@ async def data_preview_api(
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
+    if not code:
+        code = "csi300"
     import asyncio
     from app.services.quant.qlib_init import init_qlib
 
@@ -260,3 +262,18 @@ async def integrity_check_api(universe: str = Query(None)):
         None, check_integrity, settings.qlib_provider_path, universe
     )
     return ApiResponse(ok=True, data=result)
+
+
+@router.post("/sync-industry")
+async def sync_industry_api():
+    """同步申万行业分类数据（添加: 行业分类数据同步）
+
+    通过 akshare 获取申万一级行业分类，保存到 data/industry_map.json，
+    供因子行业中性化使用。
+    """
+    import asyncio
+    from app.services.data.industry_sync import sync_industry_data
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, sync_industry_data)
+    return ApiResponse(ok=result.get("ok", False), data=result)

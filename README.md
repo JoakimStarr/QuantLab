@@ -8,7 +8,7 @@
 |---|---|
 | 后端 | FastAPI + SQLAlchemy + SQLite |
 | 量化引擎 | pyqlib（微软AI量化框架） |
-| 因子挖掘 | gplearn（符号回归）+ LLM（智谱GLM/硅基流动） |
+| 因子挖掘 | gplearn（符号回归）+ LLM（opencodezen/智谱GLM/硅基流动，基于 OpenAI SDK） |
 | 数据源 | AKShare + chenditc/investment_data（qlib bin） |
 | 前端 | Vue 3 + Element Plus + ECharts |
 
@@ -20,7 +20,7 @@ pip install -r requirements.txt
 cd frontend && npm install && cd ..
 
 # 2. 配置环境变量
-cp .env.example .env  # 填入 GLM_API_KEY（AI因子挖掘用，可选）
+cp .env.example .env  # 填入 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY（AI因子挖掘用，三选一即可，支持故障转移）
 
 # 3. 启动
 ./start.sh dev
@@ -52,7 +52,7 @@ frontend/src/
 - **因子库**：12 个内置因子（动量/反转/波动/换手等），表达式安全沙箱（防 look-ahead bias）
 - **因子评价**：IC/RankIC/ICIR/换手率/衰减曲线
 - **策略回测**：top-k dropout 选股，涨跌停/停牌过滤，日/周/月调仓，夏普/索提诺/回撤/卡玛
-- **AI 因子挖掘**：① LLM 生成因子 ② 符号回归 ③ 文本因子 ④ AutoML 组合
+- **AI 因子挖掘**：① LLM 生成因子 ② 符号回归 ③ 文本因子 ④ AutoML 组合（入库前 walk-forward 样本外 IC 校验 + AST 规范化去重）
 - **数据管理**：qlib bin 数据源，定时增量同步
 
 ## API 一览

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from app.core.config import settings
 from app.services.ai.llm_client import LLMClient
 from app.core.errors import AIProviderUnavailableError
@@ -10,7 +11,18 @@ _PLACEHOLDER_KEYS = {"", "your_glm_api_key_here", "your_siliconflow_api_key_here
 
 
 class ProviderRouter:
+    _singleton_instance = None
+
+    def __new__(cls):
+        if cls._singleton_instance is None:
+            cls._singleton_instance = super().__new__(cls)
+            cls._singleton_instance._initialized = False
+        return cls._singleton_instance
+
     def __init__(self):
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
         self.primary = None
         self.fallback = None
         self.tertiary = None
@@ -25,7 +37,7 @@ class ProviderRouter:
             try:
                 self.primary = LLMClient(
                     api_key=opencodezen_key,
-                    base_url=primary_cfg.get("base_url", "https://api.opencodezen.com/v1"),
+                    base_url=primary_cfg.get("base_url", "https://opencode.ai/zen/v1"),
                     model=primary_cfg.get("model", "gpt-4o-mini"),
                     timeout=primary_cfg.get("timeout_seconds", 15),
                     max_tokens=primary_cfg.get("max_tokens", 512),
@@ -82,8 +94,16 @@ class ProviderRouter:
             raise AIProviderUnavailableError("无可用 AI Provider")
 
         # 顺序调用：primary 优先，失败则 fallback（LLMClient 内部已有重试和超时）
+        # 总预算控制：避免多 provider × 多次重试吃光任务超时
+        budget = settings.ai_provider.get("route_budget_seconds", 120)
+        start = time.monotonic()
         last_error = None
         for name, fn in providers:
+            elapsed = time.monotonic() - start
+            if elapsed > budget:
+                logger.warning("AI Provider 路由预算耗尽 (%.1fs/%ss)，跳过 %s",
+                               elapsed, budget, name)
+                break
             try:
                 result = await fn(messages, self.force_json)
                 if result and result.get("content"):

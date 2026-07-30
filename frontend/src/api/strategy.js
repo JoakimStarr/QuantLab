@@ -40,3 +40,12 @@ export function getBacktestStatus(strategyId) {
 export function getAllBacktestStatuses() {
   return request.get('/strategies/backtest-statuses')
 }
+
+// Walk-forward 滚动回测（添加14）
+export function runWalkForward(id, params) {
+  return request.post('/strategies/' + id + '/walk-forward', null, { params })
+}
+
+export function getWalkForwardResults(id) {
+  return request.get('/strategies/' + id + '/walk-forward-results')
+}

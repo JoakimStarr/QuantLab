@@ -150,33 +150,14 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart } from 'echarts/charts'
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent
-} from 'echarts/components'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { compareFactors, getFactorDecay } from '@/api/quant'
-import { listFactors } from '@/api/factor'
-
-use([
-  CanvasRenderer,
-  LineChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent
-])
+import { useFactorStore } from '@/stores/factor'
 
 const route = useRoute()
 const router = useRouter()
+const factorStore = useFactorStore()
 const loading = ref(true)
 const factorIds = ref([])
 const factorList = ref([])
@@ -317,8 +298,19 @@ function normalizeDecay(data) {
 
 // 标准化 IC 时序数据
 function normalizeSeries(data) {
-  if (data?.ic_series) return data.ic_series
-  if (data?.series) return data.series
+  // 后端返回 ic_timeseries: [{ date, factor_id, ic }]
+  // 转换为 { factorId: [{ date, ic }] }
+  const ts = data?.ic_timeseries || data?.ic_series || data?.series
+  if (Array.isArray(ts)) {
+    const map = {}
+    ts.forEach(item => {
+      const fid = String(item.factor_id)
+      if (!map[fid]) map[fid] = []
+      map[fid].push({ date: item.date, ic: Number(item.ic) })
+    })
+    return map
+  }
+  if (ts && typeof ts === 'object') return ts
   return {}
 }
 
@@ -334,9 +326,8 @@ function formatFactorLabel(item) {
 async function loadAllFactors() {
   factorsLoading.value = true
   try {
-    const res = await listFactors({ limit: 200 })
-    allFactors.value = res?.items || []
-    // 若已有选中但不在列表中（例如刚加载），保留可识别的 id
+    await factorStore.fetchList()
+    allFactors.value = factorStore.factors
   } catch (e) {
     ElMessage.error('加载因子列表失败')
     allFactors.value = []

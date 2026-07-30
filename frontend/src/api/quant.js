@@ -69,6 +69,11 @@ export function integrityCheck(universe) {
   return request.get('/quant/data/integrity-check', { params: { universe } })
 }
 
+// 同步申万行业分类数据
+export function syncIndustry() {
+  return request.post('/quant/data/sync-industry')
+}
+
 
 // === 因子相关 ===
 

@@ -5,21 +5,12 @@
       <h1 class="page-title">{{ pageTitle }}</h1>
     </div>
 
-    <!-- 右侧：搜索 + 状态 + 主题 + 用户 -->
+    <!-- 右侧：状态 + 主题 + 用户 -->
     <div class="topbar-right">
-      <!-- 搜索框 -->
-      <el-input
-        v-model="searchQuery"
-        class="search-input"
-        placeholder="搜索因子、策略..."
-        :prefix-icon="Search"
-        @keyup.enter="handleSearch"
-      />
-
-      <!-- 状态徽章 -->
-      <span class="status-badge">
+      <!-- 状态徽章：动态反映 qlib 数据可用性 -->
+      <span class="status-badge" :class="{ 'is-error': !dataReady }">
         <span class="status-dot"></span>
-        数据已就绪
+        {{ dataReady ? '数据已就绪' : '数据未就绪' }}
       </span>
 
       <!-- 主题切换 -->
@@ -41,29 +32,34 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Sunny, Moon } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
+import { getQlibStatus } from '@/api/quant'
 
 const appStore = useAppStore()
 const route = useRoute()
 
 const isDark = computed(() => appStore.theme === 'dark')
 const pageTitle = computed(() => route.meta.title || 'QuantLab')
-const searchQuery = ref('')
+const dataReady = ref(false)
 
 function toggleTheme() {
   appStore.toggleTheme()
 }
 
-// 搜索：输入后回车提示开发中
-function handleSearch() {
-  if (searchQuery.value.trim()) {
-    ElMessage.info('搜索功能开发中')
+// 动态读取 qlib 数据可用性，反映真实状态
+async function fetchDataStatus() {
+  try {
+    const data = await getQlibStatus()
+    dataReady.value = !!(data?.available ?? data?.qlib_available ?? data?.ok)
+  } catch (e) {
+    dataReady.value = false
   }
 }
+
+onMounted(fetchDataStatus)
 </script>
 
 <style scoped lang="scss">
@@ -96,31 +92,6 @@ function handleSearch() {
   gap: 16px;
 }
 
-// 搜索框
-.search-input {
-  width: 320px;
-
-  :deep(.el-input__wrapper) {
-    height: 36px;
-    background-color: var(--bg-secondary) !important;
-    border-radius: 8px !important;
-    box-shadow: none !important;
-    padding: 0 12px;
-  }
-
-  :deep(.el-input__inner) {
-    font-size: 13px;
-
-    &::placeholder {
-      color: var(--text-placeholder);
-    }
-  }
-
-  :deep(.el-input__prefix) {
-    color: var(--text-tertiary);
-  }
-}
-
 // 状态徽章
 .status-badge {
   display: inline-flex;
@@ -132,6 +103,10 @@ function handleSearch() {
   font-size: 12px;
   color: var(--text-secondary);
   white-space: nowrap;
+
+  &.is-error .status-dot {
+    background: var(--danger);
+  }
 }
 
 .status-dot {

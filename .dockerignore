@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# 数据与日志（量大且可重新生成）
+data/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# Git / IDE
+.git/
+.gitignore
+.trae/
+.claude/
+.vscode/
+.idea/
+.DS_Store
+
+# 临时/探针
+_probe.py
+*.bak

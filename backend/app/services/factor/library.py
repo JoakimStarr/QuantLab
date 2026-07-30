@@ -99,9 +99,9 @@ async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = No
     period = settings.quant.get("default_backtest_period", {})
     start = start or period.get("start", "2020-01-01")
     end = end or period.get("end", "2024-12-31")
-    # 同步 qlib 调用放入线程池，避免阻塞事件循环
-    loop = asyncio.get_running_loop()
-    metrics = await loop.run_in_executor(None, _eval, factor["expression"], start, end)
+    # CPU 密集的因子评价走进程池，避免阻塞事件循环
+    from app.core.executor import run_cpu
+    metrics = await run_cpu(_eval, factor["expression"], start, end)
     await update_factor_metrics(factor_id, metrics)
     return metrics
 

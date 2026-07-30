@@ -1,6 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/auth/Login.vue'),
+    meta: { title: '登录', public: true }
+  },
   {
     path: '/',
     component: () => import('@/components/layout/AppLayout.vue'),
@@ -94,17 +101,36 @@ const routes = [
       {
         path: ':pathMatch(.*)*',
         name: 'NotFound',
-        component: () => import('@/views/quant/Dashboard.vue'),
+        component: () => import('@/views/quant/NotFound.vue'),
         meta: { title: '页面不存在' }
       },
     ]
   }
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior(to, from, savedPosition) {
     return savedPosition || { top: 0 }
   }
 })
+
+// 鉴权守卫：后端开启鉴权且未登录时，跳转登录页
+router.beforeEach((to, from, next) => {
+  const authStore = useAuthStore()
+
+  if (to.meta.public) {
+    // 鉴权未开启时访问登录页 -> 回首页
+    if (to.name === 'Login' && !authStore.authEnabled && authStore.statusLoaded) {
+      return next({ path: '/' })
+    }
+    return next()
+  }
+  if (authStore.needAuth) {
+    return next({ name: 'Login', query: { redirect: to.fullPath } })
+  }
+  next()
+})
+
+export default router

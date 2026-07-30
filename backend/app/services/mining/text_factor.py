@@ -13,6 +13,7 @@ from app.core.database import async_session
 from app.core.config import settings
 from app.models.mining_task import MiningTask
 from app.services.factor.library import add_factor, update_factor_metrics
+from app.services.mining.task_utils import update_task_status as _update_task
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,3 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
                            finished_at=datetime.now())
         raise
 
-
-async def _update_task(task_id: int, **kwargs):
-    from app.services.mining.task_utils import update_task_status
-    await update_task_status(task_id, **kwargs)

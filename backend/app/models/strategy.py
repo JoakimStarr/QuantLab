@@ -19,6 +19,8 @@ class Strategy(Base):
     n_drop = Column(Integer, default=5)
     rebalance_freq = Column(String, default="day")  # day / week / month
     benchmark = Column(String, default="SH000300")
+    # 是否启用因子 Gram-Schmidt 正交化（0/1）
+    orthogonalize = Column(Integer, default=0)
 
     status = Column(String, default="active")  # active / archived
     created_at = Column(TIMESTAMP, default=func.now())

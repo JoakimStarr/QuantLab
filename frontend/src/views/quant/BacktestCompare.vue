@@ -172,34 +172,11 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, RadarChart } from 'echarts/charts'
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent,
-  RadarComponent
-} from 'echarts/components'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { compareBacktests } from '@/api/quant'
 import { listAllBacktestResults } from '@/api/strategy'
 
-use([
-  CanvasRenderer,
-  LineChart,
-  BarChart,
-  RadarChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent,
-  RadarComponent
-])
 
 const route = useRoute()
 const router = useRouter()
@@ -463,9 +440,19 @@ function numClass(val) {
 
 // 标准化净值数据
 function normalizeNavSeries(data) {
-  if (data?.nav_series) return data.nav_series
-  if (data?.curve_series) return data.curve_series
-  if (data?.series) return data.series
+  // 后端返回 nav_curves: [{ result_id, curve: [1.0, 1.01, ...] }]
+  // 转换为 { resultId: [{ date, nav }] }（用索引作为日期占位）
+  const curves = data?.nav_curves || data?.nav_series || data?.curve_series || data?.series
+  if (Array.isArray(curves)) {
+    const map = {}
+    curves.forEach(item => {
+      const rid = String(item.result_id)
+      const arr = item.curve || item.nav || []
+      map[rid] = arr.map((v, i) => ({ date: `D${i + 1}`, nav: Number(v) }))
+    })
+    return map
+  }
+  if (curves && typeof curves === 'object') return curves
   return {}
 }
 
@@ -522,8 +509,8 @@ async function startCompare() {
   loading.value = true
   try {
     const result = await compareBacktests(selectedIds.value)
-    if (result?.results) {
-      resultList.value = result.results
+    if (result?.comparison) {
+      resultList.value = result.comparison
     } else if (Array.isArray(result)) {
       resultList.value = result
     }
@@ -547,8 +534,8 @@ async function loadCompareData(ids) {
   loading.value = true
   try {
     const result = await compareBacktests(ids)
-    if (result?.results) {
-      resultList.value = result.results
+    if (result?.comparison) {
+      resultList.value = result.comparison
     } else if (Array.isArray(result)) {
       resultList.value = result
     }

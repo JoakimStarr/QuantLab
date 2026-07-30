@@ -6,6 +6,7 @@ aiosqlite>=0.20.0
 # AKShare 版本锁定 - 接口变动频繁，升级需测试
 akshare==1.18.63
 httpx>=0.27.0
+openai>=1.50.0
 requests>=2.32.0
 pandas>=2.2.0
 numpy>=1.26.0
@@ -22,6 +23,10 @@ python-dotenv>=1.0.1
 structlog>=24.4.0
 pydantic>=2.8.0
 
+# 安全：口令哈希 + 登录限流
+bcrypt>=4.0
+slowapi>=0.1.9
+
 # 量化回测与AI因子挖掘
 # pyqlib: 微软AI量化框架（因子评价/回测/组合分析），CPU密集型，worker进程调用
 # 注意：qlib 依赖 mlflow，需 protobuf<4（5.x移除service模块）与 setuptools<81（83移除pkg_resources）
@@ -30,3 +35,6 @@ protobuf<4
 setuptools<81
 # gplearn: 符号回归/遗传规划自动搜索因子表达式
 gplearn>=0.4.2
+cvxpy>=1.5
+# 数据库迁移
+alembic>=1.13
