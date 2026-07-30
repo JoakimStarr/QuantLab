@@ -158,6 +158,9 @@ async def get_factor_decay(factor_id: int, max_lag: int = 20) -> dict:
         except FileNotFoundError as e:
             # AutoML bundle 丢失等不可恢复错误：返回友好错误而非 500
             return {"error": f"AutoML 模型不可用: {e}"}
+        except ValueError as e:
+            # 文本因子等不支持实时计算的表达式：返回友好错误
+            return {"error": str(e)}
 
         # 更新数据库
         async with async_session() as session:

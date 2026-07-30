@@ -11,7 +11,7 @@ ai_provider:
   force_json_output: true
   primary:
     base_url: https://opencode.ai/zen/v1/
-    max_tokens: 4096
+    max_tokens: 8192
     model: deepseek-v4-flash-free
     provider: opencodezen
     temperature: 0.3

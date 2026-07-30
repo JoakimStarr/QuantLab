@@ -36,8 +36,9 @@ class LLMClient:
         if not api_key:
             raise AINotConfiguredError(f"API Key 未配置 for {model}")
         self.api_key = api_key
-        # base_url 仅作为 provider 标识返回，OpenAI SDK 自行拼接 /chat/completions
-        self.base_url = base_url.rstrip("/")
+        # base_url 末尾必须保留斜杠：openai SDK 用 httpx.URL.join() 拼接路径，
+        # 若末尾无斜杠，按 RFC3986 最后一段会被替换（如 .../v4 -> .../chat/completions），导致 404
+        self.base_url = base_url if base_url.endswith("/") else base_url + "/"
         self.model = model
         self.timeout = timeout
         self.max_tokens = max_tokens

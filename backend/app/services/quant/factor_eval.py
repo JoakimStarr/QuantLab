@@ -147,6 +147,12 @@ def load_factor_values(
         logger.info("加载 AutoML 因子: method=%s ids=%s", method, ids)
         df = _load_automl_factor(method, ids, start, end, universe=universe)
     else:
+        # 文本因子等需要外部数据的算子 qlib 未注册，提前给出明确错误而非 AttributeError
+        _unsupported = ("TextSentiment", "NewsSentiment")
+        if any(op in (factor_expr or "") for op in _unsupported):
+            raise ValueError(
+                f"因子表达式含未注册算子（{factor_expr}），文本因子需重新挖掘以预计算值，不支持实时计算"
+            )
         init_qlib()
         from qlib.data import D
         # 防御性 look-ahead 检查：禁止负数 Ref（未来数据），即便表达式绕过创建时校验

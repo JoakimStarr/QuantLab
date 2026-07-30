@@ -66,10 +66,20 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
         def _load_all():
             frames = []
             names = []
+            skipped = []
             for f in factors:
-                df = load_factor_values(f.expression, start, end).rename(columns={"factor": f.name})
-                frames.append(df)
-                names.append(f.name)
+                try:
+                    df = load_factor_values(f.expression, start, end).rename(columns={"factor": f.name})
+                    frames.append(df)
+                    names.append(f.name)
+                except (FileNotFoundError, ValueError) as e:
+                    # AutoML bundle 丢失 / 文本算子不可用：跳过该因子而非整任务失败
+                    logger.warning("AutoML 跳过因子 %s (id=%s): %s", f.name, f.id, e)
+                    skipped.append(f.name)
+            if not frames:
+                raise ValueError(f"所有基础因子均不可用，无法训练 AutoML（跳过: {skipped}）")
+            if skipped:
+                logger.warning("AutoML 训练跳过 %d 个不可用因子: %s", len(skipped), skipped)
             X_df = pd.concat(frames, axis=1)
             label_df = load_label(start, end)
             return X_df, label_df, names
