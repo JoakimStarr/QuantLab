@@ -67,3 +67,7 @@ htmlcov/
 .ruff_cache/
 .pytest_cache/
 .claude/
+
+# SQLite runtime files
+data/*.db-shm
+data/*.db-wal
