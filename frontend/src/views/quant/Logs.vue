@@ -76,7 +76,7 @@
           :total="total"
           layout="total, prev, pager, next"
           @current-change="onPageChange"
-          small
+          size="small"
         />
       </div>
     </SectionCard>

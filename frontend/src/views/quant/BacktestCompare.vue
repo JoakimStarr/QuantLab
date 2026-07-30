@@ -412,7 +412,7 @@ const radarOption = computed(() => {
   })
   return {
     tooltip: { trigger: 'item' },
-    legend: { top: 0, textStyle: { color: '#5b6b85' }, data: resultList.value.map(r => r.name) },
+    legend: { top: 0, textStyle: { color: '#5b6b85' }, data: data.map(d => d.name) },
     radar: {
       indicator: indicators,
       shape: 'polygon',
@@ -518,7 +518,8 @@ async function startCompare() {
     // 对比成功后自动收起选择器，聚焦结果
     selectorCollapsed.value = true
   } catch (e) {
-    ElMessage.error('加载对比数据失败')
+    const msg = e?.message || e?.code || '未知错误'
+    ElMessage.error(`加载对比数据失败: ${msg}`)
   } finally {
     loading.value = false
     comparing.value = false
@@ -541,7 +542,8 @@ async function loadCompareData(ids) {
     }
     curveData.value = normalizeNavSeries(result)
   } catch (e) {
-    ElMessage.error('加载对比数据失败')
+    const msg = e?.message || e?.code || '未知错误'
+    ElMessage.error(`加载对比数据失败: ${msg}`)
   } finally {
     loading.value = false
   }
