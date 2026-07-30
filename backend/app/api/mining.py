@@ -45,27 +45,23 @@ def _task_timeout(task_type: str = None) -> int:
     return int(task_cfg.get("task_timeout_seconds", 300))
 
 
-def _llm_timeout(n_candidates: int, n_rounds: int = 1) -> int:
-    """LLM 挖掘动态超时：按候选因子数与迭代轮数计算。
+def _llm_timeout(n_candidates: int, n_rounds: int = 1):
+    """LLM 挖掘超时策略。
 
-    耗时构成：
-    - LLM 调用：每轮 1 次（生成 n 个因子），推理模型约 30-90s
-    - IC 评价：每个候选因子走进程池，约 5-20s/个
-    - 基础开销：DB/校验/入库等
+    LLM 耗时不可控（推理模型、provider 排队、网络抖动），固定/动态超时都容易误杀。
+    改为依赖内部原子超时 + 极大硬上限兜底：
+    - _call_llm: provider httpx timeout（config.ai_provider.*.timeout_seconds）
+    - _evaluate_safe: eval_timeout_seconds
+    - 硬上限: llm_hard_limit_seconds（默认 7200=2h，设 0 表示完全无限）
 
-    公式：base + n_rounds × (llm_call + n_candidates × eval_per_factor)
+    Returns:
+        超时秒数，或 None（完全不限时）
     """
-    llm_cfg = (settings.mining or {}).get("llm", {}) or {}
     timeouts = (settings.task or {}).get("timeouts", {}) or {}
-    # 各分量可配，缺省值取保守上限
-    base = int(timeouts.get("llm_base", 30))
-    llm_call = int(timeouts.get("llm_call_seconds", 90))
-    eval_per = int(timeouts.get("llm_eval_per_factor", 15))
-    # 兜底最小超时，避免配置异常导致过小
-    min_timeout = int(timeouts.get("llm_min", 180))
-    n = max(1, int(n_candidates or 10))
-    r = max(1, int(n_rounds or 1))
-    return max(min_timeout, base + r * (llm_call + n * eval_per))
+    hard = int(timeouts.get("llm_hard_limit_seconds", 7200))
+    if hard <= 0:
+        return None  # 完全不限时，依赖内部原子超时
+    return hard
 
 
 async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str = None, timeout: int = None) -> None:
@@ -160,7 +156,7 @@ async def get_task_api(task_id: int, db=Depends(get_db)):
 
 
 async def _run_llm_task(task_id: int, n: int):
-    """LLM 挖掘任务执行器。超时按候选因子数动态计算。"""
+    """LLM 挖掘任务执行器。不限时，依赖内部原子超时 + 硬上限兜底。"""
     from app.services.mining.llm_factor import mine_with_llm
     timeout = _llm_timeout(n, n_rounds=1)
     await _safe_run_task(task_id, lambda: mine_with_llm(task_id, n), "LLM 挖掘", timeout=timeout)
@@ -172,7 +168,7 @@ async def _run_llm_iterative_task(task_id: int, n_rounds: int, n: int):
     动态超时：基础 + 每轮增量，避免多轮挖掘共用单轮超时。
     """
     from app.services.mining.llm_factor import mine_with_llm_iterative
-    # 迭代挖掘超时按 n_rounds × n_candidates 动态计算
+    # 迭代挖掘不限时，依赖内部原子超时 + 硬上限兜底
     timeout = _llm_timeout(n, n_rounds=n_rounds)
     await _safe_run_task(
         task_id,

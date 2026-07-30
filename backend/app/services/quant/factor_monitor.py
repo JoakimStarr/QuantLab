@@ -103,6 +103,10 @@ async def detect_factor_decay(
             "is_decaying": bool(is_decaying),
             "status": "decaying" if is_decaying else "healthy",
         }
+    except (FileNotFoundError, ValueError) as e:
+        # AutoML bundle 丢失 / 文本算子不可用等不可恢复错误：降级 WARNING 跳过，不刷 ERROR
+        logger.warning("因子 %s 衰减检测跳过: %s", factor_id, e)
+        return {"factor_id": factor_id, "factor_name": factor.name, "status": "unknown", "error": str(e)}
     except Exception as e:
         logger.error("因子 %s 衰减检测失败: %s", factor_id, e)
         return {"factor_id": factor_id, "factor_name": factor.name, "status": "unknown", "error": str(e)}

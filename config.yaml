@@ -130,14 +130,10 @@ task:
   io_workers: 8               # IO 线程池大小（akshare/qlib 同步数据读取）
   task_timeout_seconds: 300          # 默认超时（兼容旧配置）
   timeouts:
-    llm: 300                         # LLM 单轮挖掘（固定兜底，_run_llm_task 已改用动态）
-    # LLM 动态超时分量：timeout = llm_base + n_rounds × (llm_call + n_candidates × llm_eval_per_factor)
-    llm_min: 180                     # 动态超时下限，避免配置异常过小
-    llm_base: 30                     # 基础开销（DB/校验/入库）
-    llm_call_seconds: 90             # 单轮 LLM 调用耗时（推理模型偏长）
-    llm_eval_per_factor: 15          # 单因子 IC 评价耗时（走进程池）
-    llm_iterative: 600               # 兼容旧配置（已由动态公式取代）
-    llm_iterative_per_round: 180     # 兼容旧配置（已由动态公式取代）
+    llm: 300                         # LLM 单轮挖掘（仅 task_type 兜底用，实际走 llm_hard_limit_seconds）
+    # LLM 挖掘不限时：依赖内部原子超时（provider timeout + eval_timeout）+ 硬上限兜底
+    # 理由：LLM 耗时不可控（推理模型/provider 排队/网络），固定超时易误杀正常任务
+    llm_hard_limit_seconds: 7200     # LLM 挖掘硬上限（默认 2h 防极端卡死；设 0 = 完全无限）
     symbolic: 1800                   # 1000×30 GP 需要长超时
     text: 900                        # 30 股串行抓新闻 + LLM 情绪
     automl: 600                      # AutoML 训练 + SHAP
