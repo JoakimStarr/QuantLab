@@ -14,9 +14,12 @@ class Settings:
         return cls._instance
 
     def _load(self):
-        load_dotenv()
+        # 显式从项目根目录加载 .env（避免 uvicorn reload / 不同 CWD 启动时找不到）
+        # config.py 路径：backend/app/core/config.py → 项目根 = parents[3]
+        _project_root = Path(os.getenv("PROJECT_ROOT") or Path(__file__).resolve().parents[3])
+        load_dotenv(_project_root / ".env", override=False)
         # 支持通过环境变量指定项目根目录（Docker 部署时需要）
-        self.PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT") or Path(__file__).resolve().parent.parent.parent.parent)
+        self.PROJECT_ROOT = _project_root
         config_path = self.PROJECT_ROOT / "config.yaml"
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
