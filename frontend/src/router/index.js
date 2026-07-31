@@ -98,6 +98,17 @@ const routes = [
         }
       },
       {
+        path: 'docs/:slug?',
+        name: 'Docs',
+        component: () => import('@/views/Docs.vue'),
+        meta: {
+          title: '技术文档',
+          icon: 'Reading',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
         path: 'system/logs',
         name: 'SystemLogs',
         component: () => import('@/views/quant/Logs.vue'),

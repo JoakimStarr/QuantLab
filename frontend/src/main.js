@@ -6,6 +6,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
+import { initAppConfig } from '@/config/app'
 import { ElMessage } from 'element-plus'
 import './styles/global.scss'
 
@@ -53,8 +54,12 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
 
-// 挂载前探测鉴权状态，确保路由守卫拿到正确结果
+// 挂载前并行加载鉴权状态与应用配置；
+// 两个 Promise 均自带 finally 兜底，单项失败不阻塞启动
 const authStore = useAuthStore()
-authStore.fetchStatus().finally(() => {
+Promise.allSettled([
+  authStore.fetchStatus(),
+  initAppConfig(),
+]).finally(() => {
   app.mount('#app')
 })

@@ -1,0 +1,157 @@
+"""技术文档加载器：扫描 docs/*.md，返回结构化目录和内容。
+
+支持的元数据 frontmatter（可选，用 python-frontmatter 解析）：
+---
+title: 文档标题
+slug: doc-id
+order: 1
+group: 分组
+summary: 一句话说明
+---
+
+无 frontmatter 时自动用文件名（去.md）作为 slug，第一行 # 标题作为 title。
+"""
+import re
+from pathlib import Path
+from typing import Optional
+
+try:
+    import frontmatter
+    HAS_FRONTMATTER = True
+except ImportError:
+    HAS_FRONTMATTER = False
+
+# backend/app/services/docs/loader.py -> backend/app/services/docs/ -> backend/app/services/ -> backend/app/ -> backend/ -> 4 上一层到 backend, 再上一层到 QuantLab
+# loader.py 位于 backend/app/services/docs/loader.py，docs/ 在 backend/ 的上一级
+# __file__ = .../backend/app/services/docs/loader.py
+# parents[0] = docs/  [1] = services/  [2] = app/  [3] = backend/  [4] = 项目根
+DOCS_DIR = Path(__file__).resolve().parents[4] / "docs"  # 项目根下的 docs/
+
+# 内置文档元数据（frontmatter 不可用时的回退）
+_BUILTIN_META = {
+    "DATA_LAYER.md": {
+        "title": "数据层架构",
+        "slug": "data-layer",
+        "order": 1,
+        "group": "架构",
+        "summary": "数据层设计：涨跌停mask、基本面PIT、资金情绪采集",
+    },
+    "TECHNICAL.md": {
+        "title": "技术选型",
+        "slug": "technical",
+        "order": 2,
+        "group": "架构",
+        "summary": "框架选型、数据流、关键设计决策",
+    },
+    "DEVELOPMENT.md": {
+        "title": "开发手册",
+        "slug": "development",
+        "order": 3,
+        "group": "开发",
+        "summary": "开发环境、构建部署、代码规范",
+    },
+    "FACTOR_ENGINE.md": {
+        "title": "因子引擎",
+        "slug": "factor-engine",
+        "order": 4,
+        "group": "因子",
+        "summary": "QLib表达式语法、因子评价指标、协同性评估",
+    },
+    "API_REFERENCE.md": {
+        "title": "API参考",
+        "slug": "api-reference",
+        "order": 5,
+        "group": "API",
+        "summary": "后端API接口文档",
+    },
+}
+
+
+def _slugify(filename: str) -> str:
+    """文件名转 slug: DATA_LAYER.md -> data-layer"""
+    name = filename.rsplit(".", 1)[0]
+    return re.sub(r"[_\s]+", "-", name).lower()
+
+def _parse_meta(path: Path) -> dict:
+    """解析 MD 文件的元数据。优先 frontmatter，回退到内置表。"""
+    content = path.read_text(encoding="utf-8")
+
+    # 内置元数据作为 base，frontmatter 解析后若提供再覆盖
+    builtin = _BUILTIN_META.get(path.name, {})
+    base = {
+        "title": builtin.get("title") or path.stem,
+        "slug": builtin.get("slug") or _slugify(path.name),
+        "order": builtin.get("order", 999),
+        "group": builtin.get("group", "未分类"),
+        "summary": builtin.get("summary", ""),
+    }
+
+    if HAS_FRONTMATTER:
+        try:
+            post = frontmatter.loads(content)
+            # frontmatter 提供时覆盖 base
+            for key in ("title", "slug", "group", "summary"):
+                v = post.get(key)
+                if v:
+                    base[key] = v
+            # order 是数字，特殊处理
+            v = post.get("order")
+            if v is not None:
+                base["order"] = v
+            body = post.content
+            return {**base, "content": body}
+        except Exception:
+            pass
+
+    # 走到此处说明没 frontmatter 或解析失败：用 base（已经包含 builtin fallback）+ 标题 regex
+    title_match = re.match(r"^#\s+(.+)$", content, re.MULTILINE)
+    if not builtin.get("title") and title_match:
+        base["title"] = title_match.group(1).strip()
+    return {**base, "content": content}
+
+
+
+def list_docs() -> list:
+    """列出所有文档（含元数据），按 order 排序。
+
+    Returns:
+        list of {slug, title, order, group, summary, file}
+    """
+    if not DOCS_DIR.exists():
+        return []
+    docs = []
+    for path in sorted(DOCS_DIR.glob("*.md")):
+        meta = _parse_meta(path)
+        docs.append({
+            "slug": meta["slug"],
+            "title": meta["title"],
+            "order": meta["order"],
+            "group": meta["group"],
+            "summary": meta["summary"],
+            "file": path.name,
+        })
+    docs.sort(key=lambda d: (d["order"], d["title"]))
+    return docs
+
+def get_doc(slug: str) -> Optional[dict]:
+    """按 slug 获取文档内容。
+
+    Returns:
+        {slug, title, order, group, summary, content, file} 或 None
+    """
+    if not DOCS_DIR.exists():
+        return None
+    for path in DOCS_DIR.glob("*.md"):
+        meta = _parse_meta(path)
+        if meta["slug"] == slug or _slugify(path.name) == slug:
+            return {
+                "slug": meta["slug"],
+                "title": meta["title"],
+                "order": meta["order"],
+                "group": meta["group"],
+                "summary": meta["summary"],
+                "content": meta["content"],
+                "file": path.name,
+            }
+    return None
+

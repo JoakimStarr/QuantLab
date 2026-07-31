@@ -67,6 +67,22 @@ class Settings:
     def app_env(self) -> str:
         return self._app_env
 
+    @property
+    def app_name(self) -> str:
+        return self.app.get("name", "QuantLab")
+
+    @property
+    def app_version(self) -> str:
+        return self.app.get("version", "0.0.0")
+
+    @property
+    def app_description(self) -> str:
+        return self.app.get("description", "")
+
+    @property
+    def app_timezone(self) -> str:
+        return self.app.get("timezone", "Asia/Shanghai")
+
     def validate_security(self) -> list[str]:
         """启动时校验安全配置，返回告警列表（非默认值则空）。"""
         warnings = []

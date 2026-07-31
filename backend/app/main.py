@@ -44,9 +44,14 @@ async def lifespan(app: FastAPI):
     shutdown_executors()
 
 
-from app.core.config import settings as _settings
-_app_kwargs = {"title": "QuantLab", "version": "2.0.0", "lifespan": lifespan}
-if _settings.app_env != "development":
+from app.core.config import settings
+_app_kwargs = {
+    "title": settings.app_name,
+    "version": settings.app_version,
+    "description": settings.app_description or None,
+    "lifespan": lifespan,
+}
+if settings.app_env != "development":
     _app_kwargs["docs_url"] = None
     _app_kwargs["redoc_url"] = None
     _app_kwargs["openapi_url"] = None
@@ -63,6 +68,10 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, general_error_handler)
 app.include_router(api_router, prefix="/api/v1")
+from app.api.config import router as config_router
+from app.api.docs import router as docs_router
+app.include_router(config_router)
+app.include_router(docs_router)
 
 
 @app.get("/health")
@@ -88,7 +97,7 @@ async def health():
     return {
         "status": status,
         "timestamp": datetime.now().isoformat(),
-        "version": "2.0.0",
+        "version": settings.app_version,
         "checks": checks,
     }
 

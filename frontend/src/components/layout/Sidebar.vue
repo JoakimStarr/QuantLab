@@ -4,9 +4,9 @@
     <div class="sidebar-logo">
       <router-link to="/" class="logo-link">
         <el-icon :size="20" class="logo-icon"><DataAnalysis /></el-icon>
-        <span class="logo-text">QuantLab</span>
+        <span class="logo-text">{{ appName }}</span>
       </router-link>
-      <span class="logo-version">v2.0.0</span>
+      <span class="logo-version">v{{ appVersion }}</span>
     </div>
 
     <!-- 导航菜单 -->
@@ -16,7 +16,7 @@
         :key="item.path"
         :to="item.path"
         class="nav-item"
-        :class="{ 'nav-item--active': route.path === item.path }"
+        :class="{ 'nav-item--active': isActive(item) }"
       >
         <el-icon :size="18" class="nav-icon"><component :is="item.icon" /></el-icon>
         <span class="nav-label">{{ item.title }}</span>
@@ -35,7 +35,7 @@
           <Moon v-else />
         </el-icon>
       </button>
-      <span class="footer-version">v2.0.0</span>
+      <span class="footer-version">v{{ appVersion }}</span>
     </div>
   </aside>
 </template>
@@ -44,11 +44,16 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { getVersion, getAppName } from '@/config/app'
 
 const appStore = useAppStore()
 const route = useRoute()
 
 const isDark = computed(() => appStore.theme === 'dark')
+
+// 从全局配置读取版本与名称（main.js 已 await initAppConfig）
+const appVersion = computed(() => getVersion())
+const appName = computed(() => getAppName())
 
 // 导航菜单项（与路由配置保持一致）
 const menuItems = [
@@ -59,8 +64,15 @@ const menuItems = [
   { path: '/quant/backtest-compare', title: '回测对比', icon: 'Histogram' },
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
+  { path: '/docs', title: '技术文档', icon: 'Reading' },
   { path: '/system/logs', title: '日志管理', icon: 'Document' },
 ]
+
+// /docs 用前缀匹配，使 /docs/data-layer 也高亮"文档"项
+function isActive(item) {
+  if (item.path === '/docs') return route.path.startsWith('/docs')
+  return route.path === item.path
+}
 
 function toggleTheme() {
   appStore.toggleTheme()
