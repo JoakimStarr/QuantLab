@@ -46,10 +46,10 @@
         <div class="docs-toc-title">目录</div>
         <ul class="docs-toc-list">
           <li v-for="item in toc" :key="item.id" :class="{ active: activeId === item.id }">
-            <a class="toc-h2" @click="scrollToHeading(item.id)">{{ item.text }}</a>
+            <a class="toc-h2" href="javascript:void(0)" @click.prevent="scrollToHeading(item.id)">{{ item.text }}</a>
             <ul v-if="item.children?.length">
               <li v-for="child in item.children" :key="child.id" :class="{ active: activeId === child.id }">
-                <a class="toc-h3" @click="scrollToHeading(child.id)">{{ child.text }}</a>
+                <a class="toc-h3" href="javascript:void(0)" @click.prevent="scrollToHeading(child.id)">{{ child.text }}</a>
               </li>
             </ul>
           </li>
@@ -212,12 +212,23 @@ function extractToc() {
     const headings = article.querySelectorAll('h2, h3')
     const items = []
     let currentH2 = null
-    headings.forEach(h => {
+    const usedIds = {} // 记录每个 id 出现次数，保证锚点 id 唯一
+    headings.forEach((h, idx) => {
       // 给每个标题补 id（用于锚点定位）
       if (!h.id) {
-        h.id = h.textContent.trim().toLowerCase()
+        let baseId = h.textContent.trim().toLowerCase()
           .replace(/[^\w\u4e00-\u9fa5]+/g, '-')
           .replace(/^-|-$/g, '')
+        // 处理后为空（纯标点等）用索引兜底，避免空 id 导致 getElementById 失败
+        if (!baseId) baseId = `heading-${idx}`
+        // 重名标题加序号后缀，保证 DOM id 唯一
+        if (usedIds[baseId]) {
+          usedIds[baseId]++
+          baseId = `${baseId}-${usedIds[baseId]}`
+        } else {
+          usedIds[baseId] = 1
+        }
+        h.id = baseId
       }
       const item = { id: h.id, text: h.textContent.trim(), level: parseInt(h.tagName[1]) }
       if (h.tagName === 'H2') {
@@ -237,9 +248,13 @@ function extractToc() {
 
 // 滚动监听：IntersectionObserver 高亮当前章节
 let observer = null
+// 点击 TOC 定位滚动期间暂停 observer，避免平滑滚动过程中 activeId 跳变闪烁
+let scrollSpyPaused = false
 function setupScrollSpy() {
   if (observer) observer.disconnect()
   observer = new IntersectionObserver((entries) => {
+    // 滚动定位期间不更新高亮
+    if (scrollSpyPaused) return
     // 找到当前在视口内的标题
     const visible = entries.filter(e => e.isIntersecting)
     if (visible.length > 0) {
@@ -256,11 +271,18 @@ function setupScrollSpy() {
 
 function scrollToHeading(id) {
   const el = document.getElementById(id)
-  if (el) {
-    const top = el.getBoundingClientRect().top + window.pageYOffset - 80 // 顶部留 80px 偏移
-    window.scrollTo({ top, behavior: 'smooth' })
-    activeId.value = id
+  if (!el) {
+    // 找不到目标标题时给出告警，便于排查 id 生成问题
+    console.warn('[Docs] scrollToHeading: 未找到目标标题, id =', id)
+    return
   }
+  // 平滑滚动期间暂停 observer，避免高亮跳变
+  scrollSpyPaused = true
+  const top = el.getBoundingClientRect().top + window.pageYOffset - 80 // 顶部留 80px 偏移
+  window.scrollTo({ top, behavior: 'smooth' })
+  activeId.value = id
+  // 平滑滚动动画约 600-800ms，结束后恢复 observer
+  window.setTimeout(() => { scrollSpyPaused = false }, 800)
 }
 
 onMounted(async () => {
