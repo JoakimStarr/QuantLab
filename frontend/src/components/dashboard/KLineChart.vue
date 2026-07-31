@@ -25,6 +25,32 @@
             @click="$emit('update:selected-period', p.key)"
           >{{ p.label }}</button>
         </div>
+        <el-radio-group
+          :model-value="timeRange"
+          size="small"
+          class="chart-timerange"
+          @update:model-value="$emit('update:time-range', $event)"
+        >
+          <el-radio-button label="1M">1月</el-radio-button>
+          <el-radio-button label="3M">3月</el-radio-button>
+          <el-radio-button label="6M">6月</el-radio-button>
+          <el-radio-button label="1Y">1年</el-radio-button>
+          <el-radio-button label="2Y">2年</el-radio-button>
+          <el-radio-button label="ALL">全部</el-radio-button>
+          <el-radio-button label="custom">自定义</el-radio-button>
+        </el-radio-group>
+        <el-date-picker
+          v-if="timeRange === 'custom'"
+          :model-value="customRange"
+          type="daterange"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          format="YYYY-MM-DD"
+          value-format="YYYY-MM-DD"
+          size="small"
+          class="chart-daterange"
+          @update:model-value="$emit('update:custom-range', $event)"
+        />
         <el-checkbox-group
           :model-value="activeIndicators"
           size="small"
@@ -62,10 +88,18 @@ const props = defineProps({
   selectedPeriod: { type: String, default: '1d' },
   activeIndicators: { type: Array, default: () => ['MA'] },
   periods: { type: Array, default: () => [] },
-  klineLoading: { type: Boolean, default: false }
+  klineLoading: { type: Boolean, default: false },
+  timeRange: { type: String, default: '2Y' },
+  customRange: { type: Array, default: () => null },
 })
 
-defineEmits(['update:selected-index', 'update:selected-period', 'update:active-indicators'])
+defineEmits([
+  'update:selected-index',
+  'update:selected-period',
+  'update:active-indicators',
+  'update:time-range',
+  'update:custom-range',
+])
 
 const klineDates = computed(() => props.klineItems.map(k => k.date))
 const klineOhlc = computed(() => props.klineItems.map(k => [k.open, k.close, k.low, k.high]))
@@ -248,6 +282,8 @@ const klineOption = computed(() => {
 }
 .chart-index-select { width: 130px; }
 .chart-range { display: flex; gap: 4px; }
+.chart-timerange { margin-left: 4px; }
+.chart-daterange { width: 240px !important; margin-left: 4px; }
 .chart-indicators { margin-left: 4px; }
 .chart-range-btn {
   border: none; background: transparent; color: var(--text-tertiary);

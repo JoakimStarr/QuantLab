@@ -24,9 +24,13 @@
       :active-indicators="activeIndicators"
       :periods="periods"
       :kline-loading="klineLoading"
+      :time-range="timeRange"
+      :custom-range="customRange"
       @update:selected-index="selectedIndex = $event"
       @update:selected-period="selectedPeriod = $event"
       @update:active-indicators="activeIndicators = $event"
+      @update:time-range="timeRange = $event"
+      @update:custom-range="customRange = $event"
     />
 
     <el-row :gutter="16">
@@ -84,6 +88,9 @@ const klineItems = ref([])
 const overviewItems = ref([])
 const klineLoading = ref(false)
 const activeIndicators = ref(['MA'])
+// 时间范围：1月/3月/6月/1年/2年/全部/自定义，默认 2 年（用户明确要求）
+const timeRange = ref('2Y')
+const customRange = ref(null)
 
 const periods = [
   { key: '1d', label: '日线' },
@@ -101,10 +108,44 @@ const dashboardStats = computed(() => ({
   backtestTotal: backtestTotal.value
 }))
 
+function formatDate(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// 时间范围 → 实际起止日期；ALL/custom 未选完整区间时 start/end 为 null，交给后端默认
+function rangeToDates(range, custom) {
+  if (range === 'custom') {
+    if (Array.isArray(custom) && custom.length === 2 && custom[0] && custom[1]) {
+      return { start: custom[0], end: custom[1] }
+    }
+    return { start: null, end: null }
+  }
+  if (range === 'ALL') return { start: null, end: null }
+  const end = new Date()
+  const start = new Date()
+  switch (range) {
+    case '1M': start.setMonth(start.getMonth() - 1); break
+    case '3M': start.setMonth(start.getMonth() - 3); break
+    case '6M': start.setMonth(start.getMonth() - 6); break
+    case '1Y': start.setFullYear(start.getFullYear() - 1); break
+    case '2Y': start.setFullYear(start.getFullYear() - 2); break
+    default: return { start: null, end: null }
+  }
+  return { start: formatDate(start), end: formatDate(end) }
+}
+
 async function loadKline() {
   klineLoading.value = true
   try {
-    const res = await getIndexKline(selectedIndex.value, { period: selectedPeriod.value, limit: 120 })
+    const { start, end } = rangeToDates(timeRange.value, customRange.value)
+    // 后端 limit 上限 500，2 年日线 ≈ 486 条刚好覆盖；ALL 时不传 start_date，由后端按 limit*2 天回溯
+    const params = { period: selectedPeriod.value, limit: 500 }
+    if (start) params.start_date = start
+    if (end) params.end_date = end
+    const res = await getIndexKline(selectedIndex.value, params)
     klineItems.value = res?.items ?? []
   } catch {
     klineItems.value = []
@@ -161,7 +202,7 @@ function refreshAll() {
   loadKline()
 }
 
-watch([selectedIndex, selectedPeriod], () => loadKline())
+watch([selectedIndex, selectedPeriod, timeRange, customRange], () => loadKline())
 
 onMounted(() => {
   loadAll()

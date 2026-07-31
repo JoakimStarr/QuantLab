@@ -352,6 +352,15 @@ async def incremental_sync_eod(
                 skip_count += 1
                 continue
 
+            # 过滤盘中不完整数据：15:00 前为 A 股交易时段，当日 bar 不完整。
+            # EOD 数据应只含完整交易日，避免"昨天的数据今天同步被算到今天"。
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if datetime.now().hour < 15:
+                df = df[df["date"] != today_str]
+                if df.empty:
+                    skip_count += 1
+                    continue
+
             # 收集新日期
             for d in df["date"].tolist():
                 if d not in cal_set:

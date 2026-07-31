@@ -1,56 +1,25 @@
 <template>
   <PageContainer>
-    <div class="docs-page">
-      <!-- 左侧文档目录 -->
-      <aside class="docs-sidebar">
-        <div class="docs-sidebar-header">
-          <h3>{{ appName }}</h3>
-          <span class="docs-version">v{{ version }}</span>
-        </div>
-        <el-input
-          v-model="searchKeyword"
-          placeholder="搜索文档..."
-          clearable
-          size="default"
-          class="docs-search"
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
-        <el-menu
-          :default-active="currentSlug"
-          @select="handleSelect"
-          class="docs-menu"
-        >
-          <template v-for="group in groupedDocs" :key="group.name">
-            <el-menu-item-group :title="group.name">
-              <el-menu-item
-                v-for="doc in group.docs"
-                :key="doc.slug"
-                :index="doc.slug"
-              >
-                <el-icon v-if="doc.icon"><component :is="doc.icon" /></el-icon>
-                <span>{{ doc.title }}</span>
-                <span v-if="doc.summary" class="doc-summary">{{ doc.summary }}</span>
-              </el-menu-item>
-            </el-menu-item-group>
-          </template>
-        </el-menu>
-      </aside>
-
-      <!-- 右侧文档内容 -->
-      <main class="docs-content">
-        <div v-if="loading" class="docs-loading">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span style="margin-left: 8px">加载中...</span>
-        </div>
-        <div v-else-if="!currentDoc" class="docs-empty">
-          <el-empty description="请从左侧选择文档" />
-        </div>
-        <article v-else class="markdown-body" v-html="renderedContent" />
-      </main>
+    <div class="docs-header">
+      <el-select
+        v-model="currentSlug"
+        @change="handleSelect"
+        placeholder="选择文档"
+        class="docs-select"
+      >
+        <el-option-group v-for="group in groupedDocs" :key="group.name" :label="group.name">
+          <el-option v-for="doc in group.docs" :key="doc.slug" :label="doc.title" :value="doc.slug" />
+        </el-option-group>
+      </el-select>
+      <span v-if="currentDoc?.summary" class="docs-summary">{{ currentDoc.summary }}</span>
     </div>
+    <el-divider />
+    <div v-if="loading" class="docs-loading">
+      <el-icon class="is-loading"><Loading /></el-icon>
+      <span style="margin-left: 8px">加载中...</span>
+    </div>
+    <el-empty v-else-if="!currentDoc" description="暂无文档" />
+    <article v-else class="markdown-body" v-html="renderedContent" />
   </PageContainer>
 </template>
 
@@ -70,7 +39,6 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import sql from 'highlight.js/lib/languages/sql'
 import 'highlight.js/styles/github.css'
 import { listDocs, getDoc } from '@/api/docs'
-import { getVersion, getAppName } from '@/config/app'
 import PageContainer from '@/components/common/PageContainer.vue'
 
 // 仅注册常用语言，未识别语言走 md.utils.escapeHtml 兜底（避免 highlight 抛错）
@@ -113,24 +81,12 @@ const router = useRouter()
 
 const docs = ref([])
 const currentDoc = ref(null)
+const currentSlug = ref('')
 const loading = ref(false)
-const searchKeyword = ref('')
-const appName = ref(getAppName())
-const version = ref(getVersion())
-
-const filteredDocs = computed(() => {
-  if (!searchKeyword.value) return docs.value
-  const kw = searchKeyword.value.toLowerCase()
-  return docs.value.filter(d =>
-    (d.title || '').toLowerCase().includes(kw) ||
-    (d.summary || '').toLowerCase().includes(kw) ||
-    (d.group || '').toLowerCase().includes(kw)
-  )
-})
 
 const groupedDocs = computed(() => {
   const groups = {}
-  for (const doc of filteredDocs.value) {
+  for (const doc of docs.value) {
     const g = doc.group || '默认'
     if (!groups[g]) groups[g] = []
     groups[g].push(doc)
@@ -143,8 +99,6 @@ const groupedDocs = computed(() => {
       return aOrder - bOrder
     })
 })
-
-const currentSlug = computed(() => route.params.slug || currentDoc.value?.slug || '')
 
 const renderedContent = computed(() => {
   if (!currentDoc.value?.content) return ''
@@ -179,7 +133,7 @@ async function loadDoc(slug) {
 }
 
 function handleSelect(slug) {
-  if (!slug || slug === currentSlug.value) return
+  if (!slug || slug === route.params.slug) return
   router.push({ name: 'Docs', params: { slug } })
 }
 
@@ -187,6 +141,7 @@ onMounted(async () => {
   await loadDocs()
   const slug = route.params.slug || docs.value[0]?.slug
   if (slug) {
+    currentSlug.value = slug
     if (!route.params.slug) {
       router.replace({ name: 'Docs', params: { slug } })
     }
@@ -195,85 +150,37 @@ onMounted(async () => {
 })
 
 watch(() => route.params.slug, (newSlug) => {
-  if (newSlug) loadDoc(newSlug)
+  if (newSlug && newSlug !== currentSlug.value) {
+    currentSlug.value = newSlug
+    loadDoc(newSlug)
+  }
 })
 </script>
 
 <style scoped lang="scss">
-.docs-page {
+.docs-header {
   display: flex;
-  gap: 0;
-  height: calc(100vh - 160px);
-  min-height: 600px;
-  background: #fff;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
-}
-
-.docs-sidebar {
-  width: 280px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--el-border-color-light);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--el-bg-color-page, #fafafa);
-}
-
-.docs-sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--el-border-color-light);
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  animation: fadeInUp 0.5s var(--ease-out-expo);
 }
 
-.docs-sidebar-header h3 {
-  margin: 0;
-  font-size: 16px;
+.docs-select {
+  width: 300px;
 }
 
-.docs-version {
-  font-size: 12px;
+.docs-summary {
+  font-size: 13px;
   color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-light);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-family: var(--font-mono, monospace);
 }
 
-.docs-search {
-  margin: 12px;
-}
-
-.docs-menu {
-  flex: 1;
-  overflow-y: auto;
-  border-right: none;
-}
-
-.doc-summary {
-  display: block;
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  margin-top: 2px;
-  line-height: 1.3;
-}
-
-.docs-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 32px 48px;
-  background: #fff;
-}
-
-.docs-loading,
-.docs-empty {
+.docs-loading {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100%;
+  padding: 80px 0;
   color: var(--el-text-color-secondary);
 }
 
@@ -283,6 +190,7 @@ watch(() => route.params.slug, (newSlug) => {
   line-height: 1.6;
   color: #24292e;
   word-wrap: break-word;
+  padding: 0 16px 48px;
 }
 
 .markdown-body :deep(h1),

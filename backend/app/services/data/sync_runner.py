@@ -245,7 +245,11 @@ async def run_sync_task(req: SyncDataRequest):
             if rec is None:
                 rec = StockDataStatus(universe=universe)
                 session.add(rec)
-            rec.latest_date = summary.get("latest_date") or summary.get("end_date")
+            # 仅当统计到真实数据日期才更新；避免回退到 end_date(=今天)
+            # 误把"同步执行日"当成"数据日期"（昨天的数据今天同步不应算到今天）
+            new_latest = summary.get("latest_date")
+            if new_latest:
+                rec.latest_date = new_latest
             rec.stock_count = summary.get("stock_count", summary.get("done", 0))
             rec.row_count = summary.get("row_count", summary.get("done", 0))
             rec.status = "ok"

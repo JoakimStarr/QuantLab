@@ -10,21 +10,21 @@
 
     <SectionCard class="mb-16">
       <div class="filter-bar">
-        <el-select v-model="filter.file" @change="loadLogs" style="width:160px">
+        <el-select v-model="filter.file" @change="onFilterChange" style="width:160px">
           <el-option v-for="f in logFiles" :key="f.name"
             :label="`${f.name} (${f.size_human})`" :value="f.name"
             :disabled="f.size === 0" />
         </el-select>
-        <el-select v-model="filter.level" @change="loadLogs" clearable placeholder="级别" style="width:120px">
+        <el-select v-model="filter.level" @change="onFilterChange" clearable placeholder="级别" style="width:120px">
           <el-option label="ERROR" value="ERROR" />
           <el-option label="WARNING" value="WARNING" />
           <el-option label="INFO" value="INFO" />
           <el-option label="DEBUG" value="DEBUG" />
         </el-select>
         <el-input v-model="filter.request_id" clearable placeholder="Request ID" style="width:160px"
-          @keyup.enter="loadLogs" />
+          @keyup.enter="onFilterChange" />
         <el-input v-model="filter.search" clearable placeholder="关键词搜索" style="width:200px"
-          @keyup.enter="loadLogs" />
+          @keyup.enter="onFilterChange" />
         <el-button type="primary" @click="loadLogs" :icon="Search">查询</el-button>
       </div>
     </SectionCard>
@@ -84,12 +84,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { getLogFiles, getLogs } from '@/api/logs'
+
+const STORAGE_KEY = 'quantlab:logview:state'
 
 const logFiles = ref([])
 const logs = ref([])
@@ -118,6 +120,27 @@ const levelTag = (level) => ({
 
 function rowClassName({ row }) {
   return `log-row--${(row.level || 'info').toLowerCase()}`
+}
+
+// 状态持久化：记住用户最后选中的文件、过滤条件与分页
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    file: filter.file,
+    level: filter.level,
+    request_id: filter.request_id,
+    search: filter.search,
+    limit: filter.limit,
+    offset: filter.offset,
+    currentPage: currentPage.value,
+  }))
+}
+
+function loadState() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
 }
 
 async function loadLogFiles() {
@@ -150,6 +173,13 @@ function onPageChange(page) {
   loadLogs()
 }
 
+// 过滤条件变化时回到第一页，避免新条件下停留在空页
+function onFilterChange() {
+  currentPage.value = 1
+  filter.offset = 0
+  loadLogs()
+}
+
 function searchByReqId(reqId) {
   filter.request_id = reqId
   currentPage.value = 1
@@ -167,7 +197,39 @@ function toggleAutoRefresh(val) {
   }
 }
 
-onMounted(() => { loadLogFiles(); loadLogs() })
+onMounted(async () => {
+  await loadLogFiles()
+  const saved = loadState()
+  const fileNames = logFiles.value.map(f => f.name)
+  // 保存的 file 在当前列表中则复用，否则回退到第一个（列表空时保留默认）
+  filter.file = fileNames.includes(saved.file) ? saved.file : (fileNames[0] || filter.file)
+  if (saved.level !== undefined) filter.level = saved.level
+  if (saved.request_id !== undefined) filter.request_id = saved.request_id
+  if (saved.search !== undefined) filter.search = saved.search
+  if (typeof saved.limit === 'number' && saved.limit > 0) filter.limit = saved.limit
+  if (typeof saved.currentPage === 'number' && saved.currentPage > 0) {
+    currentPage.value = saved.currentPage
+  } else if (typeof saved.offset === 'number' && saved.offset > 0) {
+    currentPage.value = Math.floor(saved.offset / filter.limit) + 1
+  }
+  filter.offset = (currentPage.value - 1) * filter.limit
+  await loadLogs()
+})
+
+// 任一关键字段变化即写入 localStorage
+watch(
+  [
+    () => filter.file,
+    () => filter.level,
+    () => filter.request_id,
+    () => filter.search,
+    () => filter.limit,
+    () => filter.offset,
+    currentPage,
+  ],
+  saveState
+)
+
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
 
