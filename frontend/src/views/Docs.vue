@@ -1,30 +1,58 @@
 <template>
-  <PageContainer>
-    <div class="docs-header">
-      <el-select
-        v-model="currentSlug"
-        @change="handleSelect"
-        placeholder="选择文档"
-        class="docs-select"
-      >
-        <el-option-group v-for="group in groupedDocs" :key="group.name" :label="group.name">
-          <el-option v-for="doc in group.docs" :key="doc.slug" :label="doc.title" :value="doc.slug" />
-        </el-option-group>
-      </el-select>
-      <span v-if="currentDoc?.summary" class="docs-summary">{{ currentDoc.summary }}</span>
+  <div class="docs-layout">
+    <!-- 顶部工具栏：文档切换 + 字号控制 -->
+    <div class="docs-toolbar">
+      <div class="docs-toolbar-left">
+        <el-select
+          v-model="currentSlug"
+          @change="handleSelect"
+          placeholder="选择文档"
+          class="docs-select"
+        >
+          <el-option-group v-for="group in groupedDocs" :key="group.name" :label="group.name">
+            <el-option v-for="doc in group.docs" :key="doc.slug" :label="doc.title" :value="doc.slug" />
+          </el-option-group>
+        </el-select>
+        <span v-if="currentDoc?.summary" class="docs-summary">{{ currentDoc.summary }}</span>
+      </div>
+      <div class="docs-toolbar-right">
+        <span class="font-size-label">{{ fontSize }}px</span>
+        <el-button-group>
+          <el-button size="small" :disabled="fontSize <= 12" @click="changeFontSize(-2)">A-</el-button>
+          <el-button size="small" :disabled="fontSize >= 22" @click="changeFontSize(2)">A+</el-button>
+        </el-button-group>
+      </div>
     </div>
+
     <el-divider />
+
     <div v-if="loading" class="docs-loading">
       <el-icon class="is-loading"><Loading /></el-icon>
       <span style="margin-left: 8px">加载中...</span>
     </div>
     <el-empty v-else-if="!currentDoc" description="暂无文档" />
-    <article v-else class="markdown-body" v-html="renderedContent" />
-  </PageContainer>
+    <div v-else class="docs-main">
+      <article class="markdown-body" v-html="renderedContent" />
+      <!-- 右侧浮动目录：仅 h2/h3，h1 作为文档标题不进目录 -->
+      <aside v-if="toc.length > 0" class="docs-toc">
+        <div class="docs-toc-title">目录</div>
+        <ul class="docs-toc-list">
+          <li v-for="item in toc" :key="item.id" :class="{ active: activeId === item.id }">
+            <a class="toc-h2" @click="scrollToHeading(item.id)">{{ item.text }}</a>
+            <ul v-if="item.children?.length">
+              <li v-for="child in item.children" :key="child.id" :class="{ active: activeId === child.id }">
+                <a class="toc-h3" @click="scrollToHeading(child.id)">{{ child.text }}</a>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </aside>
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/core'
@@ -39,7 +67,6 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import sql from 'highlight.js/lib/languages/sql'
 import 'highlight.js/styles/github.css'
 import { listDocs, getDoc } from '@/api/docs'
-import PageContainer from '@/components/common/PageContainer.vue'
 
 // 仅注册常用语言，未识别语言走 md.utils.escapeHtml 兜底（避免 highlight 抛错）
 hljs.registerLanguage('javascript', javascript)
@@ -84,6 +111,25 @@ const currentDoc = ref(null)
 const currentSlug = ref('')
 const loading = ref(false)
 
+// 右侧目录（TOC）：仅含 h2 / h3，h1 作为文档标题不进目录
+const toc = ref([]) // [{ id, text, level, children: [...] }]
+const activeId = ref('')
+
+// 字号控制：默认 16px，范围 12-22px，步进 2px，localStorage 持久化
+const FONT_KEY = 'quantlab:docs:fontsize'
+const fontSize = ref(parseInt(localStorage.getItem(FONT_KEY)) || 16)
+
+function changeFontSize(delta) {
+  const newSize = Math.max(12, Math.min(22, fontSize.value + delta))
+  fontSize.value = newSize
+  localStorage.setItem(FONT_KEY, String(newSize))
+}
+
+// 通过 CSS 变量驱动正文字号，不影响顶部工具栏与目录
+watch(fontSize, (val) => {
+  document.documentElement.style.setProperty('--docs-font-size', `${val}px`)
+}, { immediate: true })
+
 const groupedDocs = computed(() => {
   const groups = {}
   for (const doc of docs.value) {
@@ -124,9 +170,12 @@ async function loadDoc(slug) {
     currentDoc.value = await getDoc(slug)
     // 滚动到顶部
     window.scrollTo({ top: 0 })
+    // 文档切换后重新提取目录
+    extractToc()
   } catch (err) {
     console.error('[Docs] 内容加载失败', err)
     currentDoc.value = null
+    toc.value = []
   } finally {
     loading.value = false
   }
@@ -135,6 +184,65 @@ async function loadDoc(slug) {
 function handleSelect(slug) {
   if (!slug || slug === route.params.slug) return
   router.push({ name: 'Docs', params: { slug } })
+}
+
+// 从渲染后的 markdown 提取 h2/h3，构造层级目录
+function extractToc() {
+  nextTick(() => {
+    const article = document.querySelector('.markdown-body')
+    if (!article) { toc.value = []; return }
+    const headings = article.querySelectorAll('h2, h3')
+    const items = []
+    let currentH2 = null
+    headings.forEach(h => {
+      // 给每个标题补 id（用于锚点定位）
+      if (!h.id) {
+        h.id = h.textContent.trim().toLowerCase()
+          .replace(/[^\w\u4e00-\u9fa5]+/g, '-')
+          .replace(/^-|-$/g, '')
+      }
+      const item = { id: h.id, text: h.textContent.trim(), level: parseInt(h.tagName[1]) }
+      if (h.tagName === 'H2') {
+        currentH2 = { ...item, children: [] }
+        items.push(currentH2)
+      } else if (h.tagName === 'H3' && currentH2) {
+        currentH2.children.push(item)
+      } else {
+        // 没有父级 h2 的 h3 直接平铺
+        items.push(item)
+      }
+    })
+    toc.value = items
+    setupScrollSpy()
+  })
+}
+
+// 滚动监听：IntersectionObserver 高亮当前章节
+let observer = null
+function setupScrollSpy() {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    // 找到当前在视口内的标题
+    const visible = entries.filter(e => e.isIntersecting)
+    if (visible.length > 0) {
+      activeId.value = visible[0].target.id
+    }
+  }, { rootMargin: '-80px 0px -70% 0px' }) // 顶部偏移 80px，底部 70% 不可见才算离开
+
+  nextTick(() => {
+    document.querySelectorAll('.markdown-body h2, .markdown-body h3').forEach(h => {
+      observer.observe(h)
+    })
+  })
+}
+
+function scrollToHeading(id) {
+  const el = document.getElementById(id)
+  if (el) {
+    const top = el.getBoundingClientRect().top + window.pageYOffset - 80 // 顶部留 80px 偏移
+    window.scrollTo({ top, behavior: 'smooth' })
+    activeId.value = id
+  }
 }
 
 onMounted(async () => {
@@ -155,16 +263,41 @@ watch(() => route.params.slug, (newSlug) => {
     loadDoc(newSlug)
   }
 })
+
+// 组件卸载时断开观察者，避免内存泄漏
+onUnmounted(() => {
+  if (observer) observer.disconnect()
+})
 </script>
 
 <style scoped lang="scss">
-.docs-header {
+.docs-layout {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 32px 48px;
+}
+
+.docs-toolbar {
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
   padding: 8px 0;
-  animation: fadeInUp 0.5s var(--ease-out-expo);
+  animation: fadeInUp 0.5s var(--ease-out-expo, ease-out);
+}
+
+.docs-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.docs-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .docs-select {
@@ -176,6 +309,13 @@ watch(() => route.params.slug, (newSlug) => {
   color: var(--el-text-color-secondary);
 }
 
+.font-size-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  min-width: 40px;
+  text-align: right;
+}
+
 .docs-loading {
   display: flex;
   justify-content: center;
@@ -184,13 +324,21 @@ watch(() => route.params.slug, (newSlug) => {
   color: var(--el-text-color-secondary);
 }
 
+.docs-main {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 32px;
+  align-items: start;
+}
+
 .markdown-body {
-  max-width: 900px;
+  max-width: 880px;
   margin: 0 auto;
   line-height: 1.6;
   color: #24292e;
   word-wrap: break-word;
   padding: 0 16px 48px;
+  font-size: var(--docs-font-size, 16px);
 }
 
 .markdown-body :deep(h1),
@@ -201,6 +349,7 @@ watch(() => route.params.slug, (newSlug) => {
   margin-bottom: 16px;
   font-weight: 600;
   line-height: 1.25;
+  scroll-margin-top: 80px; // 锚点跳转时顶部留 80px
 }
 
 .markdown-body :deep(h1) {
@@ -270,5 +419,81 @@ watch(() => route.params.slug, (newSlug) => {
 
 .markdown-body :deep(img) {
   max-width: 100%;
+}
+
+// 右侧浮动目录
+.docs-toc {
+  position: sticky;
+  top: 80px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: 0 4px;
+}
+
+.docs-toc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+
+.docs-toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  // 嵌套 h3 列表
+  ul {
+    list-style: none;
+    padding-left: 14px;
+    margin: 0;
+  }
+
+  li {
+    margin: 0;
+  }
+
+  a {
+    display: block;
+    padding: 6px 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--el-text-color-secondary);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+
+    &:hover {
+      color: var(--primary, #409eff);
+      background: var(--el-fill-color-light, #f5f7fa);
+    }
+  }
+
+  .toc-h3 {
+    font-size: 12px;
+  }
+
+  // 当前章节高亮
+  li.active > a {
+    color: var(--primary, #409eff);
+    font-weight: 600;
+    border-left-color: var(--primary, #409eff);
+  }
+}
+
+// 窄屏隐藏 TOC，正文撑满
+@media (max-width: 1200px) {
+  .docs-main {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-toc {
+    display: none;
+  }
+
+  .markdown-body {
+    margin: 0 auto;
+  }
 }
 </style>
