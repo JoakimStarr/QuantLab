@@ -1,27 +1,36 @@
-from contextlib import asynccontextmanager
-import os
 import logging
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, WebSocket, Query
-from fastapi.responses import RedirectResponse, FileResponse
+
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi import HTTPException
-from sqlalchemy import text
-from app.core.database import init_db
-from app.core.logging_config import setup_logging
-from app.core.middleware import setup_middleware
-from app.core.errors import (
-    AppError, app_error_handler, general_error_handler,
-    validation_error_handler, http_exception_handler,
-)
-from app.core.scheduler import start_scheduler, stop_scheduler
-from app.core.recovery import recover_stale_sync, recover_stale_mining
-from app.core.auth import warn_insecure_config, verify_token
-from app.core.ratelimit import limiter
-from app.api.router import api_router
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.config import router as config_router
+from app.api.docs import router as docs_router
+from app.api.router import api_router
+from app.core.auth import verify_token, warn_insecure_config
+from app.core.config import settings
+from app.core.database import init_db
+from app.core.errors import (
+    AppError,
+    app_error_handler,
+    general_error_handler,
+    http_exception_handler,
+    validation_error_handler,
+)
+from app.core.logging_config import setup_logging
+from app.core.middleware import setup_middleware
+from app.core.ratelimit import limiter
+from app.core.recovery import recover_stale_mining, recover_stale_sync
+from app.core.scheduler import start_scheduler, stop_scheduler
+from app.core.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +44,17 @@ async def lifespan(app: FastAPI):
     await recover_stale_sync()
     await recover_stale_mining()
     from app.core.recovery import rerun_pending_mining
+
     await rerun_pending_mining()
     await start_scheduler()
     yield
     await stop_scheduler()
     from app.core.executor import shutdown_executors
+
     shutdown_executors()
 
 
-from app.core.config import settings
+
 _app_kwargs = {
     "title": settings.app_name,
     "version": settings.app_version,
@@ -66,9 +77,43 @@ app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, general_error_handler)
+
+# Starlette 层级的 404/405 默认会绕过 FastAPI handler，统一响应结构
+
+
+async def _starlette_not_found_handler(request: Request, exc: StarletteHTTPException):
+    """Starlette 抛 404 时（路由未匹配），统一响应结构。"""
+    return JSONResponse(
+        status_code=404,
+        content={
+            "ok": False,
+            "error": {
+                "code": "NOT_FOUND",
+                "message": f"路径不存在: {request.url.path}",
+                "status": 404,
+            },
+        },
+    )
+
+
+async def _starlette_method_not_allowed_handler(request: Request, exc: StarletteHTTPException):
+    """Starlette 抛 405 时（方法不允许），统一响应结构。"""
+    return JSONResponse(
+        status_code=405,
+        content={
+            "ok": False,
+            "error": {
+                "code": "METHOD_NOT_ALLOWED",
+                "message": f"{request.method} 不被允许: {request.url.path}",
+                "status": 405,
+            },
+        },
+    )
+
+
+app.add_exception_handler(404, _starlette_not_found_handler)
+app.add_exception_handler(405, _starlette_method_not_allowed_handler)
 app.include_router(api_router, prefix="/api/v1")
-from app.api.config import router as config_router
-from app.api.docs import router as docs_router
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(docs_router, prefix="/api/v1")
 
@@ -80,6 +125,7 @@ async def health():
     # 数据库检查
     try:
         from app.core.database import engine
+
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         checks["database"] = "ok"
@@ -89,6 +135,7 @@ async def health():
     # qlib 检查
     try:
         from app.services.quant.qlib_init import is_qlib_available
+
         qlib_ok = await is_qlib_available()
         checks["qlib"] = "ok" if qlib_ok else "not_available"
     except Exception as e:
@@ -128,18 +175,19 @@ async def spa_fallback(full_path: str):
 
 
 # WebSocket 端点（添加13: WebSocket 实时推送）
-from app.core.websocket_manager import ws_manager
-from app.core.config import settings
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = Query(None)):
     """WebSocket 实时推送：同步进度、回测进度等。
 
     AUTH_ENABLED 时需通过 ?token=<jwt> 校验。
+    客户端应周期性发送 "ping" 文本帧以维持心跳；超时未 ping
+    的连接会被后台 reaper 主动 close（close code 4408）。
     """
     if settings.auth_enabled:
         if not token or verify_token(token) is None:
-            await ws.close(code=4401)
+            await ws.close(code=4401, reason="unauthorized")
             return
     await ws_manager.connect(ws)
     try:
@@ -147,8 +195,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(None)):
             # 保持连接，接收心跳
             data = await ws.receive_text()
             if data == "ping":
+                ws_manager.update_heartbeat(ws)
                 await ws_manager.send_to(ws, "pong", {"timestamp": datetime.now().isoformat()})
-    except Exception:
+            else:
+                # 任意客户端消息也算心跳（前端可能在调试时发其它消息）
+                ws_manager.update_heartbeat(ws)
+    except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.debug("WebSocket 异常断开", exc_info=True)
     finally:
         await ws_manager.disconnect(ws)

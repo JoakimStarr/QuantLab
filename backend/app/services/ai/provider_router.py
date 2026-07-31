@@ -1,12 +1,11 @@
 import logging
 import time
-from app.core.config import settings
-from app.services.ai.llm_client import LLMClient
+
+from app.core.config import is_placeholder_api_key, settings
 from app.core.errors import AIProviderUnavailableError
+from app.services.ai.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
-
-_PLACEHOLDER_KEYS = {"", "your_glm_api_key_here", "your_siliconflow_api_key_here", "your_opencodezen_api_key_here", "your_api_key_here"}
 
 
 class ProviderRouter:
@@ -32,7 +31,7 @@ class ProviderRouter:
 
         # Primary: opencodezen
         opencodezen_key = settings.opencodezen_api_key
-        if opencodezen_key and opencodezen_key not in _PLACEHOLDER_KEYS:
+        if opencodezen_key and not is_placeholder_api_key(opencodezen_key):
             try:
                 self.primary = LLMClient(
                     api_key=opencodezen_key,
@@ -47,7 +46,7 @@ class ProviderRouter:
 
         # Fallback: glm
         glm_key = settings.glm_api_key
-        if glm_key and glm_key not in _PLACEHOLDER_KEYS:
+        if glm_key and not is_placeholder_api_key(glm_key):
             try:
                 self.fallback = LLMClient(
                     api_key=glm_key,
@@ -62,7 +61,7 @@ class ProviderRouter:
 
         # Tertiary: siliconflow
         siliconflow_key = settings.siliconflow_api_key
-        if siliconflow_key and siliconflow_key not in _PLACEHOLDER_KEYS:
+        if siliconflow_key and not is_placeholder_api_key(siliconflow_key):
             try:
                 self.tertiary = LLMClient(
                     api_key=siliconflow_key,
@@ -76,7 +75,9 @@ class ProviderRouter:
                 logger.warning("Tertiary AI provider (siliconflow) 初始化失败: %s", e)
 
         if not self.primary and not self.fallback and not self.tertiary:
-            raise AIProviderUnavailableError("未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量")
+            raise AIProviderUnavailableError(
+                "未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量"
+            )
 
         self.force_json = settings.ai_provider.get("force_json_output", True)
 
@@ -100,8 +101,7 @@ class ProviderRouter:
         for name, fn in providers:
             elapsed = time.monotonic() - start
             if elapsed > budget:
-                logger.warning("AI Provider 路由预算耗尽 (%.1fs/%ss)，跳过 %s",
-                               elapsed, budget, name)
+                logger.warning("AI Provider 路由预算耗尽 (%.1fs/%ss)，跳过 %s", elapsed, budget, name)
                 break
             try:
                 result = await fn(messages, self.force_json)

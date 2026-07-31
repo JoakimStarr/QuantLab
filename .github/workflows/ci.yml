@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  backend:
+  backend-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +23,57 @@ jobs:
         run: ruff check backend/
       - name: Ruff format check
         run: ruff format --check backend/
-      - name: Pytest with coverage
-        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=40
+
+  backend-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install pip-audit & bandit
+        run: |
+          pip install --upgrade pip
+          pip install pip-audit bandit
+      - name: pip-audit (依赖漏洞扫描)
+        run: pip-audit -r requirements.txt --strict
+      - name: bandit (静态安全扫描)
+        run: bandit -q -r backend/app -lll -ii
+
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: quantlab
+          POSTGRES_PASSWORD: quantlab_test
+          POSTGRES_DB: quantlab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Pytest with coverage (Postgres)
         env:
           AUTH_ENABLED: "false"
+          DATABASE_URL: "postgresql+asyncpg://quantlab:quantlab_test@localhost:5432/quantlab_test"
+          SECRET_KEY: "ci_test_secret_key_not_for_production"
+        run: |
+          pytest --cov=app --cov-report=term-missing --cov-fail-under=40
 
   frontend:
     runs-on: ubuntu-latest
@@ -40,6 +87,9 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm install
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
       - name: Build
         working-directory: frontend
         run: npm run build
