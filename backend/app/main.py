@@ -70,8 +70,8 @@ app.add_exception_handler(Exception, general_error_handler)
 app.include_router(api_router, prefix="/api/v1")
 from app.api.config import router as config_router
 from app.api.docs import router as docs_router
-app.include_router(config_router)
-app.include_router(docs_router)
+app.include_router(config_router, prefix="/api/v1")
+app.include_router(docs_router, prefix="/api/v1")
 
 
 @app.get("/health")

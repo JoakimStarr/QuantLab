@@ -14,6 +14,14 @@ export default defineConfig({
   resolve: {
     alias: { '@': resolve(__dirname, 'src') }
   },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: 'modern-compiler',
+        silenceDeprecations: ['legacy-js-api'],
+      },
+    },
+  },
   server: {
     port: 3000,
     proxy: {

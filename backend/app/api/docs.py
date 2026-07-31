@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from app.services.docs.loader import list_docs, get_doc
 
-router = APIRouter(prefix="/api/docs", tags=["docs"])
+router = APIRouter(prefix="/docs", tags=["docs"])
 
 
 @router.get("")
