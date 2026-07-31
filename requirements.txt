@@ -33,3 +33,6 @@ gplearn>=0.4.2
 cvxpy>=1.5
 # 数据库迁移
 alembic>=1.13
+
+# baostock: A-share daily K-line / valuation / ST-flag data source (baostock_client dep)
+baostock>=0.8.9

@@ -624,3 +624,50 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 ---
 
 *文档版本：阶段1 · 最后更新：2026-07-31 · 基于代码审校增强*
+
+---
+
+## 十、baostock 数据源接入（2026-07-31）
+
+### 架构变更：三层回退
+
+```
+1. chenditc (全量历史, 工作日18:00定时, 失败→baostock)
+2. baostock (每日增量主源 + 个股首选, 失败→akshare)
+3. akshare (仅个股/指数fallback)
+```
+
+### baostock 优势
+- `query_daily_history_k_AStock(date)` 一次返回全市场某日K线（akshare需逐只爬）
+- 自带 `isST` 字段（解决ST股5%涨跌停mask bug）
+- 自带 `peTTM/pbMRQ/psTTM/pcfNcfTTM` 估值字段（重建fundamental_pit表）
+- 官方稳定，不限频
+
+### 新增模块
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| baostock客户端 | `services/data/baostock_client.py` | login单例+线程池+全市场/单股K线 |
+| EOD增量(baostock) | `services/data/eod_incremental.py` | `incremental_sync_eod(source='baostock')` |
+| 基本面PIT | `services/data/fundamental_sync.py` | `sync_fundamental_pit` + `query_fundamental_pit` |
+| 基本面模型 | `models/fundamental.py` | `FundamentalPIT` 表(code+trade_date PK) |
+| 回退链 | `services/data/sync_runner.py` | chenditc→baostock回退 |
+| 兜底API | `api/quant_data.py` | `POST /quant/data/fallback-sync` |
+
+### ST股5%涨跌停mask修复
+`_compute_tradable` 新增 `is_st` 参数：
+- baostock 返回 `isST` 字段（'1'=ST, '0'=非ST）
+- ST股涨跌停阈值从板块值（10%/20%/30%）降为5%
+- akshare fallback路径无isST，保持原逻辑（向后兼容）
+
+### fundamental_pit 表重建
+- 旧表（死代码未接入）已drop
+- 新表 schema：`code + trade_date` 复合PK + `pe_ttm/pb_mrq/ps_ttm/pcf_ncf_ttm`
+- 迁移 revision：`b2c3d4e5f6g7`
+- PIT查询：`WHERE trade_date <= 查询日 ORDER BY trade_date DESC LIMIT 1`
+
+### 手动兜底同步API
+```
+POST /api/v1/quant/data/fallback-sync
+  ?days=5          # 回溯天数(1-60)
+  &source=baostock # baostock(推荐) / akshare
+```

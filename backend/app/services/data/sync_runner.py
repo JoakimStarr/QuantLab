@@ -165,16 +165,33 @@ async def _sync_via_chenditc(universe: str) -> dict:
     }
 
 
-async def _sync_via_akshare(universe: str, req: SyncDataRequest) -> dict:
-    """通过 akshare 增量同步 EOD 数据（国内源，访问快）。"""
+async def _incremental_sync(req: SyncDataRequest, universe: str, source: str, days: int) -> dict:
+    """通过指定数据源（baostock/akshare）增量同步 EOD 数据。
+
+    依赖契约（并行开发中）:
+        app.services.data.eod_incremental.incremental_sync_eod
+            (days, universe, source, overwrite) -> dict  # 同步函数，在进程池中执行
+
+    Args:
+        req: 同步请求（保留以兼容调用方）
+        universe: 股票池
+        source: 数据源 'baostock'(一次拉全市场) / 'akshare'(逐只爬)
+        days: 回溯天数
+
+    Returns:
+        dict: 含 latest_date/stock_count/row_count/qlib_dir/data_source 等字段的摘要
+    """
     from app.services.data.eod_incremental import incremental_sync_eod
     from app.services.data.sync_progress import init_progress, update_progress, clear_progress
+    from app.core.executor import run_cpu
 
-    days = req.days or 30
-    init_progress(universe, "akshare", total_mb=0)
-    update_progress(pct=0, status="running", message=f"正在通过akshare拉取{universe}最近{days}天EOD数据...")
+    init_progress(universe, source, total_mb=0)
+    update_progress(pct=0, status="running",
+                    message=f"正在通过{source}拉取{universe}最近{days}天EOD数据...")
     try:
-        result = await incremental_sync_eod(universe=universe, days=days)
+        # 在 CPU 进程池中执行同步函数（CPU密集+IO，避免阻塞事件循环）
+        result = await run_cpu(incremental_sync_eod,
+                               days=days, universe=universe, source=source)
         if result.get("ok"):
             success = result.get("success", 0)
             failed = result.get("failed", 0)
@@ -182,12 +199,12 @@ async def _sync_via_akshare(universe: str, req: SyncDataRequest) -> dict:
             if success == 0:
                 update_progress(pct=100, status="failed",
                                 error=f"全部股票拉取失败（共{result.get('total_stocks', 0)}只）")
-                raise ValueError("akshare拉取全部失败，可能被反爬。建议检查网络或使用chenditc数据源")
+                raise ValueError(f"{source}拉取全部失败，可能被反爬或数据源不可用")
             update_progress(pct=100, status="done",
                             message=f"同步完成：成功{success}只，失败{failed}只，新增{len(new_dates)}个交易日")
             stats = collect_qlib_stats(settings.qlib_provider_path)
             return {
-                "universe": universe, "data_source": "akshare", "days": days,
+                "universe": universe, "data_source": source, "days": days,
                 "success": success, "failed": failed, "new_dates": new_dates,
                 "total_stocks": result.get("total_stocks", 0),
                 "latest_date": stats["latest_date"], "stock_count": stats["stock_count"],
@@ -204,10 +221,69 @@ async def _sync_via_akshare(universe: str, req: SyncDataRequest) -> dict:
         clear_progress()
 
 
-async def run_sync_task(req: SyncDataRequest):
-    """后台执行数据同步（独立 session）。
+async def _try_baostock_incremental(req: SyncDataRequest) -> dict:
+    """用 baostock 做增量同步（一次拉全市场，推荐兜底源）。
 
-    根据 config.quant.data_source 选择数据源：chenditc（默认）/ akshare（兜底）。
+    依赖 baostock_client.fetch_daily_all_a_stock_sync（并行开发中）。
+    """
+    universe = req.universe or "all"  # baostock 一次拉全市场
+    days = req.days or 5
+    return await _incremental_sync(req, universe, "baostock", days)
+
+
+async def _try_akshare_incremental(req: SyncDataRequest) -> dict:
+    """用 akshare 逐只增量同步（慢，仅个股/指数兜底）。"""
+    universe = req.universe or settings.quant.get("universe", "csi300")
+    days = req.days or 30
+    return await _incremental_sync(req, universe, "akshare", days)
+
+
+async def _dispatch_sync(req: SyncDataRequest, universe: str, source: str) -> dict:
+    """按数据源分发同步，chenditc 失败回退 baostock 增量（三层回退链）。
+
+    回退链（source='chenditc' 默认）:
+        1. chenditc 全量（预构建 tarball，原路径保留）
+        2. baostock 增量（一次拉全市场，比 akshare 逐只快且不丢字段）
+    source='baostock': 直接 baostock 增量
+    source='akshare': akshare 逐只增量
+
+    Returns:
+        dict: 同步摘要（含 latest_date/stock_count/row_count/qlib_dir/data_source）
+    Raises:
+        Exception: 所有回退层级均失败时抛出，由 run_sync_task 捕获并标记 failed
+    """
+    if source == "chenditc":
+        # 1. chenditc 全量（原路径，保留）
+        try:
+            return await _sync_via_chenditc(universe)
+        except Exception as e:
+            logger.warning("chenditc全量失败: %s，回退 baostock 增量", e)
+        # 2. baostock 增量兜底（一次拉全市场，比 akshare 逐只快且不丢字段）
+        try:
+            result = await _try_baostock_incremental(req)
+            result["fallback"] = "baostock"
+            logger.info("已回退至 baostock 增量同步")
+            return result
+        except Exception as e:
+            logger.error("baostock 增量也失败: %s", e)
+            raise
+
+    if source == "baostock":
+        return await _try_baostock_incremental(req)
+
+    # akshare（兜底）
+    return await _try_akshare_incremental(req)
+
+
+async def run_sync_task(req: SyncDataRequest):
+    """后台执行数据同步（独立 session）— 三层回退链。
+
+    根据 config.quant.data_source 选择数据源：
+      - chenditc（默认）：chenditc 全量 → 失败回退 baostock 增量
+      - baostock：直接 baostock 增量
+      - akshare：akshare 逐只增量（兜底）
+
+    签名向后兼容：仅接收 req，无返回值（后台任务）。
     """
     universe = req.universe or settings.quant.get("universe", "csi300")
     data_source = settings.quant.get("data_source", "chenditc")
@@ -229,10 +305,7 @@ async def run_sync_task(req: SyncDataRequest):
 
     try:
         from app.services.quant.qlib_init import QlibNotAvailableError
-        if data_source == "chenditc":
-            summary = await _sync_via_chenditc(universe)
-        else:
-            summary = await _sync_via_akshare(universe, req)
+        summary = await _dispatch_sync(req, universe, data_source)
 
         async with async_session() as session:
             existing = await session.execute(

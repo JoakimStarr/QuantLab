@@ -6,7 +6,7 @@
 """
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Query
 from sqlalchemy import select, func
 
 from app.core.config import settings
@@ -166,3 +166,34 @@ async def sync_data_api(
         "start_date": req.start_date or settings.quant.get("default_backtest_period", {}).get("start"),
         "end_date": req.end_date,
     })
+
+
+@router.post("/fallback-sync", summary="手动触发兜底同步")
+async def fallback_sync_api(
+    days: int = Query(5, ge=1, le=60, description="回溯天数"),
+    source: str = Query("baostock", description="兜底源: baostock/akshare"),
+):
+    """手动触发兜底同步（当定时同步失败时用）。
+
+    - source='baostock': 用 baostock 一次拉全市场（推荐，快）
+    - source='akshare': 用 akshare 逐只爬（慢，仅个股/指数）
+
+    依赖契约（并行开发中）: eod_incremental.incremental_sync_eod(days, universe, source) -> dict
+    """
+    if source not in ("baostock", "akshare"):
+        return ApiResponse(ok=False, error={
+            "code": "INVALID_SOURCE",
+            "message": f"不支持的兜底源: {source}，仅支持 baostock/akshare",
+            "status": 400,
+        })
+    from app.services.data.eod_incremental import incremental_sync_eod
+    from app.core.executor import run_cpu
+    # baostock/akshare 均以全市场为口径拉取；在 CPU 进程池中执行同步函数
+    result = await run_cpu(incremental_sync_eod, days=days, universe="all", source=source)
+    if not result.get("ok"):
+        return ApiResponse(ok=False, error={
+            "code": "FALLBACK_SYNC_FAILED",
+            "message": result.get("error", "兜底同步失败"),
+            "status": 500,
+        })
+    return ApiResponse(ok=True, data=result)

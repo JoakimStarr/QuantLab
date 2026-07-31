@@ -49,34 +49,36 @@ def _get_limit_pct(qlib_code: str) -> float:
     return 0.10
 
 
-def _compute_tradable(df: pd.DataFrame, qlib_code: str) -> pd.DataFrame:
-    """计算可交易mask：触及涨跌停日=0.0，正常=1.0。
+def _compute_tradable(close: pd.Series, pct_change: pd.Series,
+                      code: str = None, is_st: pd.Series = None) -> pd.Series:
+    """计算可交易 mask：触及涨跌停日标记为 0.0，正常为 1.0。
 
-    优先用 df 中的 "pct_change" 列（东财源涨跌幅，单位%）判断；
-    若无该列（新浪源），用 close 的 pct_change 近似计算（复权价格在除权日可能失真，
-    但除权日极少触及涨跌停，可接受）。
+    涨跌幅阈值按板块区分（主板10%/科创创业20%/北交所30%）；若提供 is_st 标记，
+    ST 股按 5% 判定（修复 ST 股触及5%涨跌停仍被判为可交易的 bug）。
 
     Args:
-        df: 含 close 列的 DataFrame，可选含 pct_change 列
-        qlib_code: qlib代码（SH600000），用于判断涨跌停比例
+        close: 收盘价 Series（提供索引对齐基准）
+        pct_change: 涨跌幅 Series，单位为百分比（如 2.0 表示 2%）
+        code: qlib 代码（如 sz000001），用于判断板块涨跌停比例；None 时按主板10%
+        is_st: 是否 ST 的布尔 Series（baostock 提供），如有则 ST 日用 5% 阈值；
+            为 None 时按板块阈值判定（akshare fallback 路径，向后兼容）
 
     Returns:
-        df 新增 "tradable" 列（float，1.0=可交易，0.0=涨跌停不可交易）
+        pd.Series[float]: 1.0=可交易，0.0=涨跌停不可交易
     """
-    limit_pct = _get_limit_pct(qlib_code)
-    eps = 1e-4  # 浮点容差
+    # _get_limit_pct 返回分数（0.10/0.20/0.30），统一转换为百分比（10.0/20.0/30.0）
+    base_pct = _get_limit_pct(code) * 100.0
+    threshold = pd.Series(base_pct, index=close.index, dtype=float)
 
-    if "pct_change" in df.columns:
-        # 东财源涨跌幅（%），绝对值 >= 限制比例*100 - 容差 视为触及
-        threshold = limit_pct * 100 - 0.01
-        hit = df["pct_change"].abs() >= threshold
-    else:
-        # 新浪源：用close变化率近似（注意复权失真风险）
-        ret = df["close"].pct_change().fillna(0.0)
-        hit = ret.abs() >= (limit_pct - eps)
+    # ST 股按 5% 判定（仅 is_st 提供时生效，akshare 路径 is_st=None 不受影响）
+    if is_st is not None:
+        st_mask = is_st.astype(bool).reindex(close.index, fill_value=False)
+        threshold[st_mask] = 5.0
 
-    df["tradable"] = np.where(hit, 0.0, 1.0)
-    return df
+    # 涨跌幅绝对值 >= 阈值 - 容错 视为触及涨跌停（减 0.01 容忍浮点误差）
+    pct_aligned = pct_change.reindex(close.index)
+    hit = pct_aligned.abs() >= (threshold - 0.01)
+    return pd.Series(np.where(hit, 0.0, 1.0), index=close.index, dtype=float)
 
 
 def _read_bin(file_path: str):
@@ -284,31 +286,205 @@ def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
     return df
 
 
+def _gen_candidate_dates(start_date, end_date,
+                            old_calendar: list, overwrite: bool) -> list:
+    """生成候选同步日期（YYYY-MM-DD）。
+
+    遍历 [start_date, end_date] 区间内的工作日；overwrite=False 时跳过日历已有日期，
+    以减少对 baostock 的调用次数。非交易日（周末/节假日）由 baostock 返回空数据自然跳过。
+    """
+    cal_set = set(old_calendar) if old_calendar else set()
+    dates = []
+    cur = start_date
+    while cur <= end_date:
+        if cur.weekday() < 5:  # 仅工作日（周一至周五）
+            d = cur.strftime("%Y-%m-%d")
+            if overwrite or d not in cal_set:
+                dates.append(d)
+        cur += timedelta(days=1)
+    return dates
+
+
+def incremental_sync_eod_baostock(
+    dates: list,
+    codes: list,
+    provider_uri: str,
+    old_calendar: list,
+    overwrite: bool = False,
+    universe: str = "csi300",
+) -> dict:
+    """baostock 主源增量同步：对每个日期一次拉全市场，按股票分组写 bin。
+
+    流程：
+      1. 对每个 date 调 ``fetch_daily_all_a_stock_sync(date)`` 一次拉全市场
+      2. code 列从 'sh.600000' 转 qlib 格式 'sh600000'（用 from_baostock_code）
+      3. 数值列转 float，按股票池过滤
+      4. 按 code 分组，每只股票调 ``_sync_stock_bin`` 写 bin（复用复权对齐逻辑）
+      5. 提取 isST 字段供 ``_compute_tradable`` 判定 ST 5% 涨跌停
+
+    Args:
+        dates: 待同步日期列表（YYYY-MM-DD）
+        codes: 股票池 qlib 代码列表（用于过滤全市场数据）
+        provider_uri: qlib 数据目录
+        old_calendar: 现有日历
+        overwrite: 是否覆盖已有日期
+        universe: 股票池名（仅用于日志/统计）
+
+    Returns:
+        dict: {ok, source, total_stocks, success, failed, skipped, dates, new_dates, ...}
+    """
+    try:
+        from app.services.data.baostock_client import (
+            fetch_daily_all_a_stock_sync,
+            from_baostock_code,
+        )
+    except ImportError as e:
+        # baostock_client 尚未就绪（Step1 并行开发中），返回失败由上层回退 akshare
+        return {"ok": False, "error": f"baostock_client 未就绪: {e}"}
+
+    if not dates:
+        return {
+            "ok": True, "source": "baostock", "universe": universe,
+            "total_stocks": len(codes), "success": 0, "failed": 0, "skipped": 0,
+            "dates": [], "new_dates": [],
+            "calendar_before": len(old_calendar),
+            "calendar_after": len(old_calendar),
+        }
+
+    cal_set = set(old_calendar) if old_calendar else set()
+    codes_set = set(c.lower() for c in codes)
+    # 写入字段与 akshare 路径保持一致：open/high/low/close/volume + tradable
+    fields_to_write = list(FIELD_MAP.values()) + ["tradable"]
+
+    # 按股票聚合各日数据：qlib_code_lower -> list[DataFrame]
+    per_stock_rows = {}
+    all_new_dates = set()
+    fetched_dates = []
+
+    for date in dates:
+        try:
+            df_all = fetch_daily_all_a_stock_sync(date)
+        except Exception as e:
+            logger.warning("baostock 拉取 %s 失败: %s", date, e)
+            continue
+        if df_all is None or df_all.empty:
+            # 非交易日/节假日返回空，自然跳过
+            continue
+        fetched_dates.append(date)
+        if date not in cal_set:
+            all_new_dates.add(date)
+
+        # 代码转换：sh.600000 -> sh600000，并过滤到股票池
+        df_all = df_all.copy()
+        df_all["qlib_code"] = df_all["code"].apply(from_baostock_code)
+        df_all["qlib_code_lower"] = df_all["qlib_code"].str.lower()
+        df_all = df_all[df_all["qlib_code_lower"].isin(codes_set)]
+        if df_all.empty:
+            continue
+
+        # 统一日期格式为 YYYY-MM-DD（与日历一致）
+        df_all["date"] = pd.to_datetime(df_all["date"]).dt.strftime("%Y-%m-%d")
+
+        # 数值列转 float（baostock 可能返回字符串/对象类型）
+        num_cols = ["open", "high", "low", "close", "volume", "amount",
+                    "pctChg", "isST"]
+        for c in num_cols:
+            if c in df_all.columns:
+                df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
+
+        for qlib_code_lower, grp in df_all.groupby("qlib_code_lower"):
+            per_stock_rows.setdefault(qlib_code_lower, []).append(grp)
+
+    # 按股票写 bin
+    success_count = 0
+    fail_count = 0
+    for qlib_code_lower, grps in per_stock_rows.items():
+        try:
+            df = pd.concat(grps, ignore_index=True)
+            df = df.sort_values("date").reset_index(drop=True)
+            qlib_code = qlib_code_lower.upper()
+
+            # 构造写入 DataFrame（字段与 akshare 路径一致）
+            out = pd.DataFrame({
+                "date": df["date"].astype(str),
+                "open": df["open"].astype(float),
+                "high": df["high"].astype(float),
+                "low": df["low"].astype(float),
+                "close": df["close"].astype(float),
+                "volume": df["volume"].astype(float),
+                "pct_change": df["pctChg"].astype(float),
+            })
+            # isST: baostock '1'=ST, '0'=非ST，转 bool 供 ST 5% 涨跌停判定
+            if "isST" in df.columns:
+                is_st = df["isST"].astype(str) == "1"
+            else:
+                is_st = None
+            out["tradable"] = _compute_tradable(
+                out["close"], out["pct_change"], code=qlib_code, is_st=is_st,
+            )
+
+            feat_dir = os.path.join(provider_uri, "features", qlib_code_lower)
+            # 复用现有复权对齐逻辑（baostock 不复权价与旧 bin 通过 ratio 对齐）
+            _sync_stock_bin(feat_dir, out, old_calendar, fields_to_write, overwrite)
+            success_count += 1
+        except Exception as e:
+            logger.debug("baostock 写 %s 失败: %s", qlib_code_lower, e)
+            fail_count += 1
+
+    # 更新日历（合并新日期）
+    new_dates_sorted = sorted(all_new_dates)
+    if new_dates_sorted:
+        merged_cal = _merge_calendar(old_calendar, new_dates_sorted)
+        _write_calendar(provider_uri, merged_cal)
+        logger.info("baostock 日历更新: %d -> %d (新增 %d 个交易日)",
+                    len(old_calendar), len(merged_cal), len(new_dates_sorted))
+
+    skipped = max(len(codes) - success_count - fail_count, 0)
+    logger.info("baostock EOD 同步完成: 拉取日期%d, 成功%d, 失败%d, 跳过%d, 新增日期%d",
+                len(fetched_dates), success_count, fail_count, skipped,
+                len(new_dates_sorted))
+
+    return {
+        "ok": True,
+        "source": "baostock",
+        "universe": universe,
+        "total_stocks": len(codes),
+        "success": success_count,
+        "failed": fail_count,
+        "skipped": skipped,
+        "dates": fetched_dates,
+        "new_dates": new_dates_sorted,
+        "calendar_before": len(old_calendar),
+        "calendar_after": len(old_calendar) + len(new_dates_sorted),
+    }
+
+
 async def incremental_sync_eod(
     universe: str = "csi300",
     days: int = 5,
     provider_uri: str = None,
     overwrite: bool = False,
+    source: str = "baostock",
 ) -> dict:
-    """增量同步 EOD 数据（基于 akshare，国内源）
+    """增量同步 EOD 数据。
 
-    拉取最近 N 天的日K数据，转换为 qlib bin 格式追加到现有目录。
+    默认以 baostock 为主源（一次拉全市场，速度快）；baostock 失败时自动回退
+    akshare（逐只爬）。也可通过 ``source='akshare'`` 显式走原逻辑。
 
-    默认仅追加日历中不存在的新日期（overwrite=False），避免因 akshare qfq
-    与 chenditc 复权方式不同导致已有价格序列被覆盖。如需强制覆盖已有日期
-    （例如修复缺失数据），可设 overwrite=True。
+    默认仅追加日历中不存在的新日期（overwrite=False），避免不同复权方式导致
+    已有价格序列被覆盖。如需强制覆盖已有日期（例如修复缺失数据），设 overwrite=True。
 
     Args:
         universe: 股票池（csi300/csi500/all）
         days: 同步最近 N 天数据（1-30）
         provider_uri: qlib 数据目录，默认从 settings 读取
         overwrite: 是否覆盖日历中已有的日期数据（默认 False，仅追加新日期）
+        source: 数据源，'baostock'（默认主源）或 'akshare'（逐只爬 fallback）
 
     Returns:
-        dict: 同步结果，包含 ok/success/failed/new_dates 等
+        dict: 同步结果，包含 ok/source/success/failed/new_dates 等
     """
     import asyncio
-    from functools import partial
     from app.core.config import settings
 
     if provider_uri is None:
@@ -317,7 +493,8 @@ async def incremental_sync_eod(
     if not provider_uri or not os.path.exists(provider_uri):
         return {"ok": False, "error": f"qlib数据目录不存在: {provider_uri}"}
 
-    logger.info("开始增量EOD同步: universe=%s, days=%d, dir=%s", universe, days, provider_uri)
+    logger.info("开始增量EOD同步: universe=%s, days=%d, source=%s, dir=%s",
+                universe, days, source, provider_uri)
 
     # 读取股票池
     codes = _read_instruments(provider_uri, universe)
@@ -332,9 +509,66 @@ async def incremental_sync_eod(
 
     # 读取现有日历
     old_calendar = _get_calendar(provider_uri)
-    cal_set = set(old_calendar) if old_calendar else set()
 
-    # 日期范围检查：只处理日历最后一天之后或附近的数据
+    # baostock 主源：一次拉全市场，按股票分组写 bin
+    if source == "baostock":
+        candidate_dates = _gen_candidate_dates(
+            start_date, end_date, old_calendar, overwrite,
+        )
+        # 盘中排除当日（15:00 前为 A 股交易时段，当日 bar 不完整）
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if datetime.now().hour < 15 and today_str in candidate_dates:
+            candidate_dates = [d for d in candidate_dates if d != today_str]
+
+        try:
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    incremental_sync_eod_baostock,
+                    candidate_dates, codes, provider_uri, old_calendar, overwrite, universe,
+                ),
+                timeout=600,
+            )
+            # ok=True 且实际取到数据(success>0)才采纳；否则（失败/异常/桩返回空）回退 akshare
+            if result.get("ok") and result.get("success", 0) > 0:
+                return result
+            logger.warning(
+                "baostock 主源未取到数据(ok=%s, success=%d)，回退 akshare: %s",
+                result.get("ok"), result.get("success", 0), result.get("error", ""),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("baostock 主源超时，回退 akshare")
+        except Exception as e:
+            logger.warning("baostock 主源异常，回退 akshare: %s", e)
+        # 落到 akshare fallback
+
+    # akshare fallback：逐只爬
+    return await _incremental_sync_eod_akshare(
+        codes, start_str, end_str, old_calendar, provider_uri,
+        universe, days, overwrite,
+    )
+
+
+async def _incremental_sync_eod_akshare(
+    codes: list,
+    start_str: str,
+    end_str: str,
+    old_calendar: list,
+    provider_uri: str,
+    universe: str,
+    days: int,
+    overwrite: bool = False,
+) -> dict:
+    """akshare fallback 路径：逐只拉取日K数据并写 bin。
+
+    保留原 incremental_sync_eod 的逐只爬逻辑，作为 baostock 主源失败时的兜底。
+    优先东财源（含涨跌幅），失败回退新浪源（无涨跌幅，用 close 近似计算）。
+    """
+    import asyncio
+    from functools import partial
+
+    cal_set = set(old_calendar) if old_calendar else set()
     loop = asyncio.get_running_loop()
 
     success_count = 0
@@ -344,7 +578,6 @@ async def incremental_sync_eod(
 
     for i, qlib_code in enumerate(codes):
         try:
-            # 在线程池中同步调用 akshare（内部优先新浪源，回退东财源）
             fn = partial(_fetch_eod_akshare, qlib_code, start_str, end_str)
             df = await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=30)
 
@@ -352,8 +585,7 @@ async def incremental_sync_eod(
                 skip_count += 1
                 continue
 
-            # 过滤盘中不完整数据：15:00 前为 A 股交易时段，当日 bar 不完整。
-            # EOD 数据应只含完整交易日，避免"昨天的数据今天同步被算到今天"。
+            # 过滤盘中不完整数据：15:00 前为 A 股交易时段，当日 bar 不完整
             today_str = datetime.now().strftime("%Y-%m-%d")
             if datetime.now().hour < 15:
                 df = df[df["date"] != today_str]
@@ -366,8 +598,15 @@ async def incremental_sync_eod(
                 if d not in cal_set:
                     all_new_dates.add(d)
 
-            # 计算涨跌停mask
-            df = _compute_tradable(df, qlib_code)
+            # 计算涨跌停 mask（akshare 路径无 isST，is_st=None 按板块阈值，向后兼容）
+            if "pct_change" in df.columns:
+                pct = df["pct_change"]
+            else:
+                # 新浪源无涨跌幅，用 close 变化率近似（分数转百分数以统一单位）
+                pct = df["close"].pct_change().fillna(0.0) * 100.0
+            df["tradable"] = _compute_tradable(
+                df["close"], pct, code=qlib_code, is_st=None,
+            )
 
             # 为该股票写入各字段的 bin 文件（含 tradable）
             feat_dir = os.path.join(provider_uri, "features", qlib_code.lower())
@@ -398,11 +637,12 @@ async def incremental_sync_eod(
         logger.info("日历更新: %d -> %d (新增 %d 个交易日)",
                     len(old_calendar), len(merged_cal), len(new_dates_sorted))
 
-    logger.info("EOD增量同步完成: 成功%d, 失败%d, 跳过%d, 新增日期%d",
+    logger.info("EOD增量同步完成(akshare): 成功%d, 失败%d, 跳过%d, 新增日期%d",
                 success_count, fail_count, skip_count, len(new_dates_sorted))
 
     return {
         "ok": True,
+        "source": "akshare",
         "universe": universe,
         "days": days,
         "total_stocks": len(codes),
