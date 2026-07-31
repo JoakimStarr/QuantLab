@@ -76,9 +76,9 @@ async def archive_strategy_api(strategy_id: int):
     return ApiResponse(ok=True, data={"id": strategy_id, "status": "archived"})
 
 
-async def _run_backtest_task(strategy_id: int, start: str, end: str):
+async def _run_backtest_task(strategy_id: int, start: str, end: str, backend: str = "qlib"):
     try:
-        await run_strategy_backtest(strategy_id, start, end)
+        await run_strategy_backtest(strategy_id, start, end, backend=backend)
         backtest_status.set_completed(strategy_id)
     except Exception as e:
         logger.exception("策略回测失败 strategy_id=%s", strategy_id)
@@ -101,6 +101,7 @@ async def run_backtest_api(
     background_tasks: BackgroundTasks,
     start_date: str = Query(None),
     end_date: str = Query(None),
+    backend: str = Query("qlib", description="回测后端: qlib(默认,工业级) / self(自研)"),
 ):
     """触发策略回测（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
@@ -110,7 +111,7 @@ async def run_backtest_api(
     if strategy is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
     backtest_status.set_running(strategy_id)
-    background_tasks.add_task(_run_backtest_task, strategy_id, start_date, end_date)
+    background_tasks.add_task(_run_backtest_task, strategy_id, start_date, end_date, backend)
     return ApiResponse(ok=True, data={
         "message": f"策略 {strategy_id} 回测已提交（后台执行）",
         "strategy_id": strategy_id,

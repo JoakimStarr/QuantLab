@@ -88,6 +88,16 @@ const routes = [
         }
       },
       {
+        path: 'quant/factor-deep-analysis',
+        name: 'FactorDeepAnalysis',
+        component: () => import('@/views/quant/FactorDeepAnalysis.vue'),
+        meta: {
+          title: '因子深度分析',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
         path: 'system/logs',
         name: 'SystemLogs',
         component: () => import('@/views/quant/Logs.vue'),

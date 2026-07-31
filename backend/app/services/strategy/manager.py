@@ -70,7 +70,8 @@ async def _load_factor_expressions(factor_ids: list[int]) -> dict:
 
 def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method: str,
                            topk: int, n_drop: int, benchmark: str, rebalance_freq: str,
-                           start: str, end: str, orthogonalize: int = 0) -> dict:
+                           start: str, end: str, orthogonalize: int = 0,
+                           backend: str = "qlib") -> dict:
     """同步执行回测计算（在 executor 中调用，不阻塞事件循环）。"""
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values
@@ -92,7 +93,7 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
             score_df = score_df[~bj_mask]
             logger.info("回测过滤北交所股票: %d -> %d", before, len(score_df.index.get_level_values("instrument").unique()))
     bt = run_backtest(score_df, start=start, end=end, topk=topk, n_drop=n_drop,
-                      benchmark=benchmark, rebalance_freq=rebalance_freq)
+                      benchmark=benchmark, rebalance_freq=rebalance_freq, backend=backend)
     returns = bt.get("returns")
     bench = bt.get("benchmark")
     metrics = analyze_portfolio(returns, bench)
@@ -110,7 +111,8 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     return {"metrics": metrics, "nav_curve": nav_curve, "turnover": turnover_val}
 
 
-async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = None) -> dict:
+async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = None,
+                                backend: str = "qlib") -> dict:
     """执行策略回测（CPU 密集计算放入线程池，不阻塞事件循环）。
 
     流程：加载因子元数据(async) -> 回测计算(executor) -> 落库(async)
@@ -144,7 +146,11 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             skip_reasons.append(f"{meta.get('name')}(id={fid},expr={expr_str[:20]})")
             continue
         factor_exprs[meta["name"]] = meta["expression"]
-        weights[meta["name"]] = meta.get("ic") or 0.0
+        # ir_weight 用 icir 字段，ic_weight 用 ic 字段
+        if strategy["combination_method"] == "ir_weight":
+            weights[meta["name"]] = meta.get("icir") or 0.0
+        else:
+            weights[meta["name"]] = meta.get("ic") or 0.0
     if not factor_exprs:
         raise ValueError(
             f"未找到有效因子表达式。策略包含 {len(factor_ids)} 个因子，"
@@ -160,6 +166,7 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         factor_exprs, weights, strategy["combination_method"],
         strategy["topk"], strategy["n_drop"], strategy["benchmark"],
         strategy["rebalance_freq"], start, end, strategy.get("orthogonalize", 0),
+        backend,
     )
     metrics = computed["metrics"]
     nav_curve = computed["nav_curve"]

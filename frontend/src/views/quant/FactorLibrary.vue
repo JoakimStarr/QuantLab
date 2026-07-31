@@ -91,10 +91,11 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" align="center">
+        <el-table-column label="操作" width="300" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="onEvaluate(row)">评价</el-button>
             <el-button link type="success" size="small" @click="onQuantile(row)">分层</el-button>
+            <el-button link type="primary" size="small" @click="onDeepAnalysis(row)">深度分析</el-button>
             <el-button link type="warning" size="small" @click="onNeutralize(row)">中性化</el-button>
             <el-button link type="danger" size="small" @click="onDisable(row)">禁用</el-button>
           </template>
@@ -302,6 +303,12 @@ const selectedFactors = ref([])
 function handleSelectionChange(val) {
   selectedFactors.value = val
 }
+
+// 深度分析：跳转因子深度分析页
+function onDeepAnalysis(row) {
+  router.push({ path: '/quant/factor-deep-analysis', query: { factor_id: row.id, factor_name: row.name } })
+}
+
 function compareFactors() {
   const ids = selectedFactors.value.map(f => f.id).join(',')
   router.push(`/quant/factor-compare?ids=${ids}`)

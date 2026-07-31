@@ -244,3 +244,62 @@ async def neutralize_factor_api(
         "eval_start": start,
         "eval_end": end,
     })
+
+
+# ==================== 因子深度分析 ====================
+# 深度分析结果缓存：key=factor_id|start|end|horizon|n_groups|ic_window，TTL 1 小时
+_deep_analysis_cache: dict = {}
+_DEEP_CACHE_TTL = 3600
+
+
+@router.get("/{factor_id}/deep-analysis")
+async def deep_analysis_api(
+    factor_id: int,
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    horizon: int = Query(5, ge=1, le=60),
+    n_groups: int = Query(5, ge=2, le=10),
+    ic_window: int = Query(60, ge=20, le=250),
+):
+    """因子深度分析：IC 分布/时序/显著性 + horizon 调仓分层净值 + 换手率曲线 + 衰减。"""
+    import time
+    from app.core.config import settings
+    from app.services.quant.qlib_init import is_qlib_available
+    from app.core.executor import run_cpu
+    from app.services.quant.factor_eval import deep_analyze_factor
+
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+    factor = await get_factor(factor_id)
+    if not factor:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "因子不存在", "status": 404})
+
+    period = settings.quant.get("default_backtest_period", {})
+    start = start_date or period.get("start", "2020-01-01")
+    end = end_date or period.get("end", "2024-12-31")
+    universe = settings.quant.get("universe", "csi300")
+
+    # 缓存命中直接返回（含 factor_id/factor_name）
+    cache_key = f"{factor_id}|{start}|{end}|{horizon}|{n_groups}|{ic_window}"
+    now = time.time()
+    cached = _deep_analysis_cache.get(cache_key)
+    if cached and (now - cached["ts"]) < _DEEP_CACHE_TTL:
+        return ApiResponse(ok=True, data=cached["data"])
+
+    # CPU 密集任务走进程池：deep_analyze_factor 为模块级函数，参数均可 pickle
+    try:
+        result = await run_cpu(
+            deep_analyze_factor,
+            factor["expression"], start, end, universe, horizon, n_groups, ic_window,
+        )
+    except ValueError as e:
+        logger.warning("因子深度分析数据不足 factor_id=%s: %s", factor_id, e)
+        return ApiResponse(ok=False, error={"code": "INSUFFICIENT_DATA", "message": str(e), "status": 400})
+    except Exception as e:
+        logger.warning("因子深度分析失败 factor_id=%s: %s", factor_id, e)
+        return ApiResponse(ok=False, error={"code": "FACTOR_NOT_COMPUTABLE", "message": str(e), "status": 400})
+
+    result["factor_id"] = factor_id
+    result["factor_name"] = factor.get("name")
+    _deep_analysis_cache[cache_key] = {"ts": now, "data": result}
+    return ApiResponse(ok=True, data=result)

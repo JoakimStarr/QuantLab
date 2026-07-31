@@ -402,3 +402,324 @@ def compute_quantile_returns(
         "n_groups": n_groups,
         "dates": [str(d.date()) for d in aligned.index.tolist()],
     }
+
+
+# ==================== 因子深度分析 ====================
+# 以下函数为因子深度分析（deep-analysis）提供 IC 分布/时序/显著性、
+# horizon 同步调仓分层净值、换手率曲线及聚合入口，供 factor_ext.py 调用。
+
+
+def _daily_rank_ic_series(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.Series:
+    """每日截面 Spearman IC 序列（私有复用）。
+
+    与 compute_ic 中 daily_rank_ic 计算口径一致，避免在多个深度分析函数中重复书写。
+    """
+    merged = factor_df.join(label_df, how="inner").dropna()
+    if merged.empty:
+        return pd.Series(dtype=float)
+    daily_ic = merged.groupby(level="datetime").apply(
+        lambda g: g["factor"].corr(g["label"], method="spearman") if len(g) >= 2 else np.nan,
+        include_groups=False,
+    ).dropna()
+    return daily_ic
+
+
+def compute_ic_distribution(factor_df: pd.DataFrame, label_df: pd.DataFrame, n_bins: int = 20) -> dict:
+    """IC 分布：每日截面 Spearman IC 序列的分箱统计。
+
+    Returns: {bins, counts, stats: {mean, std, skew, positive_ratio}}
+    """
+    from scipy import stats
+
+    daily_ic = _daily_rank_ic_series(factor_df, label_df)
+    if daily_ic.empty:
+        return {
+            "bins": [],
+            "counts": [],
+            "stats": {"mean": None, "std": None, "skew": None, "positive_ratio": None},
+        }
+
+    values = daily_ic.values
+    counts, bins = np.histogram(values, bins=n_bins)
+    mean = float(daily_ic.mean())
+    std = float(daily_ic.std()) if len(daily_ic) > 1 else None
+    skew = float(stats.skew(values)) if len(daily_ic) >= 3 else None
+    positive_ratio = float((daily_ic > 0).mean())
+
+    return {
+        "bins": [float(b) for b in bins],
+        "counts": [int(c) for c in counts],
+        "stats": {
+            "mean": mean,
+            "std": std,
+            "skew": skew,
+            "positive_ratio": positive_ratio,
+        },
+    }
+
+
+def compute_ic_timeseries(factor_df: pd.DataFrame, label_df: pd.DataFrame, window: int = 60) -> dict:
+    """IC 时序：每日截面 IC + 滚动均线。
+
+    Returns: {dates, ic_series, ic_ma}
+    """
+    daily_ic = _daily_rank_ic_series(factor_df, label_df)
+    if daily_ic.empty:
+        return {"dates": [], "ic_series": [], "ic_ma": []}
+
+    ic_ma = daily_ic.rolling(window).mean()
+    return {
+        "dates": [str(d.date()) for d in daily_ic.index],
+        "ic_series": [float(v) for v in daily_ic.values],
+        "ic_ma": [None if np.isnan(v) else float(v) for v in ic_ma.values],
+    }
+
+
+def compute_ic_significance(ic_series: pd.Series) -> dict:
+    """IC 统计显著性：t-stat / p-value（双尾 t 检验）。
+
+    Returns: {t_stat, p_value, significant, n_days, note}
+    """
+    from scipy import stats
+
+    s = pd.Series(ic_series).dropna()
+    n = int(len(s))
+    note = "标准 t 检验，未经 Newey-West 自相关调整"
+    if n < 2:
+        return {"t_stat": None, "p_value": None, "significant": False, "n_days": n, "note": note}
+
+    t_stat, p_value = stats.ttest_1samp(s.values, 0)
+    if np.isnan(t_stat) or np.isnan(p_value):
+        return {"t_stat": None, "p_value": None, "significant": False, "n_days": n, "note": note}
+    return {
+        "t_stat": float(t_stat),
+        "p_value": float(p_value),
+        "significant": bool(p_value < 0.05),
+        "n_days": n,
+        "note": note,
+    }
+
+
+def compute_quantile_nav_by_horizon(
+    factor_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    n_groups: int = 5,
+    horizon: int = 5,
+) -> dict:
+    """按 horizon 周期调仓的分层累计净值。
+
+    - 每 horizon 个交易日调仓一次
+    - 调仓日按因子值分 n_groups 组，等权持仓
+    - 持有 horizon 天后重新调仓
+
+    Returns: {dates, quantile_nav, long_short_nav, annualized_returns, long_short_annual_return, monotonicity}
+    """
+    empty = {
+        "dates": [],
+        "quantile_nav": {f"Q{g}": [] for g in range(1, n_groups + 1)},
+        "long_short_nav": [],
+        "annualized_returns": {f"Q{g}": None for g in range(1, n_groups + 1)},
+        "long_short_annual_return": None,
+        "monotonicity": 0.0,
+    }
+
+    if factor_df is None or factor_df.empty or prices_df is None or prices_df.empty:
+        return empty
+
+    dates = sorted(factor_df.index.get_level_values("datetime").unique())
+    if not dates:
+        return empty
+
+    rebalance_dates = dates[::horizon]
+    ret_wide = prices_df.pct_change()
+
+    group_nav = {g: [1.0] for g in range(1, n_groups + 1)}
+    group_daily_returns = {g: [] for g in range(1, n_groups + 1)}
+    long_short_nav = [1.0]
+    long_short_returns = []
+    nav_dates = []
+
+    for i, rb in enumerate(rebalance_dates):
+        next_rb = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else None
+        try:
+            day_factor = factor_df.xs(rb, level="datetime")["factor"].dropna()
+        except KeyError:
+            continue
+        if len(day_factor) < n_groups:
+            continue
+        # 按因子值分位分组：qcut 可能因重复值失败，降级用 rank（与 compute_quantile_returns 一致）
+        try:
+            groups = pd.qcut(day_factor, n_groups, labels=False, duplicates="drop")
+        except Exception:
+            ranks = day_factor.rank(method="first")
+            groups = pd.cut(ranks, n_groups, labels=False)
+        groups = (groups + 1).dropna()
+        if groups.nunique() < 2:
+            continue
+        group_stocks = {g: groups[groups == g].index.tolist() for g in range(1, n_groups + 1)}
+
+        # 持有期：调仓日次日 ~ 下一个调仓日（含），调仓日按当日收盘建仓
+        if next_rb is not None:
+            period_dates = [d for d in dates if rb < d <= next_rb]
+        else:
+            period_dates = [d for d in dates if d > rb]
+
+        for d in period_dates:
+            if d not in ret_wide.index:
+                continue
+            day_ret = ret_wide.loc[d]
+            g_rets = {}
+            for g in range(1, n_groups + 1):
+                valid = day_ret.reindex(group_stocks[g]).dropna()
+                g_ret = float(valid.mean()) if len(valid) else 0.0
+                g_rets[g] = g_ret
+                group_daily_returns[g].append(g_ret)
+                group_nav[g].append(group_nav[g][-1] * (1.0 + g_ret))
+            ls_ret = g_rets[n_groups] - g_rets[1]
+            long_short_returns.append(ls_ret)
+            long_short_nav.append(long_short_nav[-1] * (1.0 + ls_ret))
+            nav_dates.append(d)
+
+    annualized_returns = {}
+    mean_returns = []
+    for g in range(1, n_groups + 1):
+        rs = group_daily_returns[g]
+        mr = float(np.mean(rs)) if rs else 0.0
+        annualized_returns[f"Q{g}"] = float(mr * 252)
+        mean_returns.append(mr)
+
+    ls_mean = float(np.mean(long_short_returns)) if long_short_returns else 0.0
+    ls_annual = float(ls_mean * 252)
+
+    # 单调性：组号与组均收益的 Spearman 相关（pandas 实现，无需 scipy）
+    mono = float(pd.Series(mean_returns).corr(pd.Series(range(1, n_groups + 1)), method="spearman"))
+    if np.isnan(mono):
+        mono = 0.0
+
+    return {
+        "dates": [str(d.date()) for d in nav_dates],
+        "quantile_nav": {f"Q{g}": [float(v) for v in group_nav[g][1:]] for g in range(1, n_groups + 1)},
+        "long_short_nav": [float(v) for v in long_short_nav[1:]],
+        "annualized_returns": annualized_returns,
+        "long_short_annual_return": ls_annual,
+        "monotonicity": mono,
+    }
+
+
+def compute_turnover_curve(factor_df: pd.DataFrame, n_groups: int = 5, horizon: int = 5) -> dict:
+    """分组换手率时序（多头组：因子值最高组）。
+
+    - 每 horizon 日调仓
+    - turnover = 1 - |新∩旧| / |旧|
+
+    Returns: {dates, turnover_series, avg_turnover, annual_turnover}
+    """
+    empty = {"dates": [], "turnover_series": [], "avg_turnover": None, "annual_turnover": None}
+    if factor_df is None or factor_df.empty:
+        return empty
+
+    dates = sorted(factor_df.index.get_level_values("datetime").unique())
+    if not dates:
+        return empty
+
+    rebalance_dates = dates[::horizon]
+    prev_holdings = None
+    turnover_series = []
+    turnover_dates = []
+
+    for rb in rebalance_dates:
+        try:
+            day_factor = factor_df.xs(rb, level="datetime")["factor"].dropna()
+        except KeyError:
+            continue
+        if len(day_factor) < n_groups:
+            continue
+        # 多头组：因子值最高的 1/n_groups 只（与 compute_turnover 口径一致）
+        top_n = max(1, len(day_factor) // n_groups)
+        holdings = set(day_factor.nlargest(top_n).index.tolist())
+        if prev_holdings is not None and len(prev_holdings) > 0:
+            overlap = len(holdings & prev_holdings)
+            turnover = 1.0 - overlap / len(prev_holdings)
+            turnover_series.append(float(turnover))
+            turnover_dates.append(rb)
+        prev_holdings = holdings
+
+    avg_turnover = float(np.mean(turnover_series)) if turnover_series else None
+    annual_turnover = float(avg_turnover * (252.0 / horizon)) if avg_turnover is not None else None
+    return {
+        "dates": [str(d.date()) for d in turnover_dates],
+        "turnover_series": turnover_series,
+        "avg_turnover": avg_turnover,
+        "annual_turnover": annual_turnover,
+    }
+
+
+def deep_analyze_factor(
+    factor_expr: str,
+    start: str,
+    end: str,
+    universe: str = None,
+    horizon: int = 5,
+    n_groups: int = 5,
+    ic_window: int = 60,
+) -> dict:
+    """因子深度分析聚合：一次性返回所有分析数据。
+
+    内部复用 load_factor_values/load_label + 上述 5 个函数 + compute_decay。
+    label 使用 horizon 周期前向收益（Ref($close,-horizon)/$close-1），区别于默认 1 日标签。
+    """
+    factor_df = load_factor_values(factor_expr, start, end, universe)
+    # horizon 周期前向收益标签（预测目标），区别于默认 1 日标签
+    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    label_df = load_label(start, end, label_expr=label_expr, universe=universe)
+
+    # $close 转 wide（datetime × instrument）用于 horizon 调仓分层净值
+    init_qlib()
+    from qlib.data import D
+    market = universe or settings.quant.get("universe", "csi300")
+    instruments = _load_instruments(market)
+    close_df = D.features(instruments, ["$close"], start_time=start, end_time=end, freq="day")
+    if close_df is None or close_df.empty:
+        raise ValueError("$close 价格数据为空，无法计算分层净值")
+    prices_df = close_df["$close"].unstack(level="instrument")
+
+    ic_distribution = compute_ic_distribution(factor_df, label_df)
+    ic_timeseries = compute_ic_timeseries(factor_df, label_df, ic_window)
+    ic_significance = compute_ic_significance(pd.Series(ic_timeseries["ic_series"]))
+    quantile_nav = compute_quantile_nav_by_horizon(
+        factor_df, prices_df, n_groups=n_groups, horizon=horizon
+    )
+    turnover_curve = compute_turnover_curve(factor_df, n_groups=n_groups, horizon=horizon)
+    decay = compute_decay(factor_df, label_df)
+
+    ic_mean = ic_distribution["stats"]["mean"]
+    ic_std = ic_distribution["stats"]["std"]
+    icir = float(ic_mean / ic_std) if ic_mean is not None and ic_std else None
+
+    decay_lags = sorted(decay.keys())
+    return {
+        "config": {
+            "start": start,
+            "end": end,
+            "horizon": horizon,
+            "n_groups": n_groups,
+            "ic_window": ic_window,
+        },
+        "summary": {
+            "ic_mean": ic_mean,
+            "ic_std": ic_std,
+            "icir": icir,
+            "t_stat": ic_significance["t_stat"],
+            "p_value": ic_significance["p_value"],
+            "significant": ic_significance["significant"],
+            "avg_turnover": turnover_curve["avg_turnover"],
+            "annual_turnover": turnover_curve["annual_turnover"],
+            "long_short_annual_return": quantile_nav["long_short_annual_return"],
+            "monotonicity": quantile_nav["monotonicity"],
+        },
+        "ic_distribution": ic_distribution,
+        "ic_timeseries": ic_timeseries,
+        "quantile_returns": quantile_nav,
+        "turnover_curve": turnover_curve,
+        "decay": {"lags": decay_lags, "ic_by_lag": [decay[l] for l in decay_lags]},
+    }

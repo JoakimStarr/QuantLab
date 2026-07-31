@@ -40,6 +40,7 @@
         <el-table-column label="组合方式" width="110" align="center">
           <template #default="{ row }">
             <span v-if="row.combination_method === 'ic_weight'" class="pill pill--primary">IC加权</span>
+            <span v-else-if="row.combination_method === 'ir_weight'" class="pill pill--primary">IR加权</span>
             <span v-else class="pill pill--muted">等权</span>
           </template>
         </el-table-column>
@@ -131,6 +132,7 @@
           <el-select v-model="form.combination_method" style="width:180px">
             <el-option label="等权" value="equal_weight" />
             <el-option label="IC加权" value="ic_weight" />
+            <el-option label="IR加权" value="ir_weight" />
           </el-select>
         </el-form-item>
         <el-form-item label="因子正交化">

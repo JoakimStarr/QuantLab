@@ -35,6 +35,50 @@ FIELD_MAP = {
 PRICE_FIELDS = {"open", "high", "low", "close", "vwap", "adjclose"}
 
 
+def _get_limit_pct(qlib_code: str) -> float:
+    """根据代码前缀返回涨跌停比例（不含ST股的5%判定，ST状态需额外获取）。
+
+    主板(60/00): 10%, 科创(688)/创业(300/301): 20%, 北交所(83/87/43/92/88): 30%
+    """
+    c = qlib_code.upper()
+    num = c[2:] if c.startswith(("SH", "SZ", "BJ")) else c
+    if num.startswith("688") or num.startswith(("300", "301")):
+        return 0.20
+    if num.startswith(("83", "87", "43", "92", "88")):
+        return 0.30
+    return 0.10
+
+
+def _compute_tradable(df: pd.DataFrame, qlib_code: str) -> pd.DataFrame:
+    """计算可交易mask：触及涨跌停日=0.0，正常=1.0。
+
+    优先用 df 中的 "pct_change" 列（东财源涨跌幅，单位%）判断；
+    若无该列（新浪源），用 close 的 pct_change 近似计算（复权价格在除权日可能失真，
+    但除权日极少触及涨跌停，可接受）。
+
+    Args:
+        df: 含 close 列的 DataFrame，可选含 pct_change 列
+        qlib_code: qlib代码（SH600000），用于判断涨跌停比例
+
+    Returns:
+        df 新增 "tradable" 列（float，1.0=可交易，0.0=涨跌停不可交易）
+    """
+    limit_pct = _get_limit_pct(qlib_code)
+    eps = 1e-4  # 浮点容差
+
+    if "pct_change" in df.columns:
+        # 东财源涨跌幅（%），绝对值 >= 限制比例*100 - 容差 视为触及
+        threshold = limit_pct * 100 - 0.01
+        hit = df["pct_change"].abs() >= threshold
+    else:
+        # 新浪源：用close变化率近似（注意复权失真风险）
+        ret = df["close"].pct_change().fillna(0.0)
+        hit = ret.abs() >= (limit_pct - eps)
+
+    df["tradable"] = np.where(hit, 0.0, 1.0)
+    return df
+
+
 def _read_bin(file_path: str):
     """读取 qlib bin 文件，返回 (values, start_index)
 
@@ -186,54 +230,53 @@ def _build_index_mapping(old_dates: list, old_start: int, old_len: int,
 def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
     """同步调用 akshare 拉取日K数据（在线程池中执行）
 
-    优先使用新浪源（stock_zh_a_daily，反爬风险低），失败时回退到东财源
-    （stock_zh_a_hist）。新浪源 symbol 格式为 sh600000（qlib code 小写），
-    东财源 symbol 格式为 600000（纯数字）。
+    优先使用东财源（stock_zh_a_hist，含涨跌幅字段，用于计算tradable mask），
+    失败时回退到新浪源（stock_zh_a_daily，反爬风险低但无涨跌幅）。
 
     Returns:
-        pd.DataFrame: 列包含 date, open, high, low, close, volume；失败返回 None
+        pd.DataFrame: 列含 date/open/high/low/close/volume，可选 pct_change；
+        失败返回 None
     """
     import akshare as ak
 
     ak_code = _qlib_code_to_akshare(qlib_code)
-    sina_symbol = qlib_code.lower()  # sh600000
-    keep_cols = ["date"] + list(FIELD_MAP.values())
+    sina_symbol = qlib_code.lower()
+    keep_cols = ["date"] + list(FIELD_MAP.values()) + ["pct_change"]
     df = None
 
-    # 方式1：新浪源（反爬风险低，含 volume）
+    # 方式1：东财源（含涨跌幅，用于tradable计算）
     try:
-        df = ak.stock_zh_a_daily(
-            symbol=sina_symbol, start_date=start_str, end_date=end_str, adjust="qfq",
+        df = ak.stock_zh_a_hist(
+            symbol=ak_code, period="daily",
+            start_date=start_str, end_date=end_str, adjust="qfq",
         )
         if df is not None and not df.empty:
-            # 新浪源列名已是英文：date/open/high/low/close/volume/...
+            rename_map = {"日期": "date", "涨跌幅": "pct_change"}
+            rename_map.update(FIELD_MAP)
+            df = df.rename(columns=rename_map)
             df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
             keep = [c for c in keep_cols if c in df.columns]
             df = df[keep]
         else:
             df = None
     except Exception as e:
-        logger.debug("新浪源拉取 %s 失败: %s", qlib_code, e)
+        logger.debug("东财源拉取 %s 失败: %s", qlib_code, e)
         df = None
 
-    # 方式2：回退到东财源
+    # 方式2：回退到新浪源（无涨跌幅，tradable走近似分支）
     if df is None or df.empty:
         try:
-            df = ak.stock_zh_a_hist(
-                symbol=ak_code, period="daily",
-                start_date=start_str, end_date=end_str, adjust="qfq",
+            df = ak.stock_zh_a_daily(
+                symbol=sina_symbol, start_date=start_str, end_date=end_str, adjust="qfq",
             )
             if df is not None and not df.empty:
-                rename_map = {"日期": "date"}
-                rename_map.update(FIELD_MAP)
-                df = df.rename(columns=rename_map)
                 df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
                 keep = [c for c in keep_cols if c in df.columns]
                 df = df[keep]
             else:
                 df = None
         except Exception as e:
-            logger.debug("东财源拉取 %s 失败: %s", qlib_code, e)
+            logger.debug("新浪源拉取 %s 失败: %s", qlib_code, e)
             df = None
 
     if df is None or df.empty:
@@ -314,10 +357,15 @@ async def incremental_sync_eod(
                 if d not in cal_set:
                     all_new_dates.add(d)
 
-            # 为该股票写入各字段的 bin 文件
+            # 计算涨跌停mask
+            df = _compute_tradable(df, qlib_code)
+
+            # 为该股票写入各字段的 bin 文件（含 tradable）
             feat_dir = os.path.join(provider_uri, "features", qlib_code.lower())
             _sync_stock_bin(
-                feat_dir, df, old_calendar, FIELD_MAP.values(), overwrite,
+                feat_dir, df, old_calendar,
+                list(FIELD_MAP.values()) + ["tradable"],
+                overwrite,
             )
             success_count += 1
 

@@ -150,3 +150,9 @@ export function runMiningTemplate(key, n_candidates) {
     params: { n_candidates }
   })
 }
+
+
+// 因子深度分析
+export function deepAnalysis(factorId, params = {}) {
+  return request.get(`/factors/${factorId}/deep-analysis`, { params })
+}
