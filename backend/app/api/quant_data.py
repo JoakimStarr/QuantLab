@@ -1,8 +1,9 @@
 """量化数据管理 API：股票数据同步到 qlib bin、数据新鲜度、qlib 可用性。
 
-数据源优先级由 config.quant.data_source 决定（默认 chenditc）：
-  - chenditc：下载 chenditc/investment_data 预构建 qlib_bin.tar.gz（推荐，每日更新）
-  - akshare ：逐只爬取 AKShare 行情后转储 qlib bin（兜底，易被反爬）
+数据源优先级由 config.quant.data_source 决定（默认 baostock）：
+  - chenditc：下载 chenditc/investment_data 预构建 qlib_bin.tar.gz（全量历史, 每日更新）
+  - baostock：一次拉取全市场某日K线（增量主源, 含ST标记+估值字段, 不限频）
+  - akshare ：逐只爬取 AKShare 行情后转储 qlib bin（仅个股/指数兜底, 易被反爬）
 """
 import logging
 from datetime import datetime
@@ -77,7 +78,7 @@ async def data_status_api(db=Depends(get_db)):
     return ApiResponse(ok=True, data={"items": items, "total": total})
 
 
-from app.services.data.sync_runner import run_sync_task as _run_sync_task
+from app.services.data.smart_sync import run_smart_sync_task as _run_sync_task
 
 
 async def _detect_stale_sync(db) -> int:
@@ -120,7 +121,7 @@ async def sync_data_api(
 ):
     """触发股票数据同步到 qlib bin（后台执行）。
 
-    数据源由 config.quant.data_source 决定（默认 chenditc，可选 akshare）。
+    数据源由 config.quant.data_source 决定（默认 baostock，可选 chenditc/akshare）。
     """
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
@@ -131,7 +132,8 @@ async def sync_data_api(
         )
 
     universe = req.universe or settings.quant.get("universe", "csi300")
-    data_source = settings.quant.get("data_source", "chenditc")
+    # 智能同步：路径由 latest_date 距今天数自动判断（chenditc全量/baostock增量/同步当日）
+    data_source = "smart_sync"
     # 若正在同步则拒绝（带超时检测：超过10分钟视为卡死，允许重新同步）
     existing = await db.execute(
         select(StockDataStatus).where(StockDataStatus.universe == universe)

@@ -10,8 +10,14 @@ const blobRequest = axios.create({
 
 // === 量化数据同步与状态 ===
 
+// 智能同步（自动判断 chenditc全量/baostock增量/同步当日）
 export function syncQuantData(params) {
   return request.post('/quant/data/sync', params)
+}
+
+// 预判智能同步路径（不执行同步，供前端展示）
+export function getSyncPathPrediction() {
+  return request.get('/quant/data/sync-path-prediction')
 }
 
 export function getQuantDataStatus() {
@@ -69,7 +75,7 @@ export function integrityCheck(universe) {
   return request.get('/quant/data/integrity-check', { params: { universe } })
 }
 
-// 同步申万行业分类数据
+// @deprecated 行业同步已禁用（后期规划）
 export function syncIndustry() {
   return request.post('/quant/data/sync-industry')
 }

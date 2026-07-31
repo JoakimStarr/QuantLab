@@ -18,13 +18,12 @@
         <div class="kpi-sub">{{ daysSinceUpdate }} 天前更新</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">数据源</div>
+        <div class="kpi-label">同步路径</div>
         <div class="kpi-value">
-          <el-select v-model="currentSource" size="small" style="width: 160px" @change="switchSource">
-            <el-option v-for="s in dataSources" :key="s.value" :label="s.label" :value="s.value" />
-          </el-select>
+          <el-tag v-if="pathPrediction" :type="pathTagType" size="small">{{ pathLabel }}</el-tag>
+          <span v-else>--</span>
         </div>
-        <div class="kpi-sub">{{ currentSource === 'chenditc' ? 'GitHub 每日构建' : '实时拉取' }}</div>
+        <div class="kpi-sub">{{ pathPrediction ? pathPrediction.days_behind + ' 天前' : '预判中' }}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">同步状态</div>
@@ -97,20 +96,21 @@
             </div>
           </div>
         </div>
+        <div v-if="pathPrediction" class="path-prediction">
+          <el-tag :type="pathTagType" size="small">{{ pathLabel }}</el-tag>
+          <span class="path-reason">{{ pathPrediction.reason }}</span>
+        </div>
         <div class="source-actions">
           <el-button @click="loadPreview()" size="small">预览数据</el-button>
           <el-button @click="loadAll" :loading="loading" size="small">刷新</el-button>
-          <el-button type="primary" @click="syncData" :loading="syncing" :disabled="!qlib.available || syncing">
-            {{ syncing ? '同步中...' : '同步数据' }}
+          <el-button type="primary" @click="smartSync" :loading="syncing" :disabled="!qlib.available || syncing">
+            {{ syncing ? '同步中...' : '智能同步' }}
           </el-button>
           <el-button type="success" @click="showEodDialog = true" :loading="eodSyncing" :disabled="!qlib.available || eodSyncing">
             {{ eodSyncing ? '增量同步中...' : '增量同步' }}
           </el-button>
           <el-button type="warning" @click="doSyncIndices" :loading="indexSyncing" :disabled="!qlib.available || indexSyncing">
             {{ indexSyncing ? '指数同步中...' : '同步指数' }}
-          </el-button>
-          <el-button type="primary" @click="doSyncIndustry" :loading="industrySyncing" :disabled="industrySyncing">
-            {{ industrySyncing ? '行业同步中...' : '同步行业' }}
           </el-button>
           <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
             {{ integrityChecking ? '校验中...' : '数据校验' }}
@@ -119,12 +119,22 @@
       </div>
     </SectionCard>
 
-    <!-- 同步进度提示 -->
+    <!-- 同步进度提示（轮询 /sync-progress 实时百分比） -->
     <div v-if="syncing" class="sync-progress mb-6">
-      <div class="progress-bar">
-        <div class="progress-indicator"></div>
+      <div class="progress-header">
+        <span class="progress-status">{{ syncProgress?.message || syncProgressText }}</span>
+        <span class="progress-pct">{{ (syncProgress?.progress_pct || 0).toFixed(1) }}%</span>
       </div>
-      <div class="progress-text">{{ syncProgressText }}</div>
+      <el-progress
+        :percentage="syncProgress?.progress_pct || 0"
+        :status="syncProgress?.status === 'failed' ? 'exception' : syncProgress?.status === 'done' ? 'success' : ''"
+        :stroke-width="14"
+        :show-text="false"
+      />
+      <div v-if="syncProgress?.data_source" class="progress-detail">
+        <span>路径: {{ syncProgress.data_source }}</span>
+        <span v-if="syncProgress.started_at">开始: {{ syncProgress.started_at.slice(11, 19) }}</span>
+      </div>
     </div>
 
     <!-- 数据状态详情 -->
@@ -249,8 +259,8 @@
     <el-dialog v-model="showEodDialog" title="增量EOD同步" width="460px" :close-on-click-modal="false">
       <div class="eod-sync-form">
         <p class="eod-hint">
-          基于 <strong>akshare</strong>（国内源）拉取最近 N 天的日K数据（OHLCV），<br>
-          增量追加到 qlib bin 目录。适合日常快速更新，无需下载 500MB+ 全量包。
+          基于 <strong>baostock</strong>（主源, 一次拉全市场）或 <strong>akshare</strong>（兜底, 逐只爬）拉取最近 N 天的日K数据，<br>
+          增量追加到 qlib bin 目录。baostock 含 ST 标记和估值字段，推荐使用。
         </p>
         <el-form label-width="90px" label-position="left">
           <el-form-item label="股票池">
@@ -265,7 +275,7 @@
           </el-form-item>
           <el-form-item label="覆盖已有">
             <el-switch v-model="eodForm.overwrite" />
-            <span class="eod-warn-hint">开启后将用 akshare 数据覆盖已有日期（可能因复权差异导致价格断裂）</span>
+            <span class="eod-warn-hint">开启后将用 baostock/akshare 数据覆盖已有日期（可能因复权差异导致价格断裂）</span>
           </el-form-item>
         </el-form>
         <div v-if="eodResult" class="eod-result">
@@ -341,17 +351,14 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getQuantDataStatus, syncQuantData, getQlibStatus, switchDataSource, getDataPreview, getSyncHistory, eodSync, getDataSource, syncIndices, integrityCheck, syncIndustry } from '@/api/quant'
+import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, eodSync, syncIndices, integrityCheck, syncIndustry, getSyncPathPrediction, getSyncProgress } from '@/api/quant'
 
 const statusList = ref([])
 const loading = ref(false)
 const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0 })
-const dataSources = [
-  { value: 'chenditc', label: 'chenditc (GitHub 每日构建)' },
-  { value: 'akshare', label: 'akshare (实时拉取)' },
-]
-const currentSource = ref('chenditc')
+const syncProgress = ref(null)
+let progressTimer = null
 const previewVisible = ref(false)
 const previewData = ref([])
 const previewLoading = ref(false)
@@ -364,11 +371,10 @@ const eodResult = ref(null)
 const eodForm = reactive({ universe: 'csi300', days: 5, overwrite: false })
 const indexSyncing = ref(false)
 const industrySyncing = ref(false)
+const pathPrediction = ref(null)
   const integrityChecking = ref(false)
   const showIntegrityDialog = ref(false)
   const integrityResult = ref(null)
-let pollTimer = null
-
 const currentStatus = computed(() => statusList.value[0] || {})
 
 const statusLabel = computed(() => {
@@ -394,10 +400,33 @@ const daysSinceUpdate = computed(() => {
 })
 
 const syncProgressText = computed(() => {
-  if (currentSource.value === 'akshare') {
-    return `正在通过akshare逐只拉取行情数据（国内源），请耐心等待...`
+  const path = pathPrediction.value?.path
+  if (path === 'chenditc_full') {
+    return `正在从 chenditc/investment_data 下载 qlib_bin.tar.gz（约 533MB），请耐心等待...`
   }
-  return `正在从 chenditc/investment_data 下载 qlib_bin.tar.gz（约 533MB），请耐心等待...`
+  if (path === 'baostock_incremental') {
+    return `正在通过 baostock 增量同步近期缺失数据（一次拉全市场），请耐心等待...`
+  }
+  if (path === 'baostock_today') {
+    return `正在通过 baostock 同步当日数据（含盘中），请耐心等待...`
+  }
+  return `正在同步数据，请耐心等待...`
+})
+
+const pathLabel = computed(() => {
+  const path = pathPrediction.value?.path
+  if (path === 'chenditc_full') return '预计：chenditc 全量'
+  if (path === 'baostock_incremental') return '预计：baostock 增量'
+  if (path === 'baostock_today') return '预计：同步当日'
+  return '预计：智能同步'
+})
+
+const pathTagType = computed(() => {
+  const path = pathPrediction.value?.path
+  if (path === 'chenditc_full') return 'danger'
+  if (path === 'baostock_incremental') return 'warning'
+  if (path === 'baostock_today') return 'success'
+  return 'info'
 })
 
 const previewColumns = computed(() => {
@@ -445,17 +474,6 @@ function formatDuration(seconds) {
   return h + 'h' + (m > 0 ? m + 'm' : '')
 }
 
-async function switchSource(source) {
-  try {
-    await switchDataSource(source)
-    currentSource.value = source
-    ElMessage.success(`数据源已切换到 ${source}`)
-    loadAll()
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('数据源切换失败')
-  }
-}
-
 async function loadPreview(code) {
   previewCode.value = code || ''
     previewCodeInput.value = code || ''
@@ -485,17 +503,11 @@ async function loadStatus() {
   try {
     const data = await getQuantDataStatus()
     statusList.value = data?.items || []
+    // syncing 状态由 progressTimer 统一轮询；检测到外部（如定时任务）触发的 syncing 时启动进度轮询
     const cur = statusList.value[0]
-    if (cur && cur.status === 'syncing') {
-      if (!pollTimer) {
-        pollTimer = setInterval(loadStatus, 5000)
-      }
-    } else {
-      if (pollTimer) {
-        clearInterval(pollTimer)
-        pollTimer = null
-        syncing.value = false
-      }
+    if (cur && cur.status === 'syncing' && !progressTimer && !syncing.value) {
+      syncing.value = true
+      startProgressPolling()
     }
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('加载数据状态失败')
@@ -514,34 +526,59 @@ async function loadQlib() {
   }
 }
 
-async function loadDataSource() {
-  try {
-    const data = await getDataSource()
-    if (data?.source) {
-      currentSource.value = data.source
-    }
-  } catch (e) {
-    // 静默失败，使用默认值
-  }
-}
-
 async function loadAll() {
   loading.value = true
-  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadDataSource()])
+  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), fetchPathPrediction()])
   loading.value = false
 }
 
-async function syncData() {
+async function smartSync() {
   syncing.value = true
+  syncProgress.value = null
   try {
-    const params = currentSource.value === 'akshare' ? { days: 30 } : {}
-    await syncQuantData(params)
-    const sourceName = currentSource.value === 'akshare' ? 'akshare增量同步' : 'chenditc全量同步'
-    ElMessage.success(`${sourceName}已提交（后台执行）`)
-    setTimeout(loadStatus, 3000)
+    await syncQuantData({})
+    const pathName = pathPrediction.value?.path === 'chenditc_full' ? 'chenditc全量'
+      : pathPrediction.value?.path === 'baostock_incremental' ? 'baostock增量'
+      : pathPrediction.value?.path === 'baostock_today' ? '同步当日' : '智能'
+    ElMessage.success(`智能同步已提交（${pathName}，后台执行）`)
+    startProgressPolling()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('数据同步提交失败')
     syncing.value = false
+  }
+}
+
+function startProgressPolling() {
+  if (progressTimer) clearInterval(progressTimer)
+  pollSyncProgress()
+  progressTimer = setInterval(pollSyncProgress, 1000)
+}
+
+async function pollSyncProgress() {
+  try {
+    const data = await getSyncProgress()
+    syncProgress.value = data
+    if (data?.status === 'done' || data?.status === 'failed') {
+      if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+      syncing.value = false
+      if (data?.status === 'done') {
+        ElMessage.success('智能同步完成')
+      } else {
+        ElMessage.error('智能同步失败: ' + (data?.error || '未知错误'))
+      }
+      loadAll()
+    }
+  } catch (e) {
+    // 静默失败，继续轮询
+  }
+}
+
+async function fetchPathPrediction() {
+  try {
+    const data = await getSyncPathPrediction()
+    pathPrediction.value = data
+  } catch (e) {
+    pathPrediction.value = null
   }
 }
 
@@ -639,8 +676,8 @@ async function retrySync() {
   }
 }
 
-onMounted(() => { loadAll() })
-onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+onMounted(() => { loadAll(); fetchPathPrediction() })
+onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
 </script>
 
 <style scoped lang="scss">
@@ -676,6 +713,19 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 .source-meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
 .meta-label { color: var(--text-tertiary); margin-right: 4px; }
 .source-meta code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--primary); }
+.path-prediction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary, #f5f7fa);
+  border-radius: 6px;
+  font-size: var(--font-size-sm, 13px);
+}
+.path-prediction .path-reason {
+  color: var(--text-secondary, #909399);
+}
 .source-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 .source-error {
@@ -743,6 +793,10 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
     animation: progress-pulse 2s ease-in-out infinite;
   }
   .progress-text { font-size: 13px; color: var(--text-secondary); }
+  .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .progress-status { font-size: 13px; color: var(--text-primary); }
+  .progress-pct { font-size: 13px; font-weight: 600; color: var(--primary); }
+  .progress-detail { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
 }
 
 @keyframes progress-pulse {

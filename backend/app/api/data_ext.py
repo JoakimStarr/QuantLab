@@ -140,7 +140,7 @@ async def sync_history_api(
 async def switch_data_source_api(
     source: str = Query(..., description="chenditc 或 akshare"),
 ):
-    """切换数据源（添加2: 多数据源切换）"""
+    """[deprecated] 切换数据源。智能同步已自动判断路径，此接口保留向后兼容。"""
     if source not in ("chenditc", "akshare"):
         raise AppError("VALIDATION_ERROR", "数据源仅支持 chenditc 或 akshare", 422)
 
@@ -162,7 +162,7 @@ async def switch_data_source_api(
 
 @router.get("/data-source")
 async def get_data_source_api():
-    """获取当前数据源"""
+    """[deprecated] 获取当前数据源。智能同步已自动判断路径。"""
     return ApiResponse(ok=True, data={"source": settings.quant.get("data_source", "chenditc")})
 
 
@@ -262,14 +262,22 @@ async def integrity_check_api(universe: str = Query(None)):
 
 @router.post("/sync-industry")
 async def sync_industry_api():
-    """同步申万行业分类数据（添加: 行业分类数据同步）
+    """同步申万行业分类数据（已禁用，后期规划）
 
-    通过 akshare 获取申万一级行业分类，保存到 data/industry_map.json，
-    供因子行业中性化使用。
+    行业同步功能暂未开放，后期规划。代码保留在 industry_sync.py 供未来复用。
     """
-    import asyncio
-    from app.services.data.industry_sync import sync_industry_data
+    return ApiResponse(ok=False, error={
+        "code": "INDUSTRY_SYNC_DISABLED",
+        "message": "行业同步暂未开放，后期规划",
+        "status": 503,
+    })
 
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, sync_industry_data)
-    return ApiResponse(ok=result.get("ok", False), data=result)
+@router.get("/sync-path-prediction")
+async def sync_path_prediction_api():
+    """预判智能同步路径（基于 latest_date 距今天数，不执行同步）
+
+    供前端展示预计走哪条路径（chenditc全量/baostock增量/同步当日）。
+    """
+    from app.services.data.smart_sync import predict_sync_path
+    prediction = predict_sync_path()
+    return ApiResponse(ok=True, data=prediction)

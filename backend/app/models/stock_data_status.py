@@ -17,6 +17,8 @@ class StockDataStatus(Base):
     status = Column(String, default="ok")  # ok / syncing / failed / empty
     last_error = Column(String, nullable=True)
     qlib_dir = Column(String, nullable=True)
+    # 智能同步走的路径：chenditc_full / baostock_incremental / baostock_today
+    last_sync_path = Column(String, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("universe", name="uq_stock_data_status_universe"),

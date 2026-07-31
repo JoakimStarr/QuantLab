@@ -361,7 +361,9 @@ def incremental_sync_eod_baostock(
     all_new_dates = set()
     fetched_dates = []
 
-    for date in dates:
+    from app.services.data.sync_progress import update_progress as _up
+    total_dates = len(dates) if dates else 1
+    for date_idx, date in enumerate(dates):
         try:
             df_all = fetch_daily_all_a_stock_sync(date)
         except Exception as e:
@@ -373,6 +375,8 @@ def incremental_sync_eod_baostock(
         fetched_dates.append(date)
         if date not in cal_set:
             all_new_dates.add(date)
+        _up(pct=10 + (date_idx + 1) / total_dates * 50,
+            status="running", message=f"baostock 拉取 {date} ({date_idx+1}/{total_dates})")
 
         # 代码转换：sh.600000 -> sh600000，并过滤到股票池
         df_all = df_all.copy()
@@ -398,7 +402,8 @@ def incremental_sync_eod_baostock(
     # 按股票写 bin
     success_count = 0
     fail_count = 0
-    for qlib_code_lower, grps in per_stock_rows.items():
+    total_stocks = len(per_stock_rows) if per_stock_rows else 1
+    for stock_idx, (qlib_code_lower, grps) in enumerate(per_stock_rows.items()):
         try:
             df = pd.concat(grps, ignore_index=True)
             df = df.sort_values("date").reset_index(drop=True)
@@ -430,6 +435,10 @@ def incremental_sync_eod_baostock(
         except Exception as e:
             logger.debug("baostock 写 %s 失败: %s", qlib_code_lower, e)
             fail_count += 1
+        if (stock_idx + 1) % 200 == 0 or stock_idx + 1 == total_stocks:
+            _up(pct=60 + (stock_idx + 1) / total_stocks * 30,
+                status="running",
+                message=f"baostock 写入 {stock_idx+1}/{total_stocks} (成功{success_count})")
 
     # 更新日历（合并新日期）
     new_dates_sorted = sorted(all_new_dates)
@@ -465,6 +474,7 @@ async def incremental_sync_eod(
     provider_uri: str = None,
     overwrite: bool = False,
     source: str = "baostock",
+    include_intraday: bool = False,
 ) -> dict:
     """增量同步 EOD 数据。
 
@@ -516,8 +526,9 @@ async def incremental_sync_eod(
             start_date, end_date, old_calendar, overwrite,
         )
         # 盘中排除当日（15:00 前为 A 股交易时段，当日 bar 不完整）
+        # include_intraday=True 时保留当日（供智能同步"同步当日"路径使用）
         today_str = datetime.now().strftime("%Y-%m-%d")
-        if datetime.now().hour < 15 and today_str in candidate_dates:
+        if not include_intraday and datetime.now().hour < 15 and today_str in candidate_dates:
             candidate_dates = [d for d in candidate_dates if d != today_str]
 
         try:
@@ -546,7 +557,7 @@ async def incremental_sync_eod(
     # akshare fallback：逐只爬
     return await _incremental_sync_eod_akshare(
         codes, start_str, end_str, old_calendar, provider_uri,
-        universe, days, overwrite,
+        universe, days, overwrite, include_intraday,
     )
 
 
@@ -559,6 +570,7 @@ async def _incremental_sync_eod_akshare(
     universe: str,
     days: int,
     overwrite: bool = False,
+    include_intraday: bool = False,
 ) -> dict:
     """akshare fallback 路径：逐只拉取日K数据并写 bin。
 
@@ -586,8 +598,9 @@ async def _incremental_sync_eod_akshare(
                 continue
 
             # 过滤盘中不完整数据：15:00 前为 A 股交易时段，当日 bar 不完整
+            # include_intraday=True 时保留当日（供智能同步"同步当日"路径使用）
             today_str = datetime.now().strftime("%Y-%m-%d")
-            if datetime.now().hour < 15:
+            if not include_intraday and datetime.now().hour < 15:
                 df = df[df["date"] != today_str]
                 if df.empty:
                     skip_count += 1
@@ -624,10 +637,14 @@ async def _incremental_sync_eod_akshare(
             logger.debug("拉取 %s 失败: %s", qlib_code, e)
             fail_count += 1
 
-        # 进度日志
-        if (i + 1) % 100 == 0:
+        # 进度日志 + 进度推送
+        if (i + 1) % 100 == 0 or i + 1 == len(codes):
+            from app.services.data.sync_progress import update_progress as _up
             logger.info("EOD同步进度: %d/%d (成功%d, 失败%d, 跳过%d)",
                         i + 1, len(codes), success_count, fail_count, skip_count)
+            _up(pct=10 + (i + 1) / len(codes) * 80,
+                status="running",
+                message=f"akshare 同步 {i+1}/{len(codes)} (成功{success_count},失败{fail_count})")
 
     # 更新日历（合并新日期）
     new_dates_sorted = sorted(all_new_dates)

@@ -38,6 +38,8 @@ async def init_db():
     async with engine.begin() as conn:
         # 创建尚未存在的表（新模型如 TaskResult 会自动建表）。
         await conn.run_sync(Base.metadata.create_all)
+        # SQLite 兼容：为已有表补列（create_all 不会 ALTER 已有表）
+        await conn.run_sync(_ensure_columns)
     # 老表的列变更由 Alembic 迁移管理；失败仅告警不阻断启动（测试/无 alembic 环境）
     try:
         import asyncio
@@ -68,3 +70,22 @@ def _run_alembic_upgrade() -> None:
 async def get_db():
     async with async_session() as session:
         yield session
+
+
+def _ensure_columns(conn):
+    """SQLite 兼容：检查并补齐模型新增列（create_all 不会修改已有表结构）。
+    列清单与模型定义保持同步，新增列时在此追加 {table: [(col, type)]}。
+    """
+    from sqlalchemy import text, inspect
+    inspector = inspect(conn)
+    # {table_name: [(column_name, sqlite_type)]}
+    pending = {
+        "stock_data_status": [("last_sync_path", "VARCHAR")],
+    }
+    for table, cols in pending.items():
+        if not inspector.has_table(table):
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for col_name, col_type in cols:
+            if col_name not in existing:
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col_name} {col_type}'))

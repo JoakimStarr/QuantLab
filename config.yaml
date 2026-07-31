@@ -120,6 +120,18 @@ quant:
     risk_aversion: 0.5
   qlib_provider_uri: data/qlib_bin/cn_data
   slippage_bps: 5
+  smart_sync:
+    full_sync_threshold_days: 7
+    include_intraday: true
+  sync_indices:
+  - sh000001
+  - sh000300
+  - sh000016
+  - sh000905
+  - sh000852
+  - sz399001
+  - sz399006
+  - sh000688
   topk: 50
   universe: csi300
 scheduler:

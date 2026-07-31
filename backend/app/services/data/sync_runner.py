@@ -168,9 +168,9 @@ async def _sync_via_chenditc(universe: str) -> dict:
 async def _incremental_sync(req: SyncDataRequest, universe: str, source: str, days: int) -> dict:
     """通过指定数据源（baostock/akshare）增量同步 EOD 数据。
 
-    依赖契约（并行开发中）:
+    依赖契约:
         app.services.data.eod_incremental.incremental_sync_eod
-            (days, universe, source, overwrite) -> dict  # 同步函数，在进程池中执行
+            async (days, universe, source, overwrite) -> dict  # async 函数，内部已用 run_in_executor 调度同步 IO
 
     Args:
         req: 同步请求（保留以兼容调用方）
@@ -183,15 +183,16 @@ async def _incremental_sync(req: SyncDataRequest, universe: str, source: str, da
     """
     from app.services.data.eod_incremental import incremental_sync_eod
     from app.services.data.sync_progress import init_progress, update_progress, clear_progress
-    from app.core.executor import run_cpu
 
     init_progress(universe, source, total_mb=0)
     update_progress(pct=0, status="running",
                     message=f"正在通过{source}拉取{universe}最近{days}天EOD数据...")
     try:
-        # 在 CPU 进程池中执行同步函数（CPU密集+IO，避免阻塞事件循环）
-        result = await run_cpu(incremental_sync_eod,
-                               days=days, universe=universe, source=source)
+        # incremental_sync_eod 是 async 函数，内部已用 run_in_executor 调度同步 IO，
+        # 不能再通过 run_cpu 丢进 ProcessPoolExecutor（协程不能用 run_in_executor）
+        result = await incremental_sync_eod(
+            days=days, universe=universe, source=source,
+        )
         if result.get("ok"):
             success = result.get("success", 0)
             failed = result.get("failed", 0)
