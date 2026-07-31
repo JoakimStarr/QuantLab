@@ -1,38 +1,69 @@
+---
+title: 数据层架构
+slug: data-layer
+order: 1
+group: 架构
+summary: 数据采集、QLib bin 双轨存储、涨跌停mask、基本面PIT、资金情绪采集
+---
+
 # QuantLab 数据层技术文档（阶段1改造）
 
 > 适用范围：QuantLab 阶段1数据层改造
-> 文档目的：记录数据层架构、每个文件/函数/参数说明、后期手动修改指引
-> 维护原则：每次数据层代码变更须同步更新本文档对应小节
+> 文档目的：记录数据层架构、每个文件/函数/参数说明、数据源调度、部署注意事项
+> 维护原则：每次数据层代码变更须同步更新本文档对应小节；所有签名以代码为准
 
 ---
 
 ## 1. 数据层架构概览
 
-### 1.1 整体分层
+### 1.1 整体分层与数据流
 
 ```
-数据源（akshare/mootdx/tushare）
-    ↓
-采集器层（backend/app/services/data/）
-  - eod_incremental.py    日K OHLCV + $tradable mask
-  - fundamental_sync.py   基本面PIT（估值日频 + 财务报表TODO）
-  - capital_flow_sync.py  资金/情绪（北向/龙虎榜/融资融券/大单）
-  - market_data.py        市值数据
-  - industry_sync.py      申万行业
-    ↓
-存储层
-  - QLib bin   量价/资金字段，日频，features/{code}/{field}.day.bin
-  - SQLite     基本面PIT宽表，按 announce_date 查询
-    ↓
-因子引擎（QLib 表达式引用 $close/$tradable/$north_net 等）
+┌──────────────────────────────────────────────────────────────────┐
+│  数据源层                                                         │
+│   ├─ chenditc/investment_data  预构建 qlib_bin.tar.gz（推荐主源） │
+│   ├─ akshare                   日K/估值/资金/龙虎榜/指数（兜底）  │
+│   └─ mootdx / tushare          TODO fallback                     │
+└───────────────┬──────────────────────────────────────────────────┘
+                │  config.quant.data_source 决定走哪条
+                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  调度入口                                                         │
+│   sync_runner.run_sync_task(req)                                 │
+│     ├─ data_source=chenditc → _sync_via_chenditc                 │
+│     │     download_qlib_bin / download_and_merge_incremental     │
+│     └─ data_source=akshare  → _sync_via_akshare                  │
+│           data_adapter.sync_to_qlib(start,end,codes)             │
+└───────────────┬──────────────────────────────────────────────────┘
+                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  采集器层  backend/app/services/data/                            │
+│   ├─ eod_incremental.py    日K OHLCV + $tradable mask（akshare） │
+│   ├─ fundamental_sync.py   基本面PIT（估值日频 + 财务报表TODO）  │
+│   ├─ capital_flow_sync.py  资金/情绪（北向/龙虎榜/融资融券/大单）│
+│   ├─ market_data.py        市值数据 total_mv                     │
+│   ├─ industry_sync.py      申万行业 → data/industry_map.json     │
+│   ├─ index_sync.py         主要指数日K → qlib bin                │
+│   └─ integrity_check.py    bin 文件长度 vs 日历一致性校验        │
+└───────────────┬──────────────────────────────────────────────────┘
+                ▼
+┌──────────────────────────────┬───────────────────────────────────┐
+│  存储层（双轨制）             │                                   │
+│  QLib bin（float32）         │  SQLite（关系表）                 │
+│   features/{code}/{f}.day.bin│   fundamental_pit（PIT 宽表）     │
+│   calendars/day.txt          │   stock_data_status / sync_history│
+│   instruments/{pool}.txt     │   factor / strategy / mining_task │
+└───────────────┬──────────────┴───────────────────────────────────┘
+                ▼
+        因子引擎（QLib 表达式 $close / $tradable / $north_net ...）
 ```
 
 ### 1.2 存储双轨制设计
 
 | 存储介质 | 承载内容 | 访问方式 | 写入入口 |
 |----------|----------|----------|----------|
-| QLib bin（float32） | 量价 OHLCV、$tradable mask、资金/情绪日频字段 | QLib 表达式 `$field` | `_write_bin` |
-| SQLite（关系表） | 基本面 PIT 宽表（含 announce_date） | `query_fundamental_pit` | SQLAlchemy `session.add` |
+| QLib bin（float32） | 量价 OHLCV、`$tradable` mask、资金/情绪日频字段、市值 | QLib 表达式 `$field` | `_write_bin` |
+| SQLite（关系表） | 基本面 PIT 宽表（含 announce_date）、同步状态、因子/策略 | SQLAlchemy `session` | `session.add` |
 
 **设计原则**：
 - 能进 QLib bin 的日频数值字段一律进 bin（因子引擎直接 `$` 引用，零序列化开销）
@@ -47,7 +78,23 @@
 | `fundamental_sync.py` | 基本面PIT采集 | `fundamental_pit` 表 | 🟡 估值已实现，财报TODO |
 | `capital_flow_sync.py` | 资金/情绪采集 | 4个资金QLib bin字段 | 🟡 沪市融资融券TODO |
 | `market_data.py` | 市值数据 | total_mv bin | ✅ 已实现 |
-| `industry_sync.py` | 申万行业分类 | industry bin/表 | ✅ 已实现 |
+| `industry_sync.py` | 申万行业分类 | `data/industry_map.json` + industry bin | ✅ 已实现 |
+| `index_sync.py` | 主要指数日K | 指数 qlib bin | ✅ 已实现 |
+| `chenditc_client.py` | chenditc 全量/增量包下载解压 | qlib_bin 目录 | ✅ 已实现 |
+| `incremental_sync.py` | chenditc 增量包合并 | 合并到 qlib_bin | ✅ 已实现 |
+| `sync_runner.py` | 同步任务总调度 + 错误分类 | StockDataStatus/SyncHistory | ✅ 已实现 |
+| `integrity_check.py` | bin 完整性校验 | 缺失/长度异常清单 | ✅ 已实现 |
+
+### 1.4 数据源调度（`sync_runner.py`）
+
+`run_sync_task(req)` 按 `settings.quant.data_source` 分发：
+
+| data_source | 走法 | 函数 | 说明 |
+|-------------|------|------|------|
+| `chenditc` | 全量/增量包 | `_sync_via_chenditc` → `download_qlib_bin` / `download_and_merge_incremental` | 推荐主源，下载预构建 bin 包 |
+| `akshare` | 逐只爬取 | `_sync_via_akshare` → `data_adapter.sync_to_qlib` | 兜底，易被反爬 |
+
+> ⚠️ **配置与默认值差异**：`config.yaml` 当前 `data_source: akshare`；而代码 `get_data_source_api` 与 `daily_quant_data_update` 的兜底默认值为 `chenditc`。切换数据源请用 `PUT /api/v1/quant/data/data-source?source=chenditc`，会回写 `config.yaml` 并更新运行时 `settings.quant`。
 
 ---
 
@@ -74,7 +121,7 @@ A股涨跌停日收盘价不可执行：涨停买不进、跌停卖不出。传�
 
 **函数签名**：
 ```python
-def _get_limit_pct(code: str) -> float:
+def _get_limit_pct(qlib_code: str) -> float:
     """根据证券代码前缀返回涨跌停比例（小数）。"""
 ```
 
@@ -90,7 +137,7 @@ def _get_limit_pct(code: str) -> float:
 > ⚠️ **已知缺口**：ST 股 5% 涨跌停**未处理**。akshare 无稳定 ST 字段，需后续补 ST 标记表（见 §2.6）。
 
 **实现要点**：
-- 入参 `code` 是 qlib 风格代码（如 `SH600000`、`SZ300750`、`BJ830799`）
+- 入参 `qlib_code` 是 qlib 风格代码（如 `SH600000`、`SZ300750`、`BJ830799`）
 - 取字母后的数字部分前缀匹配，前缀命中即返回对应比例
 - 未命中任何前缀时返回默认 `0.10`（保守按主板处理）
 
@@ -98,11 +145,8 @@ def _get_limit_pct(code: str) -> float:
 
 **函数签名**：
 ```python
-def _compute_tradable(
-    df: pd.DataFrame,      # 含 close / pct_change（可选）的OHLCV DataFrame
-    code: str,             # qlib代码，用于查涨跌停比例
-) -> pd.Series:
-    """返回 float32 序列：1.0 可交易，0.0 触及涨跌停。"""
+def _compute_tradable(df: pd.DataFrame, qlib_code: str) -> pd.DataFrame:
+    """返回含 tradable 列的 DataFrame：1.0 可交易，0.0 触及涨跌停。"""
 ```
 
 **判定优先级**：
@@ -218,6 +262,7 @@ async def sync_fundamental_pit(
 - 🟡 财务报表（revenue / net_profit / total_assets / net_assets / eps / bps / roe）解析留 TODO
 
 **数据源**：
+
 | 用途 | akshare 接口 | 状态 |
 |------|-------------|------|
 | 估值日频 | `stock_a_indicator_lg` | ✅ 已接入 |
@@ -281,6 +326,15 @@ async def sync_capital_flow(
 CAPITAL_FIELDS = ("north_net", "margin_balance", "dragon_net", "big_order_net")
 ```
 
+**底层拉取函数签名**：
+
+| 函数 | 签名要点 | 说明 |
+|------|---------|------|
+| `fetch_north(code, start, end)` | 北向个股净买入 | `stock_hsgt_individual_em` |
+| `fetch_margin(code, start, end)` | 融资融券余额 | 沪市 TODO（`stock_margin_detail_szse` 仅深市） |
+| `fetch_dragon(code, start, end)` | 龙虎榜净买入 | `stock_lhb_detail_em`，字段名需运行时验证 |
+| `fetch_big_order(code, start, end)` | 大单净流入 | `stock_individual_fund_flow`，北交所 market 未验证 |
+
 ### 4.3 因子表达式中的使用
 
 ```python
@@ -310,18 +364,96 @@ factor = $big_order_net / ($volume * $close)
 
 ---
 
-## 5. 数据源说明
+## 5. 其它采集器
+
+### 5.1 市值数据（`market_data.py`）
+
+- 产物：`total_mv`（总市值）写入 QLib bin
+- 用途：市值中性化（`neutralize.py` 的 `market_cap_neutralize`）、组合优化约束
+
+### 5.2 申万行业（`industry_sync.py`）
+
+```python
+def sync_industry_data() -> dict:
+    """通过 akshare 获取申万一级行业，保存到 data/industry_map.json。"""
+
+def load_industry_map() -> dict:
+    """加载行业映射，供因子行业中性化与组合优化行业暴露约束使用。"""
+```
+
+- 产物：`data/industry_map.json`（{code: industry}）
+- 用途：`industry_neutralize`、`portfolio_optimizer` 的 `max_industry_exposure` 约束
+- 未同步时组合优化行业暴露约束不生效（仅告警）
+
+### 5.3 指数同步（`index_sync.py`）
+
+```python
+def sync_indices_to_qlib(provider_uri: str, days: int = 365) -> dict:
+    """拉取主要指数日K写入 qlib bin，日历中不存在的新日期自动扩展。"""
+```
+
+- 复用 `eod_incremental` 的 `_read_bin/_write_bin/_get_calendar` 等基础设施
+- 支持指数：沪深300、上证50、中证500、中证1000、深证成指、创业板指、科创50、上证指数
+
+### 5.4 EOD 增量同步（`eod_incremental.incremental_sync_eod`）
+
+**函数签名**：
+```python
+async def incremental_sync_eod(
+    universe: str = "csi300",     # 股票池
+    days: int = 5,                # 同步最近 N 天（1-30）
+    provider_uri: str = None,     # qlib 数据目录，默认 settings
+    overwrite: bool = False,      # 是否覆盖已有日期（默认 False 仅追加新日期）
+) -> dict:
+```
+
+**关键行为**：
+- 基于 akshare 国内源，拉取最近 N 天日K转 qlib bin
+- **默认仅追加新日期**（`overwrite=False`），避免 akshare qfq 与 chenditc 复权方式不同导致已有价格序列被覆盖
+- `overwrite=True` 用于修复缺失数据
+- 与 chenditc 全量同步互补：akshare 国内源访问快，适合日常增量
+
+### 5.5 完整性校验（`integrity_check.check_integrity`）
+
+```python
+def check_integrity(provider_uri: str, universe: str = None) -> dict:
+    """检测每只股票的 bin 文件长度是否与日历天数一致，返回缺失/异常清单。"""
+```
+
+通过 `GET /api/v1/quant/data/integrity-check?universe=csi300` 触发。
+
+### 5.6 bin 读写基础设施（`eod_incremental.py`）
+
+| 函数 | 签名 | 作用 |
+|------|------|------|
+| `_read_bin` | `(file_path: str)` | 读 QLib bin（float32，含起始日偏移头） |
+| `_write_bin` | `(file_path: str, values: np.ndarray, start_index: int)` | 写 bin，start_index 为日历对齐偏移 |
+| `_get_calendar` | `(provider_uri: str)` | 读 `calendars/day.txt` 交易日历 |
+| `_write_calendar` | `(provider_uri: str, dates: list)` | 写/扩展日历 |
+| `_read_instruments` | `(provider_uri: str, universe: str)` | 读 `instruments/{universe}.txt` 成分股 |
+| `_qlib_code_to_akshare` | `(qlib_code: str)` | qlib 代码转 akshare 代码 |
+| `_merge_calendar` / `_build_index_mapping` | — | 日历合并与索引映射，支持增量追加 |
+
+---
+
+## 6. 数据源说明
 
 | 数据源 | 用途 | 接入方式 | 状态 |
 |--------|------|---------|------|
-| **akshare（主）** | OHLCV / 基本面 / 资金 / 龙虎榜 | 已封装，免费无 key | ✅ 已接入 |
+| **chenditc（推荐主源）** | 预构建 qlib_bin 全量/增量包 | `chenditc_client.download_qlib_bin` / `incremental_sync.download_and_merge_incremental` | ✅ 已接入 |
+| **akshare（兜底/增量）** | OHLCV / 基本面 / 资金 / 龙虎榜 / 指数 | 已封装，免费无 key | ✅ 已接入 |
 | **mootdx（补）** | K线 / 财务快照 | 作为 akshare 接口 break 时的 fallback | 🟡 TODO |
 | **tushare 免费额度** | 兜底 | 注册即送积分 | 🟡 TODO |
+
+**chenditc 下载流程**（`chenditc_client.download_qlib_bin`）：
+1. 下载 tar.gz 到临时文件
+2. 解压到暂存目录（`strip components=1`）
+3. 校验后再原子替换目标目录，避免中途失败污染现有数据
 
 **akshare 已知风险**：
 - 接口易 break（上游改版），需做异常捕获 + fallback
 - 无 PIT 保证：历史数据可能被上游 revise，导致回测不可复现
-- 高频访问被限流，建议加请求间隔与重试退避
+- 高频访问被限流，`config.quant.fetch_interval_seconds=1.2` 控制请求间隔，`fetch_max_workers=3` 控制并发
 
 **fallback 策略（待实现）**：
 ```
@@ -330,25 +462,25 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 
 ---
 
-## 6. Alembic 迁移
+## 7. Alembic 迁移
 
-### 6.1 目录与配置
+### 7.1 目录与配置
 
 | 项 | 值 |
 |----|----|
 | 迁移目录 | `backend/migrations/` |
 | `alembic.ini` | `script_location = %(here)s/migrations` |
-| 自动建表 | `init_db` 调 `create_all` |
-| 自动升级 | `init_db` 末尾跑 `alembic upgrade head` |
+| 自动建表 | `init_db` 调 `Base.metadata.create_all` |
+| 自动升级 | `init_db` 末尾在子线程跑 `alembic upgrade head`（失败仅告警不阻断） |
 
-### 6.2 已有迁移版本
+### 7.2 已有迁移版本
 
 | revision | 说明 |
 |----------|------|
 | `23fc4c667c2f` | **基线迁移**：空 `upgrade`，表已由 `create_all` 创建 |
 | `a1b2c3d4e5f6` | **增量迁移**：auto add columns |
 
-### 6.3 新增模型字段后的操作流程
+### 7.3 新增模型字段后的操作流程
 
 1. 修改 `FundamentalPIT`（或其他模型）加 `Column`
 2. 生成增量迁移：
@@ -365,9 +497,81 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 - 不要手改已 apply 的历史迁移脚本，只能新增 revision
 - autogenerate 对类型变更/重命名识别不全，必要时手写 `op.alter_column` / `op.add_column`
 
+### 7.4 SQLite 连接 PRAGMA（`database.py`）
+
+每个新连接自动执行：
+- `PRAGMA foreign_keys = ON`
+- `PRAGMA journal_mode = WAL`（写不阻塞读）
+- `PRAGMA busy_timeout = 5000`（写冲突等 5s 而非立即报 locked）
+- `PRAGMA synchronous = NORMAL`（WAL 下兼顾安全与性能）
+- `PRAGMA cache_size = -65536`（64MB 缓存）
+
 ---
 
-## 7. 后续 TODO 清单
+## 8. 部署注意事项
+
+### 8.1 时区
+
+| 项 | 值 | 来源 |
+|----|----|------|
+| 应用时区 | `Asia/Shanghai` | `config.app.timezone` |
+| 调度器时区 | `Asia/Shanghai` | `scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")` |
+| 容器时区 | `TZ=Asia/Shanghai` | `docker-compose.yml` environment |
+| 定时同步 | 工作日 18:00 | `register_scheduled_jobs`（mon-fri 18:00） |
+
+> ⚠️ 容器部署务必设置 `TZ=Asia/Shanghai`，否则 APScheduler 按容器默认 UTC 触发，同步时间会偏移 8 小时。
+
+### 8.2 关键路径
+
+| 用途 | 路径 | 配置项 |
+|------|------|--------|
+| QLib bin 数据 | `data/qlib_bin/cn_data/` | `config.quant.qlib_provider_uri` |
+| SQLite 数据库 | `data/quantlab.db` | `config.data.db_path` |
+| 原始数据 | `data/raw/` | `config.data.raw_dir` |
+| 加工数据 | `data/processed/` | `config.data.processed_dir` |
+| 模型产物 | `models/`（AutoML pkl 在 `data/models/automl/`） | `config.data.models_dir` |
+| 日志 | `logs/` | `config.logging.dir` |
+| 行业映射 | `data/industry_map.json` | `industry_sync.sync_industry_data` |
+
+> 路径解析：`Settings.PROJECT_ROOT` 由环境变量 `PROJECT_ROOT` 决定（Docker 设为 `/app`），否则回退到代码所在目录上四级。所有相对路径基于 `PROJECT_ROOT` 拼接。
+
+### 8.3 权限要求
+
+- `data/`、`models/`、`logs/` 目录必须对运行用户**可写**（同步 bin、训练 AutoML、写日志）
+- `config.yaml` 在 Docker 中以 `:ro` 只读挂载，但 `PUT /quant/data/data-source` 会尝试回写——若只读挂载该接口会 500，需挂载为可写或避免调用
+- QLib bin 目录替换（chenditc 全量同步）需原子 rename 权限，建议与暂存目录同文件系统
+
+### 8.4 WSL 路径注意
+
+- 项目位于 WSL `~/QuantLab`，**不要在 Windows 侧通过 `\\wsl$\` 直接编辑源码运行**，避免换行符/权限问题
+- `.venv` 必须在 WSL 内创建：`python -m venv .venv`，使用 `.venv/bin/python`
+- `start.sh` 默认用 `$SCRIPT_DIR/.venv/bin/python`，不存在时回退 `python3`
+- qlib 依赖 `protobuf<4`、`setuptools<81`，安装时需约束版本（见 `requirements.txt`）
+
+---
+
+## 9. 已知问题完整清单
+
+基于代码注释与 TODO 标记：
+
+| # | 模块 | 问题 | 影响 | 位置 |
+|---|------|------|------|------|
+| 1 | eod_incremental | ST 股 5% 涨跌停未处理 | ST 股涨跌停日误判为可交易 | `_get_limit_pct` |
+| 2 | eod_incremental | 新浪源无 pct_change 时用 close.pct_change 近似，除权日误判 | 极少样本误判 | `_compute_tradable` |
+| 3 | eod_incremental | 历史 `$tradable` 仅增量同步时生成，无全量回填脚本 | 历史段缺 tradable | `incremental_sync_eod` |
+| 4 | fundamental_sync | 财务报表（revenue/net_profit 等）解析 TODO | 财报字段无数据 | `fetch_financial_abstract` |
+| 5 | capital_flow_sync | 沪市融资融券明细 `stock_margin_detail_sse` 仅单日查询，未实现 | `$margin_balance` 沪市为空 | `fetch_margin` |
+| 6 | capital_flow_sync | 龙虎榜字段名"龙虎榜净买额"需运行时验证，akshare 版本可能不同 | 龙虎榜数据可能失败 | `fetch_dragon` |
+| 7 | capital_flow_sync | 大单字段名"大单净流入-净额"需运行时验证 | 大单数据可能失败 | `fetch_big_order` |
+| 8 | capital_flow_sync | 北交所 BJ 市场代码未验证，按 sh/sz 二分 | 北交所大单未覆盖 | `fetch_big_order` |
+| 9 | data 源 | mootdx / tushare fallback 未实现 | akshare break 时无兜底 | §6 |
+| 10 | data 源 | akshare 无 PIT 保证，历史可能被 revise | 回测不可复现 | §6 |
+| 11 | 配置 | `config.yaml` data_source=akshare 与代码默认 chenditc 不一致 | 行为依赖配置，易混淆 | §1.4 |
+| 12 | 因子引擎 | 因子协同性评估（相关性矩阵 + 增量 IC）未实现 | 仅有 IC 对比/衰减对比 | `factor_compare` |
+
+---
+
+## 10. 后续 TODO 清单
 
 - [ ] 财务报表解析（`fetch_financial_abstract` 的 pivot 实现）
 - [ ] 沪市融资融券采集（`fetch_margin` 的 SH 分支）
@@ -389,9 +593,14 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 | 资金/情绪 | `backend/app/services/data/capital_flow_sync.py` |
 | 市值数据 | `backend/app/services/data/market_data.py` |
 | 申万行业 | `backend/app/services/data/industry_sync.py` |
+| 指数同步 | `backend/app/services/data/index_sync.py` |
+| chenditc 客户端 | `backend/app/services/data/chenditc_client.py` |
+| 增量包合并 | `backend/app/services/data/incremental_sync.py` |
+| 同步调度 | `backend/app/services/data/sync_runner.py` |
+| 完整性校验 | `backend/app/services/data/integrity_check.py` |
 | Alembic 迁移 | `backend/migrations/` |
 | QLib bin 数据 | `{provider_uri}/features/{code_lower}/{field}.day.bin` |
-| SQLite 库 | `backend/{db_name}.db`（由 `DATABASE_URL` 决定） |
+| SQLite 库 | `backend/{db_name}.db`（由 `DATABASE_URL` 决定，实际 `data/quantlab.db`） |
 
 ## 附录 B：关键函数索引
 
@@ -401,14 +610,17 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 | `_compute_tradable` | `eod_incremental.py` | 计算单股 tradable 序列 |
 | `incremental_sync_eod` | `eod_incremental.py` | 日K增量同步 + tradable 生成 |
 | `_read_bin` / `_write_bin` | `eod_incremental.py` | QLib bin 读写基础设施 |
-| `_get_calendar` | `eod_incremental.py` | 交易日历对齐 |
+| `_get_calendar` / `_write_calendar` | `eod_incremental.py` | 交易日历对齐 |
 | `sync_fundamental_pit` | `fundamental_sync.py` | 基本面PIT采集 |
 | `query_fundamental_pit` | `fundamental_sync.py` | PIT查询（按 announce_date） |
-| `fetch_valuation_daily` | `fundamental_sync.py` | 拉估值日频 |
-| `fetch_financial_abstract` | `fundamental_sync.py` | 拉财务报表（TODO） |
 | `sync_capital_flow` | `capital_flow_sync.py` | 资金/情绪采集主入口 |
-| `fetch_north` / `fetch_margin` / `fetch_dragon` / `fetch_big_order` | `capital_flow_sync.py` | 四类资金字段拉取 |
+| `sync_industry_data` / `load_industry_map` | `industry_sync.py` | 行业同步与加载 |
+| `sync_indices_to_qlib` | `index_sync.py` | 指数同步 |
+| `download_qlib_bin` | `chenditc_client.py` | chenditc 全量包下载 |
+| `download_and_merge_incremental` | `incremental_sync.py` | chenditc 增量包合并 |
+| `run_sync_task` | `sync_runner.py` | 同步任务总调度 |
+| `check_integrity` | `integrity_check.py` | bin 完整性校验 |
 
 ---
 
-*文档版本：阶段1 · 最后更新：2026-07-31*
+*文档版本：阶段1 · 最后更新：2026-07-31 · 基于代码审校增强*
