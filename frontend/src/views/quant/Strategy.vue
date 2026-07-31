@@ -245,7 +245,7 @@
 defineOptions({ name: 'QuantStrategy' })
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'

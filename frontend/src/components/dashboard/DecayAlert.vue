@@ -42,7 +42,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { decayCheck } from '@/api/factor'

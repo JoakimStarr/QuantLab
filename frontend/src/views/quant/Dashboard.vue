@@ -53,7 +53,7 @@
 <script setup>
 defineOptions({ name: 'Dashboard' })
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import KpiCards from '@/components/dashboard/KpiCards.vue'
 import MarketOverview from '@/components/dashboard/MarketOverview.vue'

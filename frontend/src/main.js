@@ -1,13 +1,13 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/loading/style/css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import { initAppConfig } from '@/config/app'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import './styles/global.scss'
 
 // ECharts configuration
@@ -36,9 +36,6 @@ const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
-app.use(ElementPlus, {
-  size: 'default'
-})
 
 // 全局错误边界：未捕获异常弹 toast 而非白屏
 app.config.errorHandler = (err, instance, info) => {

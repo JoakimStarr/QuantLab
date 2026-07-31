@@ -12,6 +12,16 @@ export default [
     },
   },
   {
+    files: ['vite.config.js', 'eslint.config.js'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        __dirname: 'readonly',
+        Buffer: 'readonly',
+      },
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**'],
   },
 ]

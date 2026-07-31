@@ -85,7 +85,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'

@@ -36,7 +36,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Lock } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 

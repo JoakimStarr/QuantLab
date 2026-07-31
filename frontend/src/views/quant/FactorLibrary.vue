@@ -144,7 +144,7 @@
 defineOptions({ name: 'FactorLibrary' })
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Plus, Refresh, Download, Warning } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import VChart from 'vue-echarts'

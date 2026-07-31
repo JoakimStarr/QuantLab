@@ -338,7 +338,7 @@
 <script setup>
 defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { getQuantDataStatus, syncQuantData, getQlibStatus, switchDataSource, getDataPreview, getSyncHistory, eodSync, getDataSource, syncIndices, integrityCheck, syncIndustry } from '@/api/quant'

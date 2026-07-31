@@ -217,7 +217,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { MagicStick, Operation, ChatLineSquare, Connection, VideoPlay, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask } from '@/api/mining'
