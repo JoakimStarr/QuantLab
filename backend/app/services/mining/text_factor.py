@@ -7,7 +7,6 @@ import json
 import logging
 import asyncio
 from datetime import datetime, timedelta
-import numpy as np
 import pandas as pd
 from app.core.database import async_session
 from app.core.config import settings
@@ -167,10 +166,10 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
         daily = sent_df.groupby(["date", "code"])["score"].mean().reset_index()
 
         # 转 qlib MultiIndex 格式评价 IC
-        # 注意：qlib 内部 instrument 用大写（SH600000），但 _to_qlib_code 返回小写（文件系统用），
+        # 注意：qlib 内部 instrument 用大写（SH600000），但 to_qlib_code 返回小写（文件系统用），
         # 需 .upper() 转为大写以匹配 qlib 数据
-        from app.services.quant.data_adapter import _to_qlib_code
-        daily["qlib_code"] = daily["code"].apply(lambda c: _to_qlib_code(c).upper())
+        from app.services.data.code_utils import to_qlib_code
+        daily["qlib_code"] = daily["code"].apply(lambda c: to_qlib_code(c).upper())
         daily = daily.set_index(["date", "qlib_code"])[["score"]].rename(columns={"score": "factor"})
         daily.index.names = ["datetime", "instrument"]
 

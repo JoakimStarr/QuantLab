@@ -10,9 +10,8 @@ from sqlalchemy import select
 from app.core.errors import AppError
 from app.core.database import async_session
 from app.schemas.common import ApiResponse
-from app.models.backtest_result import BacktestResult
 from app.models.task_result import TaskResult
-from app.services.strategy.manager import get_backtest_result, list_backtest_results
+from app.services.strategy.manager import get_backtest_result
 from app.services.strategy import backtest_status
 
 logger = logging.getLogger(__name__)

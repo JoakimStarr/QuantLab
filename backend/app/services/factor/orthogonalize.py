@@ -8,7 +8,6 @@
 正交化后的因子在截面上两两不相关（相关系数为 0），且能经受后续 z-score 标准化。
 """
 import logging
-import numpy as np
 import pandas as pd
 from typing import Dict, List
 

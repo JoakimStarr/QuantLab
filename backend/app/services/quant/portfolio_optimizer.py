@@ -1,8 +1,7 @@
 """基于 CVXPy 的组合优化器"""
 import logging
-import numpy as np
 import pandas as pd
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 

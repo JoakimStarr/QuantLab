@@ -1,5 +1,4 @@
 """LLM 因子挖掘预设模板"""
-import json
 
 # 预设挖掘模板
 MINING_TEMPLATES = {

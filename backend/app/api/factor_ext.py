@@ -4,14 +4,13 @@ import io
 import json
 import asyncio
 import logging
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.services.factor.factor_compare import compare_factors, get_factor_decay
-from app.services.factor.library import get_factor, add_factor, list_factors
+from app.services.factor.library import get_factor, list_factors
 
 logger = logging.getLogger(__name__)
 

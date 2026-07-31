@@ -4,12 +4,10 @@ chenditc 提供 qlib_bin_1d.tar.gz 增量包（仅当日新增数据），
 体积远小于全量包（~5MB vs ~500MB），适合日常增量更新。
 """
 import os
-import shutil
 import logging
 import tarfile
 import tempfile
 import requests
-from datetime import datetime
 from app.services.data.chenditc_client import get_latest_release_info
 
 logger = logging.getLogger(__name__)

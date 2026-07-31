@@ -211,9 +211,6 @@ async def run_sync_task(req: SyncDataRequest):
     """
     universe = req.universe or settings.quant.get("universe", "csi300")
     data_source = settings.quant.get("data_source", "chenditc")
-    period = settings.quant.get("default_backtest_period", {})
-    start_date = req.start_date or period.get("start", "2020-01-01")
-    end_date = req.end_date or datetime.now().strftime("%Y-%m-%d")
 
     logger.info("开始数据同步 universe=%s data_source=%s", universe, data_source)
 

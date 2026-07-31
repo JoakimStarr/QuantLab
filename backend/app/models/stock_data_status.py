@@ -1,6 +1,5 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, TIMESTAMP, UniqueConstraint
-from sqlalchemy.sql import func
 from app.core.database import Base
 
 

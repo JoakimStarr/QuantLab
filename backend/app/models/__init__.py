@@ -5,7 +5,6 @@ from .backtest_result import BacktestResult
 from .mining_task import MiningTask
 from .sync_history import SyncHistory
 from .task_result import TaskResult
-from .fundamental import FundamentalPIT
 
 __all__ = [
     "StockDataStatus",
@@ -15,5 +14,4 @@ __all__ = [
     "MiningTask",
     "SyncHistory",
     "TaskResult",
-    "FundamentalPIT",
 ]

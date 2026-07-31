@@ -7,7 +7,6 @@ import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Query
 
-from app.core.config import settings
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.services.quant.qlib_init import is_qlib_available, init_qlib
@@ -71,7 +70,6 @@ async def get_index_kline(
     def _load():
         init_qlib()
         from qlib.data import D
-        import pandas as pd
 
         d = chr(36)
         fields = [d + "open", d + "high", d + "low", d + "close", d + "volume"]

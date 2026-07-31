@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy import select, func
 
 from app.core.config import settings
-from app.core.database import get_db, async_session
+from app.core.database import get_db
 from app.core.errors import AppError
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.common import ApiResponse

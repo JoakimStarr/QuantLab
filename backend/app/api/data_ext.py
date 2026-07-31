@@ -1,18 +1,14 @@
 """数据管理扩展 API：同步进度、数据预览、同步历史、数据源切换"""
 import logging
-import csv
-import io
 import os
 from datetime import datetime
 from fastapi import APIRouter, Query, Depends, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import get_db, async_session
+from app.core.database import get_db
 from app.core.errors import AppError
 from app.models.sync_history import SyncHistory
-from app.models.stock_data_status import StockDataStatus
 from app.schemas.common import ApiResponse
 from app.services.data.sync_progress import get_progress
 from app.services.data.eod_incremental import incremental_sync_eod

@@ -1,6 +1,6 @@
 """同步进度跟踪：内存中的进度状态，供 API 和 WebSocket 查询"""
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional
 

@@ -4,11 +4,10 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, Query
 from fastapi.responses import RedirectResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
-from sqlalchemy import select, text
-from app.core.database import init_db, async_session
+from sqlalchemy import text
+from app.core.database import init_db
 from app.core.logging_config import setup_logging
 from app.core.middleware import setup_middleware
 from app.core.errors import (

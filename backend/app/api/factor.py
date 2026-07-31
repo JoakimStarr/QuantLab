@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query, BackgroundTasks
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.services.factor.library import (
-    list_factors, get_factor, add_factor, disable_factor, update_factor_metrics,
+    list_factors, get_factor, add_factor, disable_factor,
 )
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.builtin_factors import seed_builtin_factors

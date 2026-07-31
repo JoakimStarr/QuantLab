@@ -58,16 +58,6 @@ async def run_cpu(func: Callable[..., T], *args, **kwargs) -> T:
     return await loop.run_in_executor(get_cpu_executor(), func, *args)
 
 
-async def run_io(func: Callable[..., T], *args, **kwargs) -> T:
-    """在 IO 线程池中运行同步 IO 函数。"""
-    import asyncio
-    loop = asyncio.get_running_loop()
-    if kwargs:
-        from functools import partial
-        return await loop.run_in_executor(get_io_executor(), partial(func, *args, **kwargs))
-    return await loop.run_in_executor(get_io_executor(), func, *args)
-
-
 def shutdown_executors() -> None:
     """应用关闭时清理池。"""
     global _io_executor, _cpu_executor

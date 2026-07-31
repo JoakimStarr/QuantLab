@@ -4,6 +4,8 @@ import time
 import numpy as np
 import pandas as pd
 
+from app.services.data.code_utils import to_qlib_code
+
 logger = logging.getLogger(__name__)
 
 _market_cap_cache = None
@@ -11,18 +13,6 @@ _market_cap_cache_time = None
 
 _MAX_RETRIES = 3
 _RETRY_DELAY = 2  # seconds
-
-
-def _to_qlib_code(code) -> str:
-    """股票代码转换为 qlib 格式"""
-    code = str(code).zfill(6)
-    if code.startswith("6"):
-        return "sh" + code
-    elif code.startswith("0") or code.startswith("3"):
-        return "sz" + code
-    elif code.startswith("8") or code.startswith("4"):
-        return "bj" + code
-    return "sh" + code
 
 
 def _fetch_via_spot_em() -> pd.DataFrame:
@@ -36,22 +26,9 @@ def _fetch_via_spot_em() -> pd.DataFrame:
         "总市值": "total_mv",
         "流通市值": "circ_mv",
     })
-    df["code"] = df["code"].apply(_to_qlib_code)
+    df["code"] = df["code"].apply(to_qlib_code)
     df = df.set_index("code")[["total_mv", "circ_mv"]]
     return df.dropna(subset=["total_mv"])
-
-
-def _fetch_via_value_em() -> pd.DataFrame:
-    """备用数据源：东菜市场表现接口（含市值）"""
-    import akshare as ak
-    try:
-        df = ak.stock_zh_a_spot()
-        if df is None or df.empty:
-            return pd.DataFrame()
-        # stock_zh_a_spot 无市值列，尝试 stock_market_activity_legu
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
 
 
 def fetch_market_cap_data() -> pd.DataFrame:

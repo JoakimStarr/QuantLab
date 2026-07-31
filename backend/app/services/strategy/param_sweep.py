@@ -2,11 +2,8 @@
 import json
 import asyncio
 import logging
-from datetime import datetime
-from sqlalchemy import select
 from app.core.database import async_session
 from app.models.strategy import Strategy
-from app.models.backtest_result import BacktestResult
 
 logger = logging.getLogger(__name__)
 

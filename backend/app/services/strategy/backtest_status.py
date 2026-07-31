@@ -47,8 +47,3 @@ def get_status(strategy_id: int) -> dict:
 def get_all_status() -> dict:
     with _lock:
         return dict(_status)
-
-
-def clear_status(strategy_id: int):
-    with _lock:
-        _status.pop(strategy_id, None)

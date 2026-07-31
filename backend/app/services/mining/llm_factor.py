@@ -9,11 +9,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime
-from sqlalchemy import select
-from app.core.database import async_session
 from app.core.config import settings
-from app.models.mining_task import MiningTask
-from app.models.factor import Factor
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.library import add_factor
 from app.services.mining.task_utils import update_task_status as _update_task

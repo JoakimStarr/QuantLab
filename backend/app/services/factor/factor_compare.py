@@ -3,7 +3,6 @@ import json
 import asyncio
 import logging
 import numpy as np
-import pandas as pd
 from datetime import datetime
 from sqlalchemy import select
 from app.core.database import async_session

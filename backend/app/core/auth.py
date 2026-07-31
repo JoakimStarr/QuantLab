@@ -114,25 +114,6 @@ async def require_user(
     return payload
 
 
-async def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-):
-    """认证依赖：从 Authorization header 或 cookie 提取 token 并校验。"""
-    payload = _extract_payload(request, credentials)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="token 无效或已过期")
-    return payload
-
-
-async def optional_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-):
-    """可选认证依赖：不强制要求登录，但尝试解析 token。"""
-    return _extract_payload(request, credentials)
-
-
 def warn_insecure_config() -> None:
     """启动时输出安全配置告警。
 

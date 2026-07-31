@@ -1,6 +1,6 @@
 """策略 API：CRUD、回测执行、结果查询。"""
 import logging
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, Query, BackgroundTasks
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
@@ -86,7 +86,6 @@ async def _run_backtest_task(strategy_id: int, start: str, end: str, backend: st
         # 更新策略状态为失败
         from app.core.database import async_session
         from app.models.strategy import Strategy
-        from sqlalchemy import select
         async with async_session() as session:
             r = await session.get(Strategy, strategy_id)
             if r:

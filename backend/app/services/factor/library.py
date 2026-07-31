@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select, func
 from app.core.database import async_session
 from app.models.factor import Factor
-from app.services.factor.expression import validate_expression, ExpressionValidationError
+from app.services.factor.expression import validate_expression
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ async def update_factor_metrics(factor_id: int, metrics: dict) -> None:
 
 async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = None) -> dict:
     """对库中因子执行评价（调用 qlib，CPU 密集，应由 worker 调用）。"""
-    import asyncio
     from app.core.config import settings
     from app.services.quant.factor_eval import evaluate_factor as _eval
     factor = await get_factor(factor_id)

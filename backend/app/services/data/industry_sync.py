@@ -2,25 +2,13 @@
 import logging
 import json
 import os
-import pandas as pd
 
 from app.core.config import settings
+from app.services.data.code_utils import to_qlib_code
 
 logger = logging.getLogger(__name__)
 
 INDUSTRY_MAP_PATH = settings.PROJECT_ROOT / "data" / "industry_map.json"
-
-
-def _to_qlib_code(code: str) -> str:
-    """6 位股票代码转 qlib 格式 (sh/sz/bj 前缀)"""
-    code = str(code).zfill(6)
-    if code.startswith("6"):
-        return "sh" + code
-    elif code.startswith("0") or code.startswith("3"):
-        return "sz" + code
-    elif code.startswith("8") or code.startswith("4"):
-        return "bj" + code
-    return "sh" + code
 
 
 def sync_industry_data() -> dict:
@@ -60,7 +48,7 @@ def sync_industry_data() -> dict:
                 # 列名：序号, 证券代码, 证券名称, 最新权重, 计入日期
                 for _, stock_row in cons.iterrows():
                     code = str(stock_row.iloc[1]).zfill(6)  # 证券代码
-                    qlib_code = _to_qlib_code(code)
+                    qlib_code = to_qlib_code(code)
                     industry_map[qlib_code] = industry_name
 
                 logger.info("行业 %s: %d 只股票", industry_name, len(cons))

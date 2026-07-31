@@ -7,7 +7,7 @@ import re
 import logging
 import numpy as np
 import pandas as pd
-from app.services.quant.qlib_init import init_qlib, QlibNotAvailableError
+from app.services.quant.qlib_init import init_qlib
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

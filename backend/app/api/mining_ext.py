@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query, BackgroundTasks
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
-from app.services.mining.mining_templates import list_templates, get_template, MINING_TEMPLATES
+from app.services.mining.mining_templates import list_templates, get_template
 
 logger = logging.getLogger(__name__)
 

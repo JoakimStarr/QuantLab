@@ -13,8 +13,6 @@ AKShare 返回 6 位代码，需按前缀映射交易所：
   3xxxxx -> sz（创业板）
   8xxxxx/9xxxxx/4xxxxx -> bj（北交所）
 """
-import os
-import time
 import logging
 import tempfile
 import asyncio
@@ -27,21 +25,9 @@ import numpy as np
 
 from app.core.config import settings
 from app.core.errors import DataFetchError
+from app.services.data.code_utils import to_qlib_code
 
 logger = logging.getLogger(__name__)
-
-
-def _to_qlib_code(code: str) -> str:
-    """6 位 AKShare 代码 -> qlib 小写带交易所前缀代码。"""
-    code = str(code).strip().zfill(6)
-    if code.startswith(("60", "68", "90", "11", "13", "50", "56")):
-        return "sh" + code
-    if code.startswith(("00", "30", "12", "15", "16", "18")):
-        return "sz" + code
-    if code.startswith(("83", "87", "43", "92", "88")):
-        return "bj" + code
-    # 默认按沪市处理
-    return "sh" + code
 
 
 async def _run_async(func, *args, timeout: int = 30, **kwargs):
@@ -76,7 +62,7 @@ async def get_stock_list() -> list[dict]:
         items.append({
             "code": code,
             "name": str(row[col_name]).strip(),
-            "qlib_code": _to_qlib_code(code),
+            "qlib_code": to_qlib_code(code),
         })
     return items
 
@@ -265,7 +251,7 @@ async def sync_to_qlib(
             code = "unknown"
             try:
                 code, df = await coro
-                qlib_code = _to_qlib_code(code)
+                qlib_code = to_qlib_code(code)
                 ok = await asyncio.get_running_loop().run_in_executor(
                     None, _write_qlib_csv, qlib_code, df, tmp_path
                 )
@@ -279,7 +265,7 @@ async def sync_to_qlib(
             if progress_cb:
                 progress_cb({
                     "total": total, "done": done, "failed": failed,
-                    "current": code, "qlib_code": _to_qlib_code(code),
+                    "current": code, "qlib_code": to_qlib_code(code),
                 })
 
         # 转储 bin

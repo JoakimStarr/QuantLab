@@ -168,7 +168,7 @@ async def rerun_pending_mining() -> None:
     pending 直接重新提交。仅重试近 N 天的任务避免无限堆积。
     """
     from datetime import datetime, timedelta
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from app.core.database import async_session
     from app.models.mining_task import MiningTask
     try:

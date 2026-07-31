@@ -26,11 +26,6 @@ class AINotConfiguredError(AppError):
         super().__init__("AI_NOT_CONFIGURED", message, 503)
 
 
-class ValidationError(AppError):
-    def __init__(self, message="参数校验失败"):
-        super().__init__("VALIDATION_ERROR", message, 422)
-
-
 async def app_error_handler(request: Request, exc: AppError):
     return JSONResponse(
         status_code=exc.status,
