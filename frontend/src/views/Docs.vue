@@ -16,6 +16,14 @@
         <span v-if="currentDoc?.summary" class="docs-summary">{{ currentDoc.summary }}</span>
       </div>
       <div class="docs-toolbar-right">
+        <el-tooltip :content="tocPosition === 'right' ? '目录靠左' : '目录靠右'" placement="bottom">
+          <el-button size="small" circle @click="toggleTocPosition">
+            <el-icon>
+              <ArrowLeft v-if="tocPosition === 'right'" />
+              <ArrowRight v-else />
+            </el-icon>
+          </el-button>
+        </el-tooltip>
         <span class="font-size-label">{{ fontSize }}px</span>
         <el-button-group>
           <el-button size="small" :disabled="fontSize <= 12" @click="changeFontSize(-2)">A-</el-button>
@@ -31,9 +39,9 @@
       <span style="margin-left: 8px">加载中...</span>
     </div>
     <el-empty v-else-if="!currentDoc" description="暂无文档" />
-    <div v-else class="docs-main">
+    <div v-else class="docs-main" :class="{ 'toc-left': tocPosition === 'left' }">
       <article class="markdown-body" v-html="renderedContent" />
-      <!-- 右侧浮动目录：仅 h2/h3，h1 作为文档标题不进目录 -->
+      <!-- 浮动目录：仅 h2/h3，h1 作为文档标题不进目录；位置由 tocPosition 决定 -->
       <aside v-if="toc.length > 0" class="docs-toc">
         <div class="docs-toc-title">目录</div>
         <ul class="docs-toc-list">
@@ -129,6 +137,16 @@ function changeFontSize(delta) {
 watch(fontSize, (val) => {
   document.documentElement.style.setProperty('--docs-font-size', `${val}px`)
 }, { immediate: true })
+
+// 目录位置：left / right，默认 right（保持原行为），localStorage 持久化
+const TOC_POS_KEY = 'quantlab:docs:toc-position'
+const savedPos = localStorage.getItem(TOC_POS_KEY)
+const tocPosition = ref(savedPos === 'left' || savedPos === 'right' ? savedPos : 'right')
+
+function toggleTocPosition() {
+  tocPosition.value = tocPosition.value === 'right' ? 'left' : 'right'
+  localStorage.setItem(TOC_POS_KEY, tocPosition.value)
+}
 
 const groupedDocs = computed(() => {
   const groups = {}
@@ -331,6 +349,19 @@ onUnmounted(() => {
   align-items: start;
 }
 
+// 目录靠左：翻转列宽顺序，并用 order 让 aside 落到第一列(260px)、article 落到第二列(1fr)
+.docs-main.toc-left {
+  grid-template-columns: 260px 1fr;
+
+  .markdown-body {
+    order: 2;
+  }
+
+  .docs-toc {
+    order: 1;
+  }
+}
+
 .markdown-body {
   max-width: 880px;
   margin: 0 auto;
@@ -484,8 +515,15 @@ onUnmounted(() => {
 
 // 窄屏隐藏 TOC，正文撑满
 @media (max-width: 1200px) {
-  .docs-main {
+  // 需同时覆盖 toc-left（双类选择器优先级高于单类，否则左侧会残留 260px 空列）
+  .docs-main,
+  .docs-main.toc-left {
     grid-template-columns: 1fr;
+
+    .markdown-body,
+    .docs-toc {
+      order: 0;
+    }
   }
 
   .docs-toc {
