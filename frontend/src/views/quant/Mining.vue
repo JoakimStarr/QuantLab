@@ -678,8 +678,8 @@ onBeforeUnmount(() => {
   margin: 4px 0;
 }
 .operator-tag {
-  background: var(--bg-hover);
-  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -802,7 +802,7 @@ onBeforeUnmount(() => {
 .cell-meta {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 .cell-time {
   font-size: var(--font-size-sm);

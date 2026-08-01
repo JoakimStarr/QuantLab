@@ -787,7 +787,7 @@ onBeforeUnmount(() => {
 // 单元格样式
 .cell-mono {
   font-family: var(--font-mono);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 .cell-name {
   font-weight: var(--font-weight-medium);
@@ -801,7 +801,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   vertical-align: middle;
 }
 .cell-tnum {
@@ -894,7 +894,7 @@ onBeforeUnmount(() => {
 .metrics-range {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 .metrics-grid {
   display: grid;

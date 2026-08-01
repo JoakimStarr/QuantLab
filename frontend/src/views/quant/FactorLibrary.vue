@@ -552,7 +552,14 @@ onMounted(loadFactors)
 .cell-expr {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  // 解决白底白字：用 --text-secondary（更深）并加柔和背景，避免对比度不足
+  color: var(--text-secondary);
+  background-color: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  max-width: 100%;
+  word-break: break-all;
 }
 .num {
   font-family: var(--font-mono);

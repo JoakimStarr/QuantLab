@@ -681,7 +681,7 @@ onMounted(loadData)
 
 .meta-date {
   font-size: var(--font-size-xs);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
 }
 

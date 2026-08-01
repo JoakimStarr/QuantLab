@@ -566,6 +566,33 @@ img {
   background-color: var(--bg-card) !important;
 }
 
+// Code blocks & inline code（解决 monospace 文本在白底白字 / 暗底深字的问题）
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+// 行内 code：默认背景透明时容易被白底白字问题困扰，显式给一个柔和背景 + 主文字色
+code {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+// 段落级 pre：明确背景 + 文字色，避免深色主题下深底深字
+pre {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  overflow-x: auto;
+  line-height: var(--line-height-normal);
+}
+
 // Tooltips
 .el-tooltip__trigger {
   outline: none !important;
@@ -575,6 +602,23 @@ img {
   border-radius: var(--radius-md) !important;
   background-color: var(--bg-card) !important;
   border: 1px solid var(--border) !important;
+  // 关键：tooltip/popper 内容文字色必须随主题走
+  // 浅色主题默认继承 Element Plus #303133 没问题，
+  // 但暗色主题（--bg-card: #161f33 深色）下若不显式设置，会变成深底深字。
+  color: var(--text-primary) !important;
+}
+
+// el-tooltip 内部 popper 容器及内容
+.el-tooltip__popper,
+.el-popper.is-light,
+.el-popper.is-dark {
+  color: var(--text-primary) !important;
+}
+
+// 暗色主题专属：深色背景上字色更亮
+:root.dark .el-popper,
+:root.dark .el-tooltip__popper {
+  color: var(--text-primary) !important;
 }
 
 // Dropdowns
