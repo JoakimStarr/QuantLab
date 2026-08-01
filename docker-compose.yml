@@ -44,15 +44,21 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     deploy:
       resources:
         limits:
+          cpus: "4"
           memory: 4g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   postgres_data:

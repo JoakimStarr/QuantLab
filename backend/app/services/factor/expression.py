@@ -7,6 +7,16 @@ import re
 import ast
 from app.core.config import settings
 
+# AST 安全沙箱配置
+_ALLOWED_AST_NODES = {
+    ast.Expression, ast.Call, ast.Name, ast.Constant,
+    ast.BinOp, ast.UnaryOp, ast.Attribute, ast.Add, ast.Sub,
+    ast.Mult, ast.Div, ast.Mod, ast.Pow, ast.USub, ast.UAdd,
+    ast.Load, ast.Store,
+}
+_MAX_EXPR_DEPTH = 20
+_MAX_EXPR_NODES = 100
+
 # qlib 内置算子（常用的，可按需扩展）
 _QLIB_OPS = {
     "Ref", "Mean", "Std", "Var", "Max", "Min", "Sum", "Rank", "Quantile",
@@ -59,6 +69,17 @@ def _find_negative_ref(tree) -> list[str]:
                         desc = "Ref(..., 负数)"
                     hits.append(desc)
     return hits
+
+
+def _get_depth(node, current=0) -> int:
+    """计算 AST 节点最大嵌套深度。"""
+    if not hasattr(node, 'body') and not hasattr(node, 'operand') and not hasattr(node, 'args'):
+        return current
+    max_depth = current
+    for child in ast.iter_child_nodes(node):
+        depth = _get_depth(child, current + 1)
+        max_depth = max(max_depth, depth)
+    return max_depth
 
 
 def validate_expression(expr: str, max_length: int = 2000) -> str:
@@ -121,6 +142,29 @@ def validate_expression(expr: str, max_length: int = 2000) -> str:
             raise ExpressionValidationError(f"禁止访问下划线属性: {node.attr}")
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             raise ExpressionValidationError("禁止 import 语句")
+
+    # AST 节点类型白名单
+    for node in ast.walk(tree):
+        if type(node) not in _ALLOWED_AST_NODES:
+            raise ExpressionValidationError(
+                f"禁止的 AST 节点类型: {type(node).__name__}"
+            )
+
+    # 表达式复杂度上限
+    all_nodes = list(ast.walk(tree))
+    if len(all_nodes) > _MAX_EXPR_NODES:
+        raise ExpressionValidationError(
+            f"表达式节点数 {len(all_nodes)} 超过上限 {_MAX_EXPR_NODES}"
+        )
+
+    # 最大嵌套深度
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            depth = _get_depth(node)
+            if depth > _MAX_EXPR_DEPTH:
+                raise ExpressionValidationError(
+                    f"表达式嵌套深度 {depth} 超过上限 {_MAX_EXPR_DEPTH}"
+                )
 
     # look-ahead bias 防护：禁止负数 Ref（Ref 负数=未来数据），AST 可处理嵌套参数
     negative_refs = _find_negative_ref(tree)

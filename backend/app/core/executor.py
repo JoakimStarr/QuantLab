@@ -58,6 +58,32 @@ async def run_cpu(func: Callable[..., T], *args, **kwargs) -> T:
     return await loop.run_in_executor(get_cpu_executor(), func, *args)
 
 
+async def run_io_cpu(func: Callable[..., T], *args, **kwargs) -> T:
+    """在 IO 线程池中运行释放 GIL 的 CPU 任务（如 qlib 因子评价）。
+
+    因子评价主要调用 qlib C 扩展，会释放 GIL，线程池足够且无序列化开销。
+    相比 run_cpu 的 ProcessPoolExecutor，避免 pickle 序列化与跨进程数据拷贝。
+    """
+    import asyncio
+    loop = asyncio.get_running_loop()
+    if kwargs:
+        from functools import partial
+        return await loop.run_in_executor(get_io_executor(), partial(func, *args, **kwargs))
+    return await loop.run_in_executor(get_io_executor(), func, *args)
+
+
+async def run_mixed(func: Callable[..., T], *args, is_cpu_bound: bool = False, **kwargs) -> T:
+    """根据任务类型自动选择线程池/进程池。
+
+    Args:
+        func: 待执行函数
+        is_cpu_bound: True 走进程池（ProcessPoolExecutor），False 走线程池（ThreadPoolExecutor）
+    """
+    if is_cpu_bound:
+        return await run_cpu(func, *args, **kwargs)
+    return await run_io_cpu(func, *args, **kwargs)
+
+
 def shutdown_executors() -> None:
     """应用关闭时清理池。"""
     global _io_executor, _cpu_executor

@@ -35,6 +35,8 @@ class BacktestResult(Base):
     metrics = Column(Text, nullable=True)
 
     created_at = Column(TIMESTAMP, default=func.now())
+    is_deleted = Column(Integer, default=0, nullable=False)  # 软删除标记：0=正常, 1=已删除
+    deleted_at = Column(TIMESTAMP, nullable=True)
 
     __table_args__ = (
         Index("idx_backtest_strategy", "strategy_id"),

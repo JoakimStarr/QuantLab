@@ -3,14 +3,19 @@
 将原位于 api 层的同步编排逻辑下沉至此，消除 core.recovery -> api.quant_data 的反向依赖。
 api 层与 recovery 层均通过本模块触发后台同步。
 """
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import async_session
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.quant import SyncDataRequest
+
+# asyncio.Lock 保护进度更新，防止并发协程交错写入
+_async_progress_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +40,36 @@ def collect_qlib_stats(qlib_dir: str) -> dict:
             if txt.name == "all.txt":
                 stock_count = n
     return {"latest_date": latest_date, "stock_count": stock_count, "row_count": row_count}
+
+
+def _detect_local_latest_date(qlib_dir: str) -> str | None:
+    """检测本地 qlib_bin 目录的最新交易日。
+
+    读取 calendars/day.txt 的末行作为最新交易日。
+    若日历文件不存在或为空，返回 None。
+    """
+    cal_path = Path(qlib_dir) / "calendars" / "day.txt"
+    if not cal_path.exists():
+        return None
+    lines = [l.strip() for l in cal_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return lines[-1] if lines else None
+
+
+def _compute_incremental_days(latest_local: str | None, default_days: int) -> int:
+    """根据本地最新交易日计算需要同步的天数。
+
+    若本地无数据，返回 default_days；否则计算最新交易日到今天的间隔天数，
+    确保至少同步 1 天，最多不超过 default_days 的 2 倍（防止极端情况遗漏）。
+    """
+    if latest_local is None:
+        return default_days
+    try:
+        last = datetime.strptime(latest_local, "%Y-%m-%d").date()
+        gap = (datetime.now().date() - last).days
+        # 多取 5 天容错（周末/节假日），最少 1 天
+        return max(1, min(gap + 5, default_days * 2))
+    except (ValueError, TypeError):
+        return default_days
 
 
 def classify_sync_error(error: str) -> dict:
@@ -97,7 +132,10 @@ async def mark_sync_failed(universe: str, error: str):
 
 
 async def _sync_via_chenditc(universe: str) -> dict:
-    """通过 chenditc 预构建 tarball 同步 qlib bin 数据。"""
+    """通过 chenditc 预构建 tarball 同步 qlib bin 数据。
+
+    增量策略：检测本地最新交易日，若与 release 日期一致则跳过下载。
+    """
     import asyncio
     from app.services.data.chenditc_client import download_qlib_bin, get_latest_release_info
     from app.services.data.sync_progress import init_progress, finish_progress, clear_progress
@@ -105,14 +143,42 @@ async def _sync_via_chenditc(universe: str) -> dict:
 
     qlib_dir = settings.qlib_provider_path
     release = get_latest_release_info()
-    total_mb = release.get("size", 0) / 1024 / 1024 if "error" not in release else 0
-    init_progress(universe, "chenditc", total_mb=total_mb)
+    if "error" in release:
+        raise RuntimeError(f"获取 chenditc release 信息失败: {release['error']}")
+
+    release_date = release.get("date")
+    total_mb = release.get("size", 0) / 1024 / 1024 if release_date else 0
+
+    # 增量检测：本地最新交易日与 release 日期一致则跳过下载
+    latest_local = _detect_local_latest_date(qlib_dir)
+    if latest_local and release_date and latest_local >= release_date:
+        logger.info(
+            "chenditc 本地数据已最新: latest_date=%s, release_date=%s，跳过下载",
+            latest_local, release_date,
+        )
+        stats = collect_qlib_stats(qlib_dir)
+        async with _async_progress_lock:
+            init_progress(universe, "chenditc", total_mb=0)
+        async with _async_progress_lock:
+            finish_progress(True)
+        async with _async_progress_lock:
+            clear_progress()
+        return {
+            "universe": universe, "latest_date": stats["latest_date"],
+            "stock_count": stats["stock_count"], "row_count": stats["row_count"],
+            "qlib_dir": qlib_dir, "version": release.get("version"),
+            "release_date": release_date, "data_source": "chenditc",
+            "skipped": True,
+        }
+
+    async with _async_progress_lock:
+        init_progress(universe, "chenditc", total_mb=total_mb)
 
     history = SyncHistory(
         universe=universe, data_source="chenditc", status="running",
         started_at=datetime.now(),
-        version=release.get("version") if "error" not in release else None,
-        release_date=release.get("date") if "error" not in release else None,
+        version=release.get("version") if release_date else None,
+        release_date=release_date,
         file_size_mb=round(total_mb, 1) if total_mb else None,
     )
     async with async_session() as session:
@@ -124,7 +190,8 @@ async def _sync_via_chenditc(universe: str) -> dict:
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(None, download_qlib_bin, qlib_dir)
-        finish_progress(True)
+        async with _async_progress_lock:
+            finish_progress(True)
         stats = collect_qlib_stats(qlib_dir)
         async with async_session() as session:
             h = await session.get(SyncHistory, history_id)
@@ -141,7 +208,8 @@ async def _sync_via_chenditc(universe: str) -> dict:
             "universe": universe, "latest_date": stats["latest_date"], "stock_count": stats["stock_count"],
         })
     except Exception as e:
-        finish_progress(False, str(e))
+        async with _async_progress_lock:
+            finish_progress(False, str(e))
         async with async_session() as session:
             h = await session.get(SyncHistory, history_id)
             if h:
@@ -149,7 +217,8 @@ async def _sync_via_chenditc(universe: str) -> dict:
                 h.finished_at = datetime.now()
                 h.error = str(e)[:500]
                 await session.commit()
-        clear_progress()
+        async with _async_progress_lock:
+            clear_progress()
         raise
 
     stats = collect_qlib_stats(qlib_dir)
@@ -184,28 +253,38 @@ async def _incremental_sync(req: SyncDataRequest, universe: str, source: str, da
     from app.services.data.eod_incremental import incremental_sync_eod
     from app.services.data.sync_progress import init_progress, update_progress, clear_progress
 
-    init_progress(universe, source, total_mb=0)
-    update_progress(pct=0, status="running",
-                    message=f"正在通过{source}拉取{universe}最近{days}天EOD数据...")
+    # 增量同步策略：检测本地最新交易日，只下载缺失数据
+    latest_local = _detect_local_latest_date(settings.qlib_provider_path)
+    actual_days = _compute_incremental_days(latest_local, days)
+    if latest_local:
+        logger.info("本地最新交易日 %s, 计算增量天数 %d (原始 %d)", latest_local, actual_days, days)
+    else:
+        logger.info("本地无历史数据，使用原始天数 %d", days)
+
+    async with _async_progress_lock:
+        init_progress(universe, source, total_mb=0)
+        update_progress(pct=0, status="running",
+                        message=f"正在通过{source}拉取{universe}最近{actual_days}天EOD数据...")
     try:
         # incremental_sync_eod 是 async 函数，内部已用 run_in_executor 调度同步 IO，
         # 不能再通过 run_cpu 丢进 ProcessPoolExecutor（协程不能用 run_in_executor）
         result = await incremental_sync_eod(
-            days=days, universe=universe, source=source,
+            days=actual_days, universe=universe, source=source,
         )
         if result.get("ok"):
             success = result.get("success", 0)
             failed = result.get("failed", 0)
             new_dates = result.get("new_dates", [])
-            if success == 0:
-                update_progress(pct=100, status="failed",
-                                error=f"全部股票拉取失败（共{result.get('total_stocks', 0)}只）")
-                raise ValueError(f"{source}拉取全部失败，可能被反爬或数据源不可用")
-            update_progress(pct=100, status="done",
-                            message=f"同步完成：成功{success}只，失败{failed}只，新增{len(new_dates)}个交易日")
+            async with _async_progress_lock:
+                if success == 0:
+                    update_progress(pct=100, status="failed",
+                                    error=f"全部股票拉取失败（共{result.get('total_stocks', 0)}只）")
+                    raise ValueError(f"{source}拉取全部失败，可能被反爬或数据源不可用")
+                update_progress(pct=100, status="done",
+                                message=f"同步完成：成功{success}只，失败{failed}只，新增{len(new_dates)}个交易日")
             stats = collect_qlib_stats(settings.qlib_provider_path)
             return {
-                "universe": universe, "data_source": source, "days": days,
+                "universe": universe, "data_source": source, "days": actual_days,
                 "success": success, "failed": failed, "new_dates": new_dates,
                 "total_stocks": result.get("total_stocks", 0),
                 "latest_date": stats["latest_date"], "stock_count": stats["stock_count"],
@@ -213,13 +292,16 @@ async def _incremental_sync(req: SyncDataRequest, universe: str, source: str, da
             }
         else:
             error = result.get("error", "未知错误")
-            update_progress(pct=100, status="failed", error=error)
+            async with _async_progress_lock:
+                update_progress(pct=100, status="failed", error=error)
             raise ValueError(error)
     except Exception as e:
-        update_progress(pct=100, status="failed", error=str(e))
+        async with _async_progress_lock:
+            update_progress(pct=100, status="failed", error=str(e))
         raise
     finally:
-        clear_progress()
+        async with _async_progress_lock:
+            clear_progress()
 
 
 async def _try_baostock_incremental(req: SyncDataRequest) -> dict:

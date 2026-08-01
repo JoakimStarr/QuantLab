@@ -228,6 +228,7 @@ class SecuritySettings(CompatModel):
     admin_password: str = "admin123"
     admin_password_hash: str = ""
     login_rate_limit: str = "5/minute"
+    access_token_expire_hours: int = 24
 
 
 # 默认 SECRET_KEY 用于检测"未配置"
@@ -322,6 +323,7 @@ class Settings:
             admin_password=admin_pwd_value,
             admin_password_hash=admin_pwd_hash_value,
             login_rate_limit=os.getenv("LOGIN_RATE_LIMIT", "5/minute"),
+            access_token_expire_hours=int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", "24")),
         )
         # 保留旧私有属性以兼容旧测试与反射访问（auth._auth_enabled 等）
         self._auth_enabled = auth_enabled

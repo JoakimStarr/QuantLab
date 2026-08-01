@@ -88,6 +88,16 @@ async def init_db() -> None:
             lambda sync_conn: sync_conn.dialect.get_table_names(sync_conn)
         )
     logger.info("数据库表初始化完成，共 %d 张表: %s", len(tables), tables)
+    # 数据库连接池指标上报
+    try:
+        from app.core.metrics import db_pool_size, db_pool_available, db_pool_overflow
+        if engine and engine.pool:
+            pool = engine.pool
+            db_pool_size.set(pool.size())
+            db_pool_available.set(pool.checkedin())
+            db_pool_overflow.set(pool.overflow())
+    except Exception:
+        pass
     try:
         await asyncio.to_thread(_run_alembic_upgrade)
     except Exception as e:

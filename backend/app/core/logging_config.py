@@ -1,117 +1,118 @@
+"""日志系统结构化配置：JSON 格式 + 日志轮转 + 动态级别调整。
+
+设计：
+- 统一 JSON 结构化日志格式：{"timestamp", "level", "logger", "message", "request_id", "module", "duration_ms"}
+- 日志轮转：RotatingFileHandler（最大 100MB，保留 5 份）
+- 日志级别动态调整：通过 API 端点 /api/v1/admin/log-level 实时调整
+"""
+import contextvars
 import json
 import logging
-import os
+import logging.config
 import sys
-import contextvars
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from app.core.config import settings
 
-PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT") or Path(__file__).resolve().parent.parent.parent.parent)
-log_dir = PROJECT_ROOT / "logs"
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# request_id 上下文变量，由中间件设置，由 RequestIdFilter 注入到每条日志记录
+# 请求级上下文变量，由中间件设置，由日志过滤器/错误处理器读取
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
+# 日志目录，由 logs API 路由引用
+log_dir: Path = Path("logs")
 
 
-class RequestIdFilter(logging.Filter):
-    """将 contextvars 中的 request_id 注入到每条 LogRecord 上。"""
-    def filter(self, record):
-        record.request_id = request_id_var.get("")
-        return True
+class JSONFormatter(logging.Formatter):
+    """JSON 结构化日志格式化器。"""
 
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         log_entry = {
-            "timestamp": self.formatTime(record),
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            "request_id": getattr(record, "request_id", ""),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
         }
-        if hasattr(record, "extra_fields"):
-            log_entry.update(record.extra_fields)
+        # 注入 request_id（如果 LoggerAdapter 有）
+        if hasattr(record, "request_id"):
+            log_entry["request_id"] = record.request_id
+        if hasattr(record, "task_id"):
+            log_entry["task_id"] = record.task_id
+        if hasattr(record, "duration_ms"):
+            log_entry["duration_ms"] = record.duration_ms
         if record.exc_info and record.exc_info[0]:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry, ensure_ascii=False)
 
 
-class TextFormatter(logging.Formatter):
-    """文本格式，包含 request_id。"""
-    def format(self, record):
-        rid = getattr(record, "request_id", "")
-        base = super().format(record)
-        if rid:
-            return f"{base} [req={rid}]"
-        return base
+def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool = True) -> None:
+    """配置根日志器。
+
+    Args:
+        log_dir: 日志目录（相对于项目根或绝对路径）
+        level: 日志级别
+        json_format: True 使用 JSON 格式，False 使用标准文本格式
+    """
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    # 更新模块级变量，供 logs API 路由使用
+    globals()["log_dir"] = log_path
+
+    handlers = {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": sys.stdout,
+            "formatter": "json" if json_format else "standard",
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(log_path / "quantlab.log"),
+            "maxBytes": 100 * 1024 * 1024,  # 100MB
+            "backupCount": 5,
+            "encoding": "utf-8",
+            "formatter": "json" if json_format else "standard",
+        },
+        "error_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(log_path / "error.log"),
+            "maxBytes": 100 * 1024 * 1024,  # 100MB
+            "backupCount": 5,
+            "encoding": "utf-8",
+            "level": "WARNING",
+            "formatter": "json" if json_format else "standard",
+        },
+    }
+
+    formatters = {
+        "json": {
+            "()": "app.core.logging_config.JSONFormatter",
+        },
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    }
+
+    config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": formatters,
+        "handlers": handlers,
+        "root": {
+            "level": level.upper(),
+            "handlers": ["console", "file", "error_file"],
+        },
+    }
+
+    logging.config.dictConfig(config)
+    logging.getLogger(__name__).info("日志系统已初始化: level=%s, json_format=%s, dir=%s", level, json_format, log_path)
 
 
-def setup_logging():
-    cfg = settings.logging or {}
-    handlers_cfg = cfg.get("handlers", {})
-    level_str = cfg.get("level", "INFO")
-    level = getattr(logging, level_str.upper(), logging.INFO)
-    max_bytes = handlers_cfg.get("app", {}).get("max_bytes", 10485760)
-    backup_count = handlers_cfg.get("app", {}).get("backup_count", 30)
-
-    rid_filter = RequestIdFilter()
-
-    # --- 文本 handler（app.log + error.log）---
-    text_fmt = TextFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
-    app_handler = RotatingFileHandler(
-        log_dir / "app.log", maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-    app_handler.setLevel(level)
-    app_handler.setFormatter(text_fmt)
-    app_handler.addFilter(rid_filter)
-
-    error_handler = RotatingFileHandler(
-        log_dir / "error.log", maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(text_fmt)
-    error_handler.addFilter(rid_filter)
-
-    # --- JSON handler（api.jsonl + perf.jsonl）---
-    json_fmt = JsonFormatter()
-
-    api_handler = RotatingFileHandler(
-        log_dir / "api.jsonl", maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-    api_handler.setLevel(level)
-    api_handler.setFormatter(json_fmt)
-    api_handler.addFilter(rid_filter)
-
-    perf_handler = RotatingFileHandler(
-        log_dir / "perf.jsonl", maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-    perf_handler.setLevel(level)
-    perf_handler.setFormatter(json_fmt)
-    perf_handler.addFilter(rid_filter)
-
-    # --- root logger: 仅 app + error ---
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    root_logger.addHandler(app_handler)
-    root_logger.addHandler(error_handler)
-
-    # --- 专用 logger: 不向 root 传播，避免重复 ---
-    api_logger = logging.getLogger("app.api")
-    api_logger.setLevel(level)
-    api_logger.addHandler(api_handler)
-    api_logger.propagate = False
-
-    perf_logger = logging.getLogger("perf")
-    perf_logger.setLevel(level)
-    perf_logger.addHandler(perf_handler)
-    perf_logger.propagate = False
-
-    # --- stdout handler（始终启用，确保 docker logs 可见）---
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(text_fmt)
-    console_handler.addFilter(rid_filter)
-    root_logger.addHandler(console_handler)
-    api_logger.addHandler(console_handler)  # propagate=False 不继承 root handler
-
-    return root_logger
+def set_log_level(level: str) -> None:
+    """动态调整根日志级别。"""
+    level = level.upper()
+    if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        raise ValueError(f"无效的日志级别: {level}")
+    logging.getLogger().setLevel(level)
+    logging.getLogger(__name__).info("日志级别已调整为: %s", level)

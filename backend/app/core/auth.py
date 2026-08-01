@@ -1,4 +1,5 @@
 """JWT 认证模块：token 签发与校验 + 可配置鉴权依赖。"""
+import re
 import time
 import hmac
 import hashlib
@@ -48,8 +49,35 @@ def verify_admin_password(password: str) -> bool:
         return False
 
 
-def create_token(data: dict, expire_seconds: int = 86400) -> str:
-    """签发简单 JWT-like token（HS256）。"""
+def create_refresh_token(data: dict) -> str:
+    """签发 refresh token（7 天有效期）。"""
+    return create_token(data, expire_seconds=604800)
+
+
+def check_password_strength(password: str) -> tuple[bool, str]:
+    """检查密码强度。
+
+    要求：长度 >= 8，包含大写字母、小写字母、数字、特殊字符至少3种。
+    """
+    if len(password) < 8:
+        return False, "密码长度至少 8 位"
+    categories = 0
+    if re.search(r'[A-Z]', password): categories += 1
+    if re.search(r'[a-z]', password): categories += 1
+    if re.search(r'[0-9]', password): categories += 1
+    if re.search(r'[^A-Za-z0-9]', password): categories += 1
+    if categories < 3:
+        return False, "密码需包含大写字母、小写字母、数字、特殊字符中至少3种"
+    return True, ""
+
+
+def create_token(data: dict, expire_seconds: int | None = None) -> str:
+    """签发简单 JWT-like token（HS256）。
+
+    默认过期时间从 settings.security.access_token_expire_hours 读取。
+    """
+    if expire_seconds is None:
+        expire_seconds = settings.security.access_token_expire_hours * 3600
     header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
     exp = int(time.time()) + expire_seconds
     payload_data = {**data, "exp": exp, "iat": int(time.time())}

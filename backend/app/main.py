@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -24,7 +25,7 @@ from app.core.errors import (
     http_exception_handler,
     validation_error_handler,
 )
-from app.core.logging_config import setup_logging
+from app.core.logging_config import setup_logging, set_log_level
 from app.core.metrics import router as metrics_router, ws_active_connections
 from app.core.middleware import setup_middleware
 from app.core.ratelimit import limiter
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging()
+    setup_logging(log_dir=settings.logging.dir, level=settings.logging.level)
     warn_insecure_config()
     settings.enforce_production_security()
     await init_db()
@@ -72,6 +73,19 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 setup_middleware(app)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def add_request_id_middleware(request: Request, call_next):
+    """为每个请求生成/提取 request_id，注入日志。"""
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+    # 设置到 ContextVar
+    from app.core.logging_config import request_id_var
+
+    request_id_var.set(request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)

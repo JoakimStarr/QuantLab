@@ -45,6 +45,7 @@
         :data="filteredFactors"
         stripe
         :default-sort="defaultSort"
+        max-height="680"
         @sort-change="handleSortChange"
         @selection-change="handleSelectionChange"
         :row-class-name="decayRowClass"

@@ -8,45 +8,61 @@
       <el-button @click="refreshAll" :loading="loading" size="small">刷新</el-button>
     </header>
 
-    <KpiCards :stats="dashboardStats" :loading="loading" :data-status="dataStatus" />
+    <!-- 初始加载骨架屏 -->
+    <template v-if="initialLoading">
+      <SkeletonLoader :rows="3" />
+      <el-row :gutter="16" style="margin-top: 16px;">
+        <el-col :xs="24" :sm="12">
+          <SkeletonLoader :rows="4" />
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <SkeletonLoader :rows="4" />
+        </el-col>
+      </el-row>
+      <SkeletonLoader :rows="6" />
+    </template>
 
-    <MarketOverview
-      :items="overviewItems"
-      :selected="selectedIndex"
-      @update:selected="selectedIndex = $event"
-    />
+    <template v-else>
+      <KpiCards :stats="dashboardStats" :loading="loading" :data-status="dataStatus" />
 
-    <KLineChart
-      :kline-items="klineItems"
-      :indices="indices"
-      :selected-index="selectedIndex"
-      :selected-period="selectedPeriod"
-      :active-indicators="activeIndicators"
-      :periods="periods"
-      :kline-loading="klineLoading"
-      :time-range="timeRange"
-      :custom-range="customRange"
-      @update:selected-index="selectedIndex = $event"
-      @update:selected-period="selectedPeriod = $event"
-      @update:active-indicators="activeIndicators = $event"
-      @update:time-range="timeRange = $event"
-      @update:custom-range="customRange = $event"
-    />
+      <MarketOverview
+        :items="overviewItems"
+        :selected="selectedIndex"
+        @update:selected="selectedIndex = $event"
+      />
 
-    <el-row :gutter="16">
-      <el-col :xs="24" :sm="12">
-        <FactorStats :total="factorTotal" :by-source="factorBySource" />
-      </el-col>
-      <el-col :xs="24" :sm="12">
-        <MiningTasks :tasks="recentMining" :loading="loading" />
-      </el-col>
-    </el-row>
+      <KLineChart
+        :kline-items="klineItems"
+        :indices="indices"
+        :selected-index="selectedIndex"
+        :selected-period="selectedPeriod"
+        :active-indicators="activeIndicators"
+        :periods="periods"
+        :kline-loading="klineLoading"
+        :time-range="timeRange"
+        :custom-range="customRange"
+        @update:selected-index="selectedIndex = $event"
+        @update:selected-period="selectedPeriod = $event"
+        @update:active-indicators="activeIndicators = $event"
+        @update:time-range="timeRange = $event"
+        @update:custom-range="customRange = $event"
+      />
 
-    <DecayAlert />
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="12">
+          <FactorStats :total="factorTotal" :by-source="factorBySource" />
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <MiningTasks :tasks="recentMining" :loading="loading" />
+        </el-col>
+      </el-row>
 
-    <BacktestList :backtests="recentBacktests" :loading="loading" />
+      <DecayAlert />
 
-    <Guide v-model:visible="guideVisible" />
+      <BacktestList :backtests="recentBacktests" :loading="loading" />
+
+      <Guide v-model:visible="guideVisible" />
+    </template>
   </PageContainer>
 </template>
 
@@ -55,6 +71,7 @@ defineOptions({ name: 'Dashboard' })
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import KpiCards from '@/components/dashboard/KpiCards.vue'
 import MarketOverview from '@/components/dashboard/MarketOverview.vue'
 import KLineChart from '@/components/dashboard/KLineChart.vue'
@@ -70,6 +87,7 @@ import { getQuantDataStatus } from '@/api/quant'
 import { listIndices, getIndexKline, getMarketOverview } from '@/api/market'
 
 const loading = ref(true)
+const initialLoading = ref(true)
 const guideVisible = ref(false)
 
 const factorTotal = ref(0)
@@ -193,6 +211,7 @@ async function loadAll() {
     ElMessage.error('加载首页数据失败')
   } finally {
     loading.value = false
+    initialLoading.value = false
   }
 }
 

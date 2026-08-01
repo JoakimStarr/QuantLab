@@ -57,10 +57,65 @@ factor_library_total = Gauge(
     "因子库总数",
 )
 
+# --- 因子评价指标 ---
+eval_duration = Histogram(
+    "factor_eval_duration_seconds",
+    "因子评价耗时",
+    buckets=[1, 5, 10, 30, 60, 120],
+)
+eval_total = Counter(
+    "factor_eval_total",
+    "因子评价总数",
+    ["status"],
+)
+
+# --- LLM 调用指标 ---
+llm_call_duration = Histogram(
+    "llm_call_duration_seconds",
+    "LLM 调用耗时",
+)
+llm_call_total = Counter(
+    "llm_call_total",
+    "LLM 调用总数",
+    ["provider", "status"],
+)
+
+# --- 缓存指标 ---
+cache_hit_total = Counter(
+    "cache_hit_total",
+    "缓存命中总数",
+    ["cache_name"],
+)
+cache_miss_total = Counter(
+    "cache_miss_total",
+    "缓存未命中总数",
+    ["cache_name"],
+)
+
+# --- 数据同步指标 ---
+sync_duration = Histogram(
+    "data_sync_duration_seconds",
+    "数据同步耗时",
+    ["source"],
+)
+sync_total = Counter(
+    "data_sync_total",
+    "数据同步次数",
+    ["source", "status"],
+)
+
 # --- 系统指标 ---
 db_pool_size = Gauge(
     "db_pool_size",
     "数据库连接池当前使用连接数",
+)
+db_pool_available = Gauge(
+    "db_pool_available",
+    "数据库连接池可用连接数",
+)
+db_pool_overflow = Gauge(
+    "db_pool_overflow",
+    "数据库连接池溢出连接数",
 )
 scheduler_running = Gauge(
     "scheduler_running",
