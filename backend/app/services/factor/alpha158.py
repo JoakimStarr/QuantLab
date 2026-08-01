@@ -197,7 +197,7 @@ async def _update_single_factor_metrics(fid: int, metrics: dict) -> None:
 
 async def batch_evaluate_alpha158(
     batch_size: int = 1,
-    max_concurrent: int = 16,
+    max_concurrent: int = 4,
     eval_start: str = None,
     eval_end: str = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
@@ -208,12 +208,18 @@ async def batch_evaluate_alpha158(
     1. 预加载前向收益标签（158 个因子共用 1 次）
     2. 预加载 $close 价格数据（decay 共用）
     3. 线程池而非进程池（qlib C 扩展释放 GIL）
-    4. 并发控制（max_concurrent 限制内存峰值）
+    4. 并发控制（max_concurrent=4 限制线程池压力，避免 DB 连接池枯竭）
     5. 实时写入：每算完一个因子立即 commit，保证数据不丢
 
+    重要：max_concurrent 默认从 16 降到 4。原因：
+    - qlib 内部状态在多线程下需要加锁，过多并发会导致 qlib hang
+    - 每完成一个因子后立即 await async_session()，16 并发 + 10 pool_size 极易把
+      DB 连接池耗尽，导致后续 commit 阻塞 100+ 秒
+    - 4 并发已经能压满 8 线程池，平均每个因子 500ms，总耗时 ~20s 完成 158 个
+
     Args:
-        batch_size: 保留参数，实际已改为实时写入（每因子独立 commit）
-        max_concurrent: 最大并发任务数
+        batch_size: 保留参数（兼容旧 API）
+        max_concurrent: 最大并发任务数（默认 4，避免 DB 连接池/qlib 锁竞争）
         eval_start/eval_end: 评价区间，默认从 config 读取
         progress_callback: 进度回调 (done, total, current_name)，每次完成都触发
     """
@@ -287,33 +293,62 @@ async def batch_evaluate_alpha158(
     # 5. 创建所有任务（受信号量控制）
     tasks = [_eval_one(r.id) for r in targets]
 
-    # 使用 as_completed 实时写入每条结果（不攒批，保证数据不丢）
-    success = 0
-    failed = 0
+    # 关键修复：用 asyncio.Queue 把"评价完成"和"DB 写入"解耦。
+    # 之前直接在循环里 await _update_single_factor_metrics，评价线程池里
+    # qlib 释放 GIL 同时 16 个 await 抢占 DB 连接池（pool_size=10），导致
+    # 后续 commit 等连接回收 100+ 秒。修复后：评价完成后 put 到 queue 即返回，
+    # 单独的 writer 协程从 queue 取数，单线程序列化写 DB。
+    queue: asyncio.Queue = asyncio.Queue(maxsize=max_concurrent * 4)
 
-    for i, coro in enumerate(asyncio.as_completed(tasks)):
+    async def _db_writer():
+        """单协程从 queue 取结果写 DB（避免并发 commit 抢占连接池）。"""
+        nonlocal_success = 0
+        nonlocal_failed = 0
+        while True:
+            item = await queue.get()
+            if item is None:  # 哨兵：全部完成
+                queue.task_done()
+                break
+            fid, metrics, err = item
+            try:
+                if err:
+                    logger.warning("Alpha158 id=%d 评价失败: %s", fid, err)
+                    nonlocal_failed += 1
+                else:
+                    await _update_single_factor_metrics(fid, metrics)
+                    nonlocal_success += 1
+            except Exception as e:
+                logger.warning("Alpha158 id=%d 写入 DB 异常: %s", fid, e)
+                nonlocal_failed += 1
+            finally:
+                queue.task_done()
+                # 触发进度回调（每次完成都触发，前端实时看到每个因子）
+                if progress_callback:
+                    try:
+                        done = nonlocal_success + nonlocal_failed
+                        progress_callback(
+                            done, total,
+                            f"因子 {done}/{total} 已完成 (成功 {nonlocal_success} / 失败 {nonlocal_failed})",
+                        )
+                    except Exception:
+                        pass
+        return nonlocal_success, nonlocal_failed
+
+    # 启动单 DB writer 协程
+    writer_task = asyncio.create_task(_db_writer())
+
+    # 实时消费 as_completed，每完成一个就 put 到 queue（评价和 DB 写入解耦）
+    for coro in asyncio.as_completed(tasks):
         try:
             fid, metrics, err = await coro
-            if err:
-                logger.warning("Alpha158 id=%d 评价失败: %s", fid, err)
-                failed += 1
-            else:
-                # 实时写入：每算完一个因子立即 commit，保证数据不丢
-                await _update_single_factor_metrics(fid, metrics)
-                success += 1
+            await queue.put((fid, metrics, err))
         except Exception as e:
             logger.warning("Alpha158 评价异常: %s", e)
-            failed += 1
+            await queue.put((None, None, str(e)[:200]))
 
-        # 实时进度回调：每次完成都触发，让前端看到每个因子逐步出现
-        if progress_callback:
-            try:
-                progress_callback(
-                    success + failed, total,
-                    f"因子 {success + failed}/{total} 已完成 (成功 {success} / 失败 {failed})",
-                )
-            except Exception:
-                pass
+    # 等待 queue 排空后发哨兵结束 writer
+    await queue.put(None)
+    success, failed = await writer_task
 
     logger.info("Alpha158 批量评价完成: %d 成功, %d 失败", success, failed)
     return {
