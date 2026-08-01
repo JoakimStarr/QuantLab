@@ -51,7 +51,7 @@
         :row-class-name="decayRowClass"
       >
         <el-table-column type="selection" width="48" />
-        <el-table-column prop="name" label="因子名称" min-width="160" sortable>
+        <el-table-column prop="name" label="因子名称" min-width="140" sortable>
           <template #default="{ row }">
             <span class="cell-name">{{ row.name }}</span>
           </template>
@@ -66,17 +66,17 @@
             <span class="cell-desc">{{ row.description || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="expression" label="表达式" width="280" show-overflow-tooltip>
+        <el-table-column prop="expression" label="表达式" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="cell-expr">{{ row.expression }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="ic" label="IC" width="100" align="right" sortable>
+        <el-table-column prop="ic" label="IC" width="90" align="right" sortable>
           <template #default="{ row }">
             <span class="num" :class="numClass(row.ic)">{{ fmt(row.ic, 3) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="rank_ic" label="RankIC" width="100" align="right" sortable>
+        <el-table-column prop="rank_ic" label="RankIC" width="90" align="right" sortable>
           <template #default="{ row }">
             <span class="num" :class="numClass(row.rank_ic)">{{ fmt(row.rank_ic, 3) }}</span>
           </template>
@@ -98,7 +98,7 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" align="center">
+        <el-table-column label="操作" width="240" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="onEvaluate(row)">评价</el-button>
             <el-button link type="success" size="small" @click="onQuantile(row)">分层</el-button>
