@@ -67,6 +67,41 @@ _BUILTIN_META = {
 }
 
 
+def _strip_frontmatter(content: str) -> str:
+    """剥掉 markdown 文件开头的 YAML frontmatter（如果存在）。
+
+    用纯正则实现，不依赖 python-frontmatter，避免未安装时的 fallback bug。
+    前置 frontmatter 形如：
+        ---
+        key: value
+        ---
+        正文...
+    """
+    # 行首以 "---" 开头，第二行必须是另一个 "---" 才算完整 frontmatter
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", content, re.DOTALL)
+    if m:
+        return m.group(2).lstrip("\n")
+    return content
+
+
+def _parse_frontmatter(content: str) -> dict:
+    """从 markdown 字符串提取 YAML frontmatter 为 dict（无依赖实现）。"""
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if not m:
+        return {}
+    fm_text = m.group(1)
+    out: dict = {}
+    for line in fm_text.split("\n"):
+        if ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k:
+            out[k] = v
+    return out
+
+
 def _slugify(filename: str) -> str:
     """文件名转 slug: DATA_LAYER.md -> data-layer"""
     name = filename.rsplit(".", 1)[0]
@@ -86,29 +121,68 @@ def _parse_meta(path: Path) -> dict:
         "summary": builtin.get("summary", ""),
     }
 
-    if HAS_FRONTMATTER:
+    # 解析 frontmatter（先纯正则；如有 python-frontmatter 包，再覆盖更精确的值）
+    fm = _parse_frontmatter(content)
+    for key in ("title", "slug", "group", "summary"):
+        v = fm.get(key)
+        if v:
+            base[key] = v
+    v = fm.get("order")
+    if v is not None:
         try:
-            post = frontmatter.loads(content)
-            # frontmatter 提供时覆盖 base
-            for key in ("title", "slug", "group", "summary"):
-                v = post.get(key)
-                if v:
-                    base[key] = v
-            # order 是数字，特殊处理
-            v = post.get("order")
-            if v is not None:
-                base["order"] = v
-            body = post.content
-            return {**base, "content": body}
-        except Exception:
+            base["order"] = int(v)
+        except (TypeError, ValueError):
             pass
 
-    # 走到此处说明没 frontmatter 或解析失败：用 base（已经包含 builtin fallback）+ 标题 regex
-    title_match = re.match(r"^#\s+(.+)$", content, re.MULTILINE)
-    if not builtin.get("title") and title_match:
-        base["title"] = title_match.group(1).strip()
-    return {**base, "content": content}
+    body = _strip_frontmatter(content)
+    return {**base, "content": body}
 
+
+def get_doc_raw(slug: str) -> Optional[str]:
+    """按 slug 获取文档原始 Markdown 内容（已剥 frontmatter）。
+
+    用于 Docsify 类工具直接 fetch 此 URL 渲染。
+    找不到返回 None。
+    """
+    if not DOCS_DIR.exists():
+        return None
+    for path in DOCS_DIR.glob("*.md"):
+        meta = _parse_meta(path)
+        if meta["slug"] == slug or _slugify(path.name) == slug:
+            return meta["content"]
+    return None
+
+
+def get_sidebar_md() -> str:
+    """生成 Docsify 用的 _sidebar.md（按 group 分组）。
+
+    Docsify 会 fetch 这个 URL，把内容渲染成左侧导航。
+    每行: `- [标题](slug)`
+    """
+    docs = list_docs()
+    # 按 group 分组
+    groups: dict[str, list] = {}
+    for d in docs:
+        groups.setdefault(d["group"], []).append(d)
+
+    lines = []
+    for gname in sorted(groups.keys()):
+        lines.append(f"- **{gname}**")
+        for d in sorted(groups[gname], key=lambda x: (x["order"], x["title"])):
+            # Docsify 用 #/slug 作为路由锚点
+            lines.append(f"  - [{d['title']}]({d['slug']})")
+    return "\n".join(lines) + "\n"
+
+
+def get_navbar_md() -> str:
+    """生成 Docsify 用的 _navbar.md（顶部导航）。
+
+    返回指向项目首页、GitHub、当前页等链接。
+    """
+    return (
+        "- [首页](/)\n"
+        "- [GitHub](https://github.com/JoakimStarr/QuantLab)\n"
+    )
 
 
 def list_docs() -> list:
