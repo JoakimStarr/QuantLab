@@ -26,117 +26,43 @@
         <el-option label="AutoML" value="automl" />
         <el-option label="Alpha158" value="alpha158" />
       </el-select>
-      <el-select v-model="sortBy" class="filter-toolbar__select">
+      <el-select v-model="sortByOption" class="filter-toolbar__select">
         <el-option label="按IC" value="ic" />
         <el-option label="按RankIC" value="rank_ic" />
         <el-option label="按ICIR" value="icir" />
       </el-select>
       <div class="filter-toolbar__spacer" />
-      <el-button type="primary" :disabled="selectedFactors.length < 2" @click="compareFactors">对比选中因子 ({{ selectedFactors.length }})</el-button>
+      <el-button type="primary" :disabled="selectedKeys.length < 2" @click="compareFactors">对比选中因子 ({{ selectedKeys.length }})</el-button>
       <span class="filter-toolbar__count">共 {{ factors.length }} 个因子</span>
     </section>
 
-    <!-- 因子表格 -->
+    <!-- 因子表格（虚拟滚动 el-table-v2） -->
     <section class="factor-table">
       <el-skeleton v-if="loading" :rows="10" animated class="factor-table__skeleton" />
-      <el-table
-        v-else
-        ref="tableRef"
-        :data="filteredFactors"
-        stripe
-        :default-sort="defaultSort"
-        max-height="680"
-        @sort-change="handleSortChange"
-        @selection-change="handleSelectionChange"
-        :row-class-name="decayRowClass"
-      >
-        <el-table-column type="selection" width="48" />
-        <el-table-column prop="name" label="因子名称" min-width="140" sortable>
-          <template #default="{ row }">
-            <span class="cell-name">{{ row.name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="category" label="类别" width="100" align="center" sortable>
-          <template #default="{ row }">
-            <span class="badge" :class="`badge--${categoryBadge(row.category)}`">{{ categoryLabel(row.category) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="cell-desc">{{ row.description || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="expression" label="表达式" width="220" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="cell-expr">{{ row.expression }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="ic" label="IC" width="100" align="right" sortable>
-          <template #header>
-            <el-tooltip :content="METRIC_TIPS.ic" placement="top" effect="dark">
-              <span class="th-tip">IC</span>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span class="num" :class="numClass(row.ic)">{{ fmt(row.ic, 3) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="rank_ic" label="RankIC" width="100" align="right" sortable>
-          <template #header>
-            <el-tooltip :content="METRIC_TIPS.rank_ic" placement="top" effect="dark">
-              <span class="th-tip">RankIC</span>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span class="num" :class="numClass(row.rank_ic)">{{ fmt(row.rank_ic, 3) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="icir" label="ICIR" width="100" align="right" sortable>
-          <template #header>
-            <el-tooltip :content="METRIC_TIPS.icir" placement="top" effect="dark">
-              <span class="th-tip">ICIR</span>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span class="num">{{ fmt(row.icir, 2) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="turnover" label="换手" width="100" align="right" sortable>
-          <template #header>
-            <el-tooltip :content="METRIC_TIPS.turnover" placement="top" effect="dark">
-              <span class="th-tip">换手</span>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span class="num">{{ fmt(row.turnover, 2) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100" align="center">
-          <template #header>
-            <el-tooltip :content="METRIC_TIPS.status" placement="top" effect="dark">
-              <span class="th-tip">状态</span>
-            </el-tooltip>
-          </template>
-          <template #default="{ row }">
-            <span class="badge" :class="row.status === 'active' ? 'badge--success' : 'badge--muted'">
-              {{ row.status === 'active' ? '启用' : '禁用' }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="240" align="center">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="onEvaluate(row)">评价</el-button>
-            <el-button link type="success" size="small" @click="onQuantile(row)">分层</el-button>
-            <el-button link type="primary" size="small" @click="onDeepAnalysis(row)">深度分析</el-button>
-            <el-button link type="warning" size="small" @click="onNeutralize(row)">中性化</el-button>
-            <el-button link type="danger" size="small" @click="onDisable(row)">禁用</el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <el-empty description="暂无因子" :image-size="80" />
+      <el-auto-resizer v-else>
+        <template #default="{ height, width }">
+          <el-table-v2
+            :columns="columns"
+            :data="sortedData"
+            :width="width"
+            :height="height"
+            row-key="id"
+            :row-class="rowClass"
+            :sort-by="tableSortBy"
+            :header-height="44"
+            :row-height="44"
+            :scrollbar-always-on="true"
+            fixed
+            @column-sort="onColumnSort"
+          >
+            <template #empty>
+              <el-empty description="暂无因子" :image-size="80" />
+            </template>
+          </el-table-v2>
         </template>
-      </el-table>
+      </el-auto-resizer>
     </section>
+
     <!-- 分层收益对话框 -->
     <el-dialog v-model="showQuantile" :title="`分层收益评价 — ${quantileFactor?.name ?? ''}`" width="780px">
       <div v-loading="quantileLoading" style="min-height:320px">
@@ -174,9 +100,12 @@
 
 <script setup>
 defineOptions({ name: 'FactorLibrary' })
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { h, ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElCheckbox } from 'element-plus/es/components/checkbox/index'
+import { ElButton } from 'element-plus/es/components/button/index'
+import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import { Plus, Refresh, Download, Warning, MagicStick } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import VChart from 'vue-echarts'
@@ -360,48 +289,90 @@ const quantileChartOption = computed(() => {
   }
 })
 
-// 前端筛选与排序
+// === 前端筛选与排序 ===
 const filterCategory = ref('')
-const sortBy = ref('ic')
-const tableRef = ref()
+const sortByOption = ref('ic')   // 下拉框值（ic / rank_ic / icir）
+const tableSortBy = ref({ key: 'ic', order: 'desc' })  // el-table-v2 排序状态
 
-// 选中的因子（用于对比）
-const selectedFactors = ref([])
-function handleSelectionChange(val) {
-  selectedFactors.value = val
+// 排序下拉框 <-> 列排序映射
+const sortByMap = {
+  ic: { key: 'ic', order: 'desc' },
+  rank_ic: { key: 'rank_ic', order: 'desc' },
+  icir: { key: 'icir', order: 'desc' },
+}
+
+// 下拉框变化 → 驱动 el-table-v2 排序
+watch(sortByOption, (val) => {
+  const cfg = sortByMap[val]
+  if (cfg) {
+    tableSortBy.value = { key: cfg.key, order: cfg.order }
+  }
+})
+
+// 列头点击排序 → 同步下拉框
+function onColumnSort({ key, order }) {
+  if (!order) {
+    sortByOption.value = ''
+    tableSortBy.value = { key: '', order: 'asc' }
+  } else {
+    const entry = Object.entries(sortByMap).find(
+      ([, v]) => v.key === key && v.order === order
+    )
+    sortByOption.value = entry ? entry[0] : ''
+    tableSortBy.value = { key, order }
+  }
+}
+
+// 筛选 + 排序后的数据
+const sortedData = computed(() => {
+  let list = factors.value
+  if (filterCategory.value) {
+    list = list.filter((f) => f.category === filterCategory.value)
+  }
+  const { key, order } = tableSortBy.value
+  if (key) {
+    list = [...list].sort((a, b) => {
+      const aVal = a[key]
+      const bVal = b[key]
+      // 空值排末尾
+      if (aVal == null) return 1
+      if (bVal == null) return -1
+      return order === 'asc' ? aVal - bVal : bVal - aVal
+    })
+  }
+  return list
+})
+
+// === 行选择（el-table-v2 无内置 selection，用自定义 checkbox 列）===
+const selectedKeys = ref([])  // 选中行的 id 列表
+
+function toggleRowSelection(rowData) {
+  const idx = selectedKeys.value.indexOf(rowData.id)
+  if (idx >= 0) {
+    selectedKeys.value = selectedKeys.value.filter(id => id !== rowData.id)
+  } else {
+    selectedKeys.value = [...selectedKeys.value, rowData.id]
+  }
+}
+
+function toggleSelectAll(val) {
+  if (val) {
+    selectedKeys.value = sortedData.value.map(f => f.id)
+  } else {
+    selectedKeys.value = []
+  }
+}
+
+// 对比选中因子：跳转因子对比页
+function compareFactors() {
+  const ids = selectedKeys.value.join(',')
+  router.push(`/quant/factor-compare?ids=${ids}`)
 }
 
 // 深度分析：跳转因子深度分析页
 function onDeepAnalysis(row) {
   router.push({ path: '/quant/factor-deep-analysis', query: { factor_id: row.id, factor_name: row.name } })
 }
-
-function compareFactors() {
-  const ids = selectedFactors.value.map(f => f.id).join(',')
-  router.push(`/quant/factor-compare?ids=${ids}`)
-}
-
-// sortBy 下拉框值 <-> el-table 排序字段映射（默认降序，指标越大越靠前）
-const sortByMap = {
-  ic: { prop: 'ic', order: 'descending' },
-  rank_ic: { prop: 'rank_ic', order: 'descending' },
-  icir: { prop: 'icir', order: 'descending' }
-}
-const defaultSort = { ...sortByMap[sortBy.value] }
-
-// 下拉框变化时同步驱动 el-table 排序，避免与 el-table 内部排序冲突
-let sortSyncing = false
-watch(sortBy, (val) => {
-  if (sortSyncing) return
-  const el = tableRef.value
-  if (!el) return
-  const cfg = sortByMap[val]
-  if (cfg) {
-    el.sort(cfg.prop, cfg.order)
-  } else {
-    el.clearSort()
-  }
-})
 
 // 类别映射：值 → 文案 + Badge 样式
 const categoryMap = {
@@ -414,32 +385,6 @@ const categoryMap = {
 }
 const categoryLabel = (c) => categoryMap[c]?.label || c || '—'
 const categoryBadge = (c) => categoryMap[c]?.badge || 'muted'
-
-// 筛选（前端 computed，不重新请求接口）
-// 排序交由 el-table 的 sortable 自行管理，避免与下拉框排序冲突
-const filteredFactors = computed(() => {
-  let list = factors.value
-  if (filterCategory.value) {
-    list = list.filter((f) => f.category === filterCategory.value)
-  }
-  return [...list]
-})
-
-// 点击列头排序时，同步下拉框状态（保持双向一致）
-function handleSortChange({ prop, order }) {
-  sortSyncing = true
-  if (!order) {
-    sortBy.value = ''
-  } else {
-    const entry = Object.entries(sortByMap).find(
-      ([, v]) => v.prop === prop && v.order === order
-    )
-    sortBy.value = entry ? entry[0] : ''
-  }
-  nextTick(() => {
-    sortSyncing = false
-  })
-}
 
 // 数值格式化：空值显示 —
 function fmt(val, digits = 3) {
@@ -454,6 +399,159 @@ function numClass(val) {
   if (Number.isNaN(n) || n === 0) return ''
   return n > 0 ? 'is-positive' : 'is-negative'
 }
+
+// === el-table-v2 列定义 ===
+const columns = computed(() => [
+  {
+    key: 'selection',
+    title: '',
+    width: 48,
+    align: 'center',
+    cellRenderer: ({ rowData }) => {
+      const checked = selectedKeys.value.includes(rowData.id)
+      return h(ElCheckbox, {
+        modelValue: checked,
+        'onUpdate:modelValue': () => toggleRowSelection(rowData),
+      })
+    },
+    headerCellRenderer: () => {
+      const all = sortedData.value.length > 0
+      const allSelected = all && selectedKeys.value.length === sortedData.value.length
+      const indeterminate = selectedKeys.value.length > 0 && selectedKeys.value.length < sortedData.value.length
+      return h(ElCheckbox, {
+        modelValue: all && allSelected,
+        indeterminate,
+        'onUpdate:modelValue': toggleSelectAll,
+      })
+    },
+  },
+  {
+    key: 'name',
+    title: '因子名称',
+    dataKey: 'name',
+    width: 140,
+    sortable: true,
+    cellRenderer: ({ cellData }) => h('span', { class: 'cell-name' }, cellData),
+  },
+  {
+    key: 'category',
+    title: '类别',
+    dataKey: 'category',
+    width: 100,
+    align: 'center',
+    sortable: true,
+    cellRenderer: ({ cellData }) => {
+      return h('span', { class: `badge badge--${categoryBadge(cellData)}` }, categoryLabel(cellData))
+    },
+  },
+  {
+    key: 'description',
+    title: '描述',
+    dataKey: 'description',
+    width: 140,
+    cellRenderer: ({ cellData }) => h('span', { class: 'cell-desc' }, cellData || '—'),
+  },
+  {
+    key: 'expression',
+    title: '表达式',
+    dataKey: 'expression',
+    width: 220,
+    cellRenderer: ({ cellData }) => h('span', { class: 'cell-expr' }, cellData),
+  },
+  {
+    key: 'ic',
+    title: 'IC',
+    dataKey: 'ic',
+    width: 100,
+    align: 'right',
+    sortable: true,
+    cellRenderer: ({ cellData }) => {
+      const cls = numClass(cellData)
+      return h('span', { class: ['num', cls].filter(Boolean).join(' ') }, fmt(cellData, 3))
+    },
+    headerCellRenderer: () => {
+      return h(ElTooltip, { content: METRIC_TIPS.ic, placement: 'top', effect: 'dark' }, {
+        default: () => h('span', { class: 'th-tip' }, 'IC'),
+      })
+    },
+  },
+  {
+    key: 'rank_ic',
+    title: 'RankIC',
+    dataKey: 'rank_ic',
+    width: 100,
+    align: 'right',
+    sortable: true,
+    cellRenderer: ({ cellData }) => {
+      const cls = numClass(cellData)
+      return h('span', { class: ['num', cls].filter(Boolean).join(' ') }, fmt(cellData, 3))
+    },
+    headerCellRenderer: () => {
+      return h(ElTooltip, { content: METRIC_TIPS.rank_ic, placement: 'top', effect: 'dark' }, {
+        default: () => h('span', { class: 'th-tip' }, 'RankIC'),
+      })
+    },
+  },
+  {
+    key: 'icir',
+    title: 'ICIR',
+    dataKey: 'icir',
+    width: 100,
+    align: 'right',
+    sortable: true,
+    cellRenderer: ({ cellData }) => h('span', { class: 'num' }, fmt(cellData, 2)),
+    headerCellRenderer: () => {
+      return h(ElTooltip, { content: METRIC_TIPS.icir, placement: 'top', effect: 'dark' }, {
+        default: () => h('span', { class: 'th-tip' }, 'ICIR'),
+      })
+    },
+  },
+  {
+    key: 'turnover',
+    title: '换手',
+    dataKey: 'turnover',
+    width: 100,
+    align: 'right',
+    sortable: true,
+    cellRenderer: ({ cellData }) => h('span', { class: 'num' }, fmt(cellData, 2)),
+    headerCellRenderer: () => {
+      return h(ElTooltip, { content: METRIC_TIPS.turnover, placement: 'top', effect: 'dark' }, {
+        default: () => h('span', { class: 'th-tip' }, '换手'),
+      })
+    },
+  },
+  {
+    key: 'status',
+    title: '状态',
+    dataKey: 'status',
+    width: 100,
+    align: 'center',
+    cellRenderer: ({ rowData }) => {
+      const active = rowData.status === 'active'
+      return h('span', { class: `badge ${active ? 'badge--success' : 'badge--muted'}` }, active ? '启用' : '禁用')
+    },
+    headerCellRenderer: () => {
+      return h(ElTooltip, { content: METRIC_TIPS.status, placement: 'top', effect: 'dark' }, {
+        default: () => h('span', { class: 'th-tip' }, '状态'),
+      })
+    },
+  },
+  {
+    key: 'actions',
+    title: '操作',
+    width: 240,
+    align: 'center',
+    cellRenderer: ({ rowData }) => {
+      return h('div', { style: 'display:flex;gap:4px;justify-content:center' }, [
+        h(ElButton, { link: true, type: 'primary', size: 'small', onClick: () => onEvaluate(rowData) }, () => '评价'),
+        h(ElButton, { link: true, type: 'success', size: 'small', onClick: () => onQuantile(rowData) }, () => '分层'),
+        h(ElButton, { link: true, type: 'primary', size: 'small', onClick: () => onDeepAnalysis(rowData) }, () => '深度分析'),
+        h(ElButton, { link: true, type: 'warning', size: 'small', onClick: () => onNeutralize(rowData) }, () => '中性化'),
+        h(ElButton, { link: true, type: 'danger', size: 'small', onClick: () => onDisable(rowData) }, () => '禁用'),
+      ])
+    },
+  },
+])
 
 // 检测因子衰减：调用 /factors/decay-check，标记衰减行
 async function onDecayCheck() {
@@ -477,9 +575,12 @@ async function onDecayCheck() {
   }
 }
 
-// 行样式：衰减因子标红
-function decayRowClass({ row }) {
-  return decayMap.value[row.id] ? 'row--decaying' : ''
+// 行样式：衰减因子标红 + 条纹
+function rowClass({ rowData, rowIndex }) {
+  const classes = []
+  if (decayMap.value[rowData.id]) classes.push('row--decaying')
+  if (rowIndex % 2 === 1) classes.push('row--striped')
+  return classes.join(' ')
 }
 
 // 加载因子列表：通过全局 store（带缓存），失败时提示
@@ -579,6 +680,8 @@ onMounted(loadFactors)
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  height: calc(100vh - 320px);
+  min-height: 400px;
 }
 .factor-table__skeleton {
   padding: 16px;
@@ -635,57 +738,51 @@ onMounted(loadFactors)
 .badge--danger { background: rgba(210, 69, 69, 0.1); color: var(--danger); }
 .badge--muted { background: var(--bg-hover); color: var(--text-tertiary); }
 
-// el-table 样式覆盖
-.factor-table :deep(.el-table) {
+// el-table-v2 样式覆盖
+.factor-table :deep(.el-table-v2) {
   --el-table-border-color: var(--border);
   --el-table-header-bg-color: var(--bg-tertiary);
   --el-table-header-text-color: var(--text-tertiary);
   --el-table-text-color: var(--text-primary);
   --el-table-row-hover-bg-color: var(--bg-hover);
-  --el-table-tr-bg-color: transparent;
-  background: transparent;
   font-size: var(--font-size-base);
 }
 
 // 表头
-.factor-table :deep(.el-table th.el-table__cell) {
+.factor-table :deep(.el-table-v2__header) {
+  background: var(--bg-tertiary);
+}
+.factor-table :deep(.el-table-v2__header-row) {
+  background: var(--bg-tertiary);
+}
+.factor-table :deep(.el-table-v2__header-cell) {
   background: var(--bg-tertiary);
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   font-weight: var(--font-weight-medium);
+  padding: 0 12px;
 }
 
 // 单元格内边距 12px
-.factor-table :deep(.el-table th.el-table__cell),
-.factor-table :deep(.el-table td.el-table__cell) {
-  padding: 12px 0;
-}
-.factor-table :deep(.el-table th .cell),
-.factor-table :deep(.el-table td .cell) {
-  padding-left: 12px;
-  padding-right: 12px;
+.factor-table :deep(.el-table-v2__cell) {
+  padding: 0 12px;
 }
 
-// 隔行变色：条纹行使用次级背景
-.factor-table :deep(.el-table__body tr.el-table__row--striped td.el-table__cell) {
-  background: var(--bg-secondary);
-}
-
-// 行 hover（置于隔行变色之后，hover 优先级更高）
-.factor-table :deep(.el-table__body tr:hover > td.el-table__cell) {
+// 行 hover
+.factor-table :deep(.el-table-v2__row:hover) {
   background: var(--bg-hover);
 }
 
-// 末行底边由外层卡片边框承担，避免双线
-.factor-table :deep(.el-table__body tr:last-child td.el-table__cell) {
-  border-bottom: 0;
+// 条纹行（通过 rowClass 添加 .row--striped）
+.factor-table :deep(.el-table-v2__row.row--striped) {
+  background: var(--bg-secondary);
 }
 
 // 衰减因子行标红
-.factor-table :deep(.el-table__body tr.row--decaying td.el-table__cell) {
+.factor-table :deep(.el-table-v2__row.row--decaying) {
   background: rgba(210, 69, 69, 0.08) !important;
 }
-.factor-table :deep(.el-table__body tr.row--decaying:hover > td.el-table__cell) {
+.factor-table :deep(.el-table-v2__row.row--decaying:hover) {
   background: rgba(210, 69, 69, 0.14) !important;
 }
 
