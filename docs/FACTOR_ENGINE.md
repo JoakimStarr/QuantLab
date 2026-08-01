@@ -8,17 +8,32 @@ summary: QLib表达式语法、算子白名单、因子分类、评价指标、�
 
 # 因子引擎
 
+> 文档版本：v2.5.5 · 最后更新：2026-08-01
 > 本文档记录 QuantLab 因子引擎的完整链路：表达式语法与安全沙箱、因子分类、评价指标、
 > 因子加权、挖掘方式（LLM/符号回归/AutoML/文本）与回测后端。
 > 所有算子、字段、函数签名均来自 `services/factor/` 与 `services/quant/` 实际代码。
 
 ---
 
-## 1. 因子表达式语法
+## 这是什么文档
 
-### 1.1 字段引用
+本文档专门讲"**因子怎么写、怎么算、怎么挖、怎么用**"。如果你：
 
-因子表达式以 QLib 语法书写，字段以 `$` 开头，引用 QLib bin 中的日频列。**允许的字段白名单**（`factor/expression.py` `_QLIB_FIELDS`）：
+- 想自定义因子 → 看 §1（语法）+ §2（沙箱）
+- 想理解评价指标 → 看 §3
+- 想让 AI 帮你挖因子 → 看 §4（挖掘）
+- 想用因子跑回测 → 看 §5（回测）
+- 想知道 API 怎么调 → 看 §6
+
+---
+
+## 一、因子表达式语法
+
+### 1.1 字段引用（什么数据可以用）
+
+因子表达式以 QLib 语法书写，字段以 `$` 开头，引用 QLib bin 中的日频列。
+
+**允许的字段白名单**（`factor/expression.py` `_QLIB_FIELDS`）：
 
 | 字段 | 含义 | 字段 | 含义 |
 |------|------|------|------|
@@ -27,9 +42,15 @@ summary: QLib表达式语法、算子白名单、因子分类、评价指标、�
 | `$high` | 最高价 | `$factor` | 复权因子 |
 | `$low` | 最低价 | `$change` | 涨跌量 |
 
-数据层扩展字段（资金/情绪/市值，详见 DATA_LAYER.md）：`$tradable`、`$north_net`、`$margin_balance`、`$dragon_net`、`$big_order_net`、`$total_mv` 等。
+**数据层扩展字段**（资金/情绪/市值，详见 [DATA_LAYER.md](DATA_LAYER.md)）：
+- `$tradable` — 是否可交易（ST/停牌过滤）
+- `$north_net` — 北向资金净流入
+- `$margin_balance` — 融资余额
+- `$dragon_net` — 龙虎榜净买入
+- `$big_order_net` — 大单净买入
+- `$total_mv` — 总市值
 
-### 1.2 算子白名单
+### 1.2 算子白名单（能做什么运算）
 
 表达式经安全沙箱 `validate_expression` 校验，**允许的算子 = `config.mining.llm.allowed_ops` ∪ `_QLIB_OPS`**。
 
@@ -51,25 +72,41 @@ summary: QLib表达式语法、算子白名单、因子分类、评价指标、�
 | `WMA(x, n)` | 加权移动平均 | `WMA($close, 20)` |
 | `EMA(x, n)` | 指数移动平均 | `EMA($close, 12)` |
 
-沙箱内置全集 `_QLIB_OPS`（与配置白名单取并集）还含：`Var`、`Quantile`、`MA`、`RSRS`、`Greater/Less/Gt/Lt/Ge/Le/Eq/Ne`、`Abs`、`Log`、`Power`、`Sign`、`If`、`IdxMax/IdxMin`、`Product`、`Count`、`Mad`、`Clip`、`Range`、`Floor/Ceil`、`All/Any`、`Pair`、`Bias`、`Div/Sub/Add/Mul`。
+**沙箱内置全集 `_QLIB_OPS`**（与配置白名单取并集）还含：
+- `Var`、`Quantile`、`MA`、`RSRS`
+- `Greater/Less/Gt/Lt/Ge/Le/Eq/Ne`（比较）
+- `Abs`、`Log`、`Power`、`Sign`
+- `If`、`IdxMax/IdxMin`
+- `Product`、`Count`、`Mad`、`Clip`、`Range`、`Floor/Ceil`
+- `All/Any`、`Pair`、`Bias`
+- `Div/Sub/Add/Mul`（四则运算）
 
-### 1.3 复合表达式写法
+### 1.3 复合表达式写法（实战示例）
 
 ```python
-# 20 日动量
+# 20 日动量：当前价 / 20日前价 - 1
 $close / Ref($close, 20) - 1
 
-# 量价相关性
+# 量价相关性：10 日 close 与 log(volume+1) 的相关性
 Corr($close, Log($volume + 1), 10)
 
-# 波动率
+# 波动率：20 日日收益率标准差
 Std($close / Ref($close, 1) - 1, 20)
 
-# 振幅
+# 振幅：20 日平均日内振幅
 Mean(($high - $low) / $close, 20)
 
-# 条件信号
-If($dragon_net > 0, 1, 0)
+# RSI 简化版：20 日上涨概率 - 下跌概率
+Mean(Greater($close - Ref($close, 1), 0), 20) -
+Mean(Greater(Ref($close, 1) - $close, 0), 20)
+
+# 资金信号：北向资金净流入为正时取 1
+If($north_net > 0, 1, 0)
+
+# Alpha158 标准因子示例
+($close - $open) / ($high - $low + 1e-12)        # KMID2
+Ref($close, 5) / $close                           # ROC5
+Std($close, 20) / $close                          # STD20
 ```
 
 ### 1.4 安全沙箱（`validate_expression`）
@@ -80,16 +117,16 @@ def validate_expression(expr: str, max_length: int = 2000) -> str:
     """校验因子表达式安全性，返回清洗后的表达式。"""
 ```
 
-校验规则：
-1. 非空且长度 ≤ 2000
-2. 禁止危险关键字：`__`、`compile`、`builtins`、`automl`、`autogluon`、`import`、`exec`、`eval`、`lambda`、`os`、`sys`、`subprocess`、`globals`、`locals`、`getattr`、`setattr`
-3. 禁止 `open()` 调用（与 `$open` 字段区分检测）
-4. `$field` 必须在 `_QLIB_FIELDS` 内
-5. 标识符必须在白名单内（配置 `allowed_ops` ∪ `_QLIB_OPS`）
-6. `$field` 替换为 `x_field` 后 AST 解析，禁止 `import`、下划线属性访问
-7. **look-ahead 防护**：AST 检测 `Ref(..., 负常量)`，命中即拒（`_find_negative_ref`）
+**校验规则**（7 道关卡）：
+1. **非空**且长度 ≤ 2000 字符
+2. **禁止危险关键字**：`__`、`compile`、`builtins`、`automl`、`autogluon`、`import`、`exec`、`eval`、`lambda`、`os`、`sys`、`subprocess`、`globals`、`locals`、`getattr`、`setattr`
+3. **禁止 `open()` 调用**（与 `$open` 字段区分检测，避免误伤）
+4. **`$field` 必须在白名单内**（`$close/$open/$high/$low/$volume/$amount/$factor/$change`）
+5. **标识符必须在白名单内**（配置 `allowed_ops` ∪ `_QLIB_OPS`）
+6. **AST 解析**：禁止 `import`、下划线属性访问（`._xxx`）
+7. **look-ahead 防护**：AST 检测 `Ref(..., 负常量)`，命中即拒
 
-**前向收益标签例外**：标签表达式 `Ref($close, -1) / $close - 1` 用未来收益作预测目标是正确的，仅在 `load_label` 中使用，不经过因子校验。
+**前向收益标签例外**：标签表达式 `Ref($close, -1) / $close - 1` 用未来收益作预测目标是正确的，仅在 `load_label` 中使用，**不经过因子校验**。
 
 ### 1.5 防前视检查（`check_lookahead`）
 
@@ -100,13 +137,13 @@ def check_lookahead(expr: str) -> None:
 
 - 在 `load_factor_values` 执行入口做防御性检查
 - 即便表达式绕过创建时的完整校验（`skip_validation=True`），也保证不会加载未来数据
-- 非标准表达式（AutoML/TextSentiment 占位符）语法解析失败时直接放行，交由上游处理
+- 非标准表达式（AutoML/TextSentiment 占位符）语法解析失败时直接放行
 
 ---
 
-## 2. 因子分类
+## 二、因子分类
 
-`Factor.category` 字段取值（代码实际使用，模型注释仅写 4 种，实际 6 种）：
+`Factor.category` 字段取值：
 
 | category | 来源 | 表达式形态 | 入库方式 |
 |----------|------|-----------|----------|
@@ -117,8 +154,6 @@ def check_lookahead(expr: str) -> None:
 | `text` | 文本情绪因子 | `TextSentiment(...)` 占位符（不支持实时计算） | `mine_with_text` 自动入库 |
 | `automl` | AutoML 组合因子 | `AutoML(method, task_id)` 占位符 | `mine_with_automl` 自动入库 |
 
-> ⚠️ **代码/注释不一致**：`models/factor.py` 注释写 `builtin / llm / symbolic / text`，实际代码还使用 `alpha158` 与 `automl` 两类。
-
 **特殊表达式**：
 - `AutoML(lightgbm, task_id)` / `AutoML(linear, task_id)`：`load_factor_values` 拦截后加载 `data/models/automl/{task_id}.pkl` bundle，重建基础特征并模型预测
 - `TextSentiment(...)`：qlib 未注册算子，`load_factor_values` 直接抛 `ValueError`，需重新挖掘预计算值
@@ -127,11 +162,49 @@ def check_lookahead(expr: str) -> None:
 
 ---
 
-## 3. 因子评价
+## 三、因子评价（最关键的一节）
 
-评价核心在 `services/quant/factor_eval.py`，基于 qlib `D.features` 加载数据 + pandas 手动计算（不依赖 qlib.contrib.eval 不稳定 API）。
+### 3.1 评价方式对比（v2.4.0 大改造）
 
-### 3.1 数据加载
+| 函数 | 用途 | 时机 |
+|------|------|------|
+| `evaluate_factor(expr, start, end, horizon=5)` | **单因子单点评价**（旧版） | 兼容旧 API |
+| `evaluate_factor_with_validation(...)` | **多维验证**（新版 v2.4.0+） | 挖掘时筛选 |
+| `deep_analyze_factor(...)` | **深度分析**（一次性聚合） | UI 详情页 |
+
+### 3.2 多维验证（v2.4.0+，默认走这个）
+
+**核心思想**：单一 IC 容易过拟合。新因子必须通过多道检验：
+
+```
+1. 样本分割（按日期） ──►  60% 训练 + 20% 验证 + 20% 测试
+2. 多段 IC 计算 ───────►  分别在 train/valid/test 上算日 IC 序列
+3. 滚动 IC 统计 ───────►  60 日滚动均值/标准差/正占比
+4. 统计显著性 t-test ──►  valid 段 IC 是否显著非零
+5. 多样性检测 ─────────►  与已有因子 IC 时序相关性 < 0.8
+6. 综合筛选 ───────────►  多条件 AND：valid_ic > 0.03 + stability > 0.5 + positive_ratio > 55% + decay > -0.01
+```
+
+**代码入口**：`backend/app/services/quant/factor_validator.py`
+
+**主要函数**：
+- `evaluate_factor_with_validation(factor_expr, start, end, universe, horizon=5, ...)`
+- 返回值含：`valid_ic`、`valid_icir`、`test_ic`、`passed`、`fail_reasons`、`rolling_stats`、`significance`、`is_duplicate`、`sample_splits`
+
+**筛选阈值**（在 `config.yaml` 配置）：
+```yaml
+mining:
+  llm:
+    ic_threshold: 0.03           # valid IC 绝对值阈值
+    eval_horizon: 5              # 预测周期（5 日前向收益）
+    significance_alpha: 0.05     # t-test 显著性水平
+    stability_threshold: 0.5     # IC/IC_std（稳定性）
+    positive_ratio_threshold: 0.55  # IC > 0 占比
+    decay_threshold: -0.01       # 衰减阈值（前后半段 IC 差）
+    diversity_threshold: 0.8     # 因子多样性（IC 相关性）
+```
+
+### 3.3 数据加载
 
 ```python
 def load_factor_values(
@@ -152,24 +225,26 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
     （t 日收盘到 t+1 日收盘收益，与回测引擎 shift(-1) 口径一致）"""
 ```
 
-### 3.2 IC（信息系数）
+**v2.4.0 改造**：默认标签改为 `Ref($close, -{horizon}) / $close - 1`（horizon 日前向收益），与 LLM 提示的"预测未来 5 日收益"对齐。
+
+### 3.4 IC（信息系数）
 
 ```python
 def compute_ic(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> dict:
     """计算 IC / RankIC / ICIR / IR。"""
 ```
 
-| 指标 | 计算方式 |
-|------|---------|
-| **IC** | 每日截面 Pearson 相关 `factor.corr(label)` 的均值 |
-| **RankIC** | 每日截面 Spearman 相关的均值 |
-| **ICIR** | `IC 均值 / IC 标准差` |
-| **IR** | `RankIC 均值 / RankIC 标准差` |
-| `n_days` | 有效截面天数 |
+| 指标 | 计算方式 | 含义 |
+|------|---------|------|
+| **IC** | 每日截面 Pearson 相关 `factor.corr(label)` 的均值 | 因子预测能力的线性度量 |
+| **RankIC** | 每日截面 Spearman 相关的均值 | 排名预测能力（更稳健） |
+| **ICIR** | `IC 均值 / IC 标准差` | IC 的稳定性（信息比率） |
+| **IR** | `RankIC 均值 / RankIC 标准差` | RankIC 的稳定性 |
+| `n_days` | 有效截面天数 | 数据量 |
 
 > 每日截面要求 `len(g) >= 2`，否则记 NaN 并 dropna。结果 `round(., 4)`。
 
-### 3.3 换手率
+### 3.5 换手率
 
 ```python
 def compute_turnover(factor_df: pd.DataFrame) -> float:
@@ -177,7 +252,9 @@ def compute_turnover(factor_df: pd.DataFrame) -> float:
     turnover = 1 - overlap / len(prev)。返回日均换手。"""
 ```
 
-### 3.4 衰减分析（decay）
+**含义**：换手率高 → 因子不稳定，交易成本高；换手率低 → 因子稳定，实用性强。
+
+### 3.6 衰减分析（decay）
 
 ```python
 def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int = 10) -> dict:
@@ -189,7 +266,7 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
 - **半衰期** `half_life`：IC 衰减到首日一半所需期数
 - **有效期** `effective_period`：IC 绝对值 ≥ 0.02 的最后期数
 
-### 3.5 分层回测（`compute_quantile_returns`）
+### 3.7 分层回测（`compute_quantile_returns`）
 
 ```python
 def compute_quantile_returns(
@@ -199,11 +276,19 @@ def compute_quantile_returns(
 ```
 
 - 每个截面按因子值 `pd.qcut` 分 `n_groups` 组（重复值失败时降级用 `rank`）
-- 输出：`group_returns`、`group_nav`（累计净值）、`group_stats`（各组年化/夏普/天数）、`long_short_returns`（最高组-最低组）、`long_short_nav`、`monotonicity_score`（组号与组均收益的 Spearman 相关）
+- 输出：
+  - `group_returns` — 各组日收益
+  - `group_nav` — 各组累计净值
+  - `group_stats` — 各组年化、夏普、天数
+  - `long_short_returns` — 最高组 - 最低组（多空对冲）
+  - `long_short_nav` — 多空累计净值
+  - `monotonicity_score` — 组号与组均收益的 Spearman 相关（越接近 1 越好）
 
-### 3.6 因子深度分析（`deep_analyze_factor`）
+### 3.8 因子深度分析（`deep_analyze_factor`）
 
-一次性聚合所有分析，走进程池 `run_cpu`（`GET /factors/{id}/deep-analysis`）：
+**端点**：`GET /factors/{id}/deep-analysis`
+
+一次性聚合所有分析，走 IO 线程池（`run_io_cpu`，因为 qlib 释放 GIL）：
 
 ```python
 def deep_analyze_factor(
@@ -212,31 +297,31 @@ def deep_analyze_factor(
 ) -> dict:
 ```
 
-返回结构：
+**返回结构**：
 - `config`：参数
 - `summary`：`ic_mean`/`ic_std`/`icir`/`t_stat`/`p_value`/`significant`/`avg_turnover`/`annual_turnover`/`long_short_annual_return`/`monotonicity`
 - `ic_distribution`：分箱统计（mean/std/skew/positive_ratio，需 scipy）
 - `ic_timeseries`：每日 IC + 滚动均线（窗口 `ic_window`）
-- `quantile_returns`：`compute_quantile_nav_by_horizon`（按 horizon 调仓的分层累计净值）
+- `quantile_returns`：按 horizon 调仓的分层累计净值
 - `turnover_curve`：多头组换手率时序
 - `decay`：`{lags, ic_by_lag}`
 
-**IC 显著性**（`compute_ic_significance`）：双尾 t 检验，`p_value < 0.05` 为显著；注意未经 Newey-West 自相关调整。
+**IC 显著性**（`compute_ic_significance`）：双尾 t 检验，`p_value < 0.05` 为显著；**未经 Newey-West 自相关调整**。
 
 > label 用 `Ref($close, -horizon)/$close - 1`（horizon 周期前向收益），区别于默认 1 日标签。
 
-### 3.7 因子协同性评估（现状）
+### 3.9 因子协同性评估
 
-> ⚠️ **诚实声明**：任务要求的"相关性矩阵 + 增量 IC"**当前未实现**。现有协同性能力为：
+> **当前状态**：相关性矩阵 + 增量 IC 未实现。现有协同性能力：
 > - **因子对比**（`compare_factors`）：返回多因子 IC 指标对比、衰减对比（`decay_comparison`）、IC 时序对比（`ic_timeseries`）
-> - **正交化**（`orthogonalize.gram_schmidt_orthogonalize`）：按 IC 绝对值降序做 Gram-Schmidt 截面正交化，降低共线性（策略可启用 `orthogonalize=1`）
+> - **正交化**（`orthogonalize.gram_schmidt_orthogonalize`）：按 IC 绝对值降序做 Gram-Schmidt 截面正交化，降低共线性
 > - **中性化**（`neutralize`）：`market_cap` / `industry`（行业+市值），对比中性化前后 IC
 >
-> 完整相关性矩阵与增量 IC 已列入 TODO（见 DATA_LAYER.md §10）。
+> 完整相关性矩阵与增量 IC 已列入 TODO。
 
 ---
 
-## 4. 因子加权
+## 四、因子加权
 
 `backtest_engine.combine_factors` 将多因子组合为打分：
 
@@ -275,30 +360,38 @@ def compute_combine_weights(
 - 标签用 `Ref($close, -horizon)/$close - 1`
 - 按绝对值归一化（和为 1，保留符号）；全 0 时退化为等权
 
-> 策略回测时（`run_strategy_backtest`）：`ir_weight` 用因子库 `icir` 字段，`ic_weight` 用 `ic` 字段作为静态权重传入。
-
 ---
 
-## 5. 因子挖掘
+## 五、AI 因子挖掘
 
 四种挖掘方式，统一经 `_safe_run_task` 包装（信号量限流 `task.max_concurrent`、超时分级、异常兜底标 failed）。
 
-### 5.1 LLM 挖掘（`mine_with_llm`）
+### 5.1 LLM 挖掘（最常用）
 
 ```python
 async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
 async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3, n_candidates: int = None) -> dict:
 ```
 
+**端点**：`POST /api/v1/mining/llm?n_candidates=10&n_rounds=1`（3/min 限流）
+
 **流程**：
 1. 用 `_USER_PROMPT_TEMPLATE` 构造提示（含算子/字段/语法示例/look-ahead 警告）
 2. `ProviderRouter.route_request` 调 LLM（三级故障转移），强制返回 JSON
-3. 逐候选：`validate_expression` 沙箱校验 → `_evaluate_safe` IC 评价（线程池，`eval_timeout_seconds` 超时）→ IC 绝对值 ≥ `ic_threshold`(0.03) 入库（category=llm）
+3. **逐候选**：
+   - `validate_expression` 沙箱校验
+   - `evaluate_factor_with_validation` 多维验证（**v2.4.0+**）
+   - 通过验证的因子入库（category=llm）
 4. 更新任务统计：`candidates_generated`/`candidates_passed`/`best_ic`/`result_factor_ids`
 
-**迭代挖掘**（`n_rounds > 1`）：每轮生成→校验→IC评价→`_build_feedback_prompt` 反馈给 LLM 逐轮改进。
+**迭代挖掘**（`n_rounds > 1`）：每轮生成 → 校验 → 多维验证 → `_build_feedback_prompt` 反馈给 LLM 逐轮改进。
 
-**超时策略**：不限时，依赖内部原子超时（provider httpx timeout + `eval_timeout_seconds`）+ `llm_hard_limit_seconds`（默认 7200s，0=完全无限）硬上限兜底。
+**v2.4.0 关键改造**：
+- **不再只算全样本 IC**，而是 valid 段滚动 IC + t-test + 多样性
+- 通过验证的因子入库（之前通过 IC 阈值即可）
+- GPU 自动检测（v2.4.0+）
+
+**超时策略**：不限时，依赖内部原子超时（provider httpx timeout + `eval_timeout_seconds`）+ `llm_hard_limit_seconds`（默认 7200s）硬上限兜底。
 
 ### 5.2 符号回归（`mine_with_symbolic`）
 
@@ -306,18 +399,24 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3, n_candidates:
 async def mine_with_symbolic(task_id: int) -> dict:
 ```
 
-**流程**（gplearn 遗传规划）：
+**端点**：`POST /api/v1/mining/symbolic`
+
+**流程**（gplearn 遗传编程）：
 1. 12 个基础特征作为终端（`_BASE_FEATURES`：mom_5/mom_20/vol_20/vol_60/turn_5/turn_20/vratio/amp_20/ma_div_20/ma_div_60/high_dd_20/rsi_20）
 2. 扩展函数集（add/sub/mul/div/log/abs/sign/max/min/if）
 3. `SymbolicRegressor` 演化（population=1000, generations=30, tournament_size=20, parsimony_coefficient=0.001）
 4. `_translate_program` 将最优程序翻译为 qlib 表达式（add→Add, Xi→子表达式）
-5. 沙箱校验 + IC 评价 + 入库（category=symbolic）
+5. 沙箱校验 + **多维验证** + 入库（category=symbolic）
+
+**v2.4.0+**：有 GPU 时 `n_jobs=-1`（LightGBM 训练用 GPU 加速）。
 
 ### 5.3 AutoML（`mine_with_automl`）
 
 ```python
 async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = None) -> dict:
 ```
+
+**端点**：`POST /api/v1/mining/automl`
 
 **流程**：
 1. 加载指定基础因子值（AutoML bundle 丢失/文本算子不可用时跳过该因子）
@@ -327,13 +426,15 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
 5. SHAP 特征重要性写入任务结果
 6. 入库 `AutoML(method, task_id)` 占位符因子（category=automl）
 
-**回测支持**：`load_factor_values` 遇 `AutoML(...)` 正则匹配后加载 bundle 重建特征预测。
+**GPU 加速（v2.4.0+）**：训练时自动检测 GPU，有则 LightGBM `device='gpu'`，CV 也走 GPU。
 
 ### 5.4 文本因子（`mine_with_text`）
 
 ```python
 async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
 ```
+
+**端点**：`POST /api/v1/mining/text`
 
 **流程**：
 1. `_fetch_news_for_universe` 拉取新闻（默认 universe 前 30 只，`max_news_per_day=50`）
@@ -349,7 +450,7 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
 
 ---
 
-## 6. 回测
+## 六、策略回测
 
 ### 6.1 回测后端
 
@@ -428,9 +529,9 @@ A 股交易约束由 QLib Exchange 原生处理：
 
 ---
 
-## 7. 因子库 CRUD 与评价调度
+## 七、因子库 CRUD 与评价调度
 
-`services/factor/library.py`：
+`backend/app/services/factor/library.py`：
 
 | 函数 | 说明 |
 |------|------|
@@ -439,14 +540,43 @@ A 股交易约束由 QLib Exchange 原生处理：
 | `add_factor(name, expression, category, description, source_task_id, skip_validation)` | 新增（默认带沙箱校验） |
 | `disable_factor(factor_id)` | 软删除（status=disabled） |
 | `update_factor_metrics(factor_id, metrics)` | 写回 IC/RankIC/ICIR/IR/turnover/decay |
-| `evaluate_factor_by_id(factor_id, start, end)` | 评价库中因子，走 `run_cpu` 进程池 |
+| `evaluate_factor_by_id(factor_id, start, end)` | 评价库中因子，走 `run_io_cpu` 线程池 |
 | `seed_builtin_factors` / `seed_alpha158` | 种子内置因子 |
 
-**Factor 模型字段**：`id/name/expression/category/description/ic/rank_ic/icir/ir/turnover/decay(JSON)/eval_start/eval_end/evaluated_at/status/source_task_id/created_at`。
+**Factor 模型字段**：
+```
+id / name / expression / category / description
+ic / rank_ic / icir / ir / turnover / decay(JSON)
+eval_start / eval_end / evaluated_at
+status / source_task_id / created_at
+```
+
+### 7.1 Alpha158 批量评价（v2.5.x 重点优化）
+
+158 个标准因子的批量评价是性能瓶颈，经过 3 个版本持续优化：
+
+**v2.5.1** — 预加载 + 线程池：
+- `lru_cache` 缓存 `_load_instruments`（股票池查询从 158 次降到 1 次）
+- 预加载 `preloaded_label_df` 和 `preloaded_close_df`
+- 走 `run_io_cpu` 线程池（qlib 释放 GIL）
+- 批量写入（每 20 条一次 commit）
+
+**v2.5.2** — 实时写入：
+- 每个因子算完立即 commit
+- 进度回调每次完成都触发（之前每 10 次）
+
+**v2.5.3** — Queue 解耦（关键修复）：
+- **根因**：之前 16 并发 + 每完成立即 await DB commit，pool_size=10 的连接被抢光，后续 commit 等连接回收 100+ 秒
+- **修复**：`asyncio.Queue` 把评价完成结果传给单 DB writer 协程串行 commit
+- `max_concurrent` 从 16 降到 4（避免 qlib 多线程锁竞争）
+
+**性能结果**：
+- 修复前：~10+ 分钟（每 8 个卡 100s）
+- 修复后：~20 秒（每个因子 ~120ms）
 
 ---
 
-## 8. 相关 API 速查
+## 八、相关 API 速查
 
 | 功能 | 端点 |
 |------|------|
@@ -467,18 +597,13 @@ A 股交易约束由 QLib Exchange 原生处理：
 | AutoML | `POST /api/v1/mining/automl` |
 | 文本因子 | `POST /api/v1/mining/text` |
 
-详见 [API_REFERENCE.md](./API_REFERENCE.md)。
+详见 [API_REFERENCE.md](API_REFERENCE.md)。
 
 ---
 
-## 9. 已知问题与 TODO
+## 九、已知问题与 TODO
 
 - 因子协同性评估（相关性矩阵 + 增量 IC）未实现，仅有 IC 对比/衰减对比/正交化/中性化
 - 文本因子（`TextSentiment`）与 AutoML（`AutoML(...)`）为占位符表达式，不可直接用于 qlib 回测/深度分析；策略回测会跳过此类因子
-- `Factor.category` 模型注释与实际使用不一致（缺 alpha158/automl）
-- `compare_factors` 文档字符串写 `ic_comparison`，实际返回字段为 `ic_timeseries`
 - IC 显著性 t 检验未经 Newey-West 自相关调整
-
----
-
-*文档版本：1.0 · 最后更新：2026-07-31*
+- Alpha158 评价并发参数需根据服务器 CPU/IO 能力调优
