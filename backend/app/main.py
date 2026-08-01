@@ -26,7 +26,7 @@ from app.core.errors import (
     validation_error_handler,
 )
 from app.core.logging_config import setup_logging, set_log_level
-from app.core.metrics import router as metrics_router, ws_active_connections
+from app.core.metrics import setup_metrics
 from app.core.middleware import setup_middleware
 from app.core.ratelimit import limiter
 from app.core.recovery import recover_stale_mining, recover_stale_sync
@@ -128,7 +128,7 @@ app.add_exception_handler(404, _starlette_not_found_handler)
 app.add_exception_handler(405, _starlette_method_not_allowed_handler)
 
 # Prometheus /metrics 端点（无需鉴权，供 Prometheus 抓取）
-app.include_router(metrics_router)
+setup_metrics(app)
 
 # 业务 API 路由
 app.include_router(api_router, prefix="/api/v1")

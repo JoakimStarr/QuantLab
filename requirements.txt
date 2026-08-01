@@ -20,10 +20,18 @@ pyyaml>=6.0.2
 python-dotenv>=1.0.1
 pydantic>=2.8.0
 
-# 安全：口令哈希 + 登录限流
+# 安全：口令哈希 + 登录限流 + 用户认证
 bcrypt>=4.0
 slowapi>=0.1.9
 prometheus-client>=0.20.0
+# fastapi-users: 多用户认证 & JWT 鉴权（替代自研实现）
+fastapi-users[sqlalchemy]>=12.0.0
+# zxcvbn-python: 密码强度评估（替代自研正则校验）
+zxcvbn-python>=4.4.0
+prometheus-fastapi-instrumentator>=0.1.0
+
+# 因子评价：alphalens-reloaded（替换自研因子评价，提供 IC/分层收益/换手率等）
+alphalens-reloaded>=0.5.0
 
 # 量化回测与AI因子挖掘
 # pyqlib: 微软AI量化框架（因子评价/回测/组合分析），CPU密集型，worker进程调用
@@ -39,3 +47,12 @@ alembic>=1.13
 
 # baostock: A-share daily K-line / valuation / ST-flag data source (baostock_client dep)
 baostock>=0.8.9
+
+# 缓存工具：LRU 缓存 IC 评价结果等
+cachetools>=5.3.0
+
+# 结构化日志（structlog 替换自研 JSONFormatter）
+structlog>=24.4.0
+
+# 重试：tenacity 替代手写重试循环
+tenacity>=8.5.0

@@ -30,15 +30,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     "elapsed_ms": round(elapsed * 1000, 1),
                 }}
             )
-            # Prometheus 指标
-            try:
-                from app.core.metrics import record_http_request
-                record_http_request(
-                    request.method, request.url.path,
-                    response.status_code, elapsed,
-                )
-            except Exception:
-                pass  # 指标收集失败不影响请求
             return response
         except Exception:
             elapsed = time.time() - start_time
@@ -49,14 +40,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     "elapsed_ms": round(elapsed * 1000, 1),
                 }}, exc_info=True
             )
-            # Prometheus 指标（异常也记录）
-            try:
-                from app.core.metrics import record_http_request
-                record_http_request(
-                    request.method, request.url.path, 500, elapsed,
-                )
-            except Exception:
-                pass
             raise
         finally:
             request_id_var.reset(token)
