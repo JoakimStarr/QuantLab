@@ -3,6 +3,10 @@ import logging
 import numpy as np
 import pandas as pd
 from typing import Optional, Dict
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ def market_cap_neutralize(
     Args:
         factor_df: index=(datetime, instrument), columns=[factor_col, ...]
         factor_col: 因子值列名
-        market_cap: 市值 Series，index=instrument。如果为None则从 market_data 获取
+        market_cap: 市值 Series，index=instrument。如果为 None 则从 market_data 获取
 
     Returns:
         中性化后的 DataFrame，新增 factor_col + "_neutralized" 列
@@ -37,7 +41,8 @@ def market_cap_neutralize(
     result[f"{factor_col}_neutralized"] = np.nan
     neut_col = f"{factor_col}_neutralized"
 
-    # 按日期分组做截面回归（groupby 迭代避免逐日全表 mask 扫描）
+    model = LinearRegression(fit_intercept=True)
+
     for dt, day_factor in factor_df[factor_col].groupby(level="datetime"):
         day_stocks = day_factor.index.get_level_values("instrument")
         day_mcap = ln_mcap.reindex(day_stocks)
@@ -48,20 +53,10 @@ def market_cap_neutralize(
             continue
 
         y = day_factor[valid].values
-        x = day_mcap[valid].values
-
-        # OLS: y = alpha + beta * x + epsilon
-        x_mean = x.mean()
-        y_mean = y.mean()
-        x_var = np.sum((x - x_mean) ** 2)
-        if x_var < 1e-12:
-            result.loc[day_factor.index, neut_col] = day_factor.values
-            continue
-        beta = np.sum((x - x_mean) * (y - y_mean)) / x_var
-        alpha = y_mean - beta * x_mean
-
-        residual = day_factor.values - (alpha + beta * day_mcap.values)
-        result.loc[day_factor.index, neut_col] = residual
+        x = day_mcap[valid].values.reshape(-1, 1)
+        model.fit(x, y)
+        pred = model.predict(day_mcap.values.reshape(-1, 1))
+        result.loc[day_factor.index, neut_col] = day_factor.values - pred
 
     logger.info("市值中性化完成")
     return result
@@ -84,14 +79,10 @@ def industry_neutralize(
     Returns:
         中性化后的 DataFrame
     """
-    from sklearn.linear_model import LinearRegression
-
-    # 加载行业映射
     if industry_map is None:
         from app.services.data.industry_sync import load_industry_map
         industry_map = load_industry_map()
 
-    # 获取市值
     if market_cap is None:
         from app.services.data.market_data import get_log_market_cap
         market_cap = get_log_market_cap()
@@ -102,8 +93,19 @@ def industry_neutralize(
 
     ln_mcap = np.log(market_cap.astype(float)) if not market_cap.empty else None
 
-    # 所有行业
-    industries = sorted(set(industry_map.values()))
+    # 构建 sklearn Pipeline
+    use_mcap = ln_mcap is not None
+    transformers = [
+        ("industry", OneHotEncoder(drop="first", sparse_output=False, handle_unknown="ignore"), ["industry"]),
+    ]
+    if use_mcap:
+        transformers.append(("market_cap", "passthrough", ["log_market_cap"]))
+
+    preprocessor = ColumnTransformer(transformers=transformers, remainder="drop")
+    pipeline = Pipeline([
+        ("preprocess", preprocessor),
+        ("regress", LinearRegression(fit_intercept=True)),
+    ])
 
     result = factor_df.copy()
     result[f"{factor_col}_neutralized"] = np.nan
@@ -112,42 +114,26 @@ def industry_neutralize(
     for dt, day_factor in factor_df[factor_col].groupby(level="datetime"):
         day_stocks = day_factor.index.get_level_values("instrument")
 
-        # 构建特征矩阵
-        features = []
+        # 构建特征 DataFrame
+        feat_df = pd.DataFrame(index=day_stocks)
+        feat_df["industry"] = [industry_map.get(s, "Unknown") for s in day_stocks]
+        if use_mcap:
+            feat_df["log_market_cap"] = ln_mcap.reindex(day_stocks).values
 
-        # 行业 dummy（留一个作为基准，避免共线性）
-        for ind in industries[:-1]:
-            col = np.array([1.0 if industry_map.get(s) == ind else 0.0 for s in day_stocks])
-            features.append(col)
-
-        # 对数市值
-        if ln_mcap is not None:
-            features.append(ln_mcap.reindex(day_stocks).values)
-
-        if not features:
-            result.loc[day_factor.index, neut_col] = day_factor.values
-            continue
-
-        X = np.column_stack(features)
         y = day_factor.values
-
-        # 有效数据
         valid = ~np.isnan(y)
-        for f in X.T:
-            valid = valid & ~np.isnan(f)
+        for col in feat_df.columns:
+            valid = valid & ~np.isnan(feat_df[col].values.astype(float))
 
-        if valid.sum() < len(features) + 2:
+        if valid.sum() < len(feat_df.columns) + 2:
             result.loc[day_factor.index, neut_col] = day_factor.values
             continue
 
-        # OLS 回归
-        model = LinearRegression(fit_intercept=True)
-        model.fit(X[valid], y[valid])
-        residual = y.copy()
-        residual[valid] = y[valid] - model.predict(X[valid])
-        residual[~valid] = np.nan
-
-        result.loc[day_factor.index, neut_col] = residual
+        X = feat_df.loc[valid]
+        y_valid = y[valid]
+        pipeline.fit(X, y_valid)
+        pred = pipeline.predict(feat_df)
+        result.loc[day_factor.index, neut_col] = y - pred
 
     logger.info("行业+市值中性化完成")
     return result
