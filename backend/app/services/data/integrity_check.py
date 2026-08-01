@@ -1,134 +1,43 @@
-"""数据完整性校验：检测 qlib bin 文件长度与日历天数一致性。"""
+"""数据完整性校验：通过 qlib 直接加载验证 bin 数据可读性。"""
 import logging
-import numpy as np
-from pathlib import Path
+import datetime
+from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)
 
-QLIB_BIN_HEADER_SIZE = 4
 
-
-def check_integrity(provider_uri: str, universe: str = None) -> dict:
-    """校验 qlib bin 数据完整性。
+def check_integrity(provider_uri: str, universe: str = None,
+                    start_time: str = "2020-01-01", end_time: str = None) -> dict:
+    """通过 qlib 直接加载验证 bin 数据完整性。
 
     Returns:
         {
             "ok": bool,
-            "calendar_days": int,
+            "rows": int,
+            "columns": list,
             "total_stocks": int,
-            "valid_stocks": int,
-            "stocks_missing_fields": int,
-            "stocks_all_nan": int,
-            "length_mismatches": int,
-            "missing_files": int,
-            "issues": [...],
-            "all_nan_stocks": [...],
             "summary": str,
         }
     """
-    base = Path(provider_uri)
+    if end_time is None:
+        end_time = datetime.date.today().strftime("%Y-%m-%d")
 
-    # 读取日历
-    cal_path = base / "calendars" / "day.txt"
-    if not cal_path.exists():
-        return {"ok": False, "error": "日历文件不存在"}
-    with open(cal_path, "r") as f:
-        calendar = [l.strip() for l in f if l.strip()]
-    expected_len = len(calendar)
+    # 初始化 qlib
+    init_qlib()
 
-    # 读取股票池（如果指定）
-    stock_filter = None
-    if universe:
-        pool_file = base / "instruments" / f"{universe}.txt"
-        if pool_file.exists():
-            with open(pool_file, "r") as f:
-                entries = set()
-                for line in f:
-                    parts = line.strip().split("\t")
-                    if parts:
-                        entries.add(parts[0].lower())
-                stock_filter = entries
+    # 用 qlib 直接加载验证
+    from qlib.data import D
+    inst = D.instruments(market=universe or "all")
+    df = D.features(inst, ["$close", "$open"], start_time=start_time, end_time=end_time)
 
-    # 遍历所有股票
-    features_dir = base / "features"
-    if not features_dir.exists():
-        return {"ok": False, "error": "features 目录不存在"}
-
-    expected_fields = ["open", "high", "low", "close", "volume"]
-
-    issues = []
-    missing_fields_stocks = []
-    all_nan_stocks = []
-    total = 0
-    valid = 0
-
-    for stock_dir in sorted(features_dir.iterdir()):
-        if not stock_dir.is_dir():
-            continue
-        code = stock_dir.name
-
-        # 过滤
-        if stock_filter and code.lower() not in stock_filter:
-            continue
-
-        total += 1
-
-        # 检查每个字段
-        has_all_fields = True
-        all_nan = True
-        field_lens = {}
-
-        for field in expected_fields:
-            bin_path = stock_dir / f"{field}.day.bin"
-            if not bin_path.exists():
-                has_all_fields = False
-                issues.append({
-                    "code": code, "field": field,
-                    "issue": "file_missing",
-                    "expected": expected_len, "actual": 0,
-                })
-                continue
-
-            # 读取 bin 文件
-            file_size = bin_path.stat().st_size
-            data_len = (file_size - QLIB_BIN_HEADER_SIZE) // 4  # float32 = 4 bytes
-
-            # bin 长度与日历不一致属正常：
-            # - bin > 日历：bin 含更多历史数据（增量同步只更新日历未重dump bin）
-            # - bin < 日历：新上市股票上市晚于日历起点
-            # qlib 读取时按 bin 自动对齐，长度不一致不影响使用，不作为告警
-            pass
-
-            field_lens[field] = data_len
-
-            # 检查是否有有效值（非全 NaN）
-            with open(bin_path, "rb") as f:
-                f.read(QLIB_BIN_HEADER_SIZE)
-                data = np.fromfile(f, dtype="<f4", count=min(data_len, expected_len))
-            if data.size > 0 and np.any(~np.isnan(data)):
-                all_nan = False
-
-        if not has_all_fields:
-            missing_fields_stocks.append(code)
-        if all_nan:
-            all_nan_stocks.append(code)
-        if has_all_fields and not all_nan:
-            valid += 1
-
-    # 汇总
-    missing_issues = [i for i in issues if i["issue"] == "file_missing"]
+    ok = not df.empty
+    total_stocks = df.index.get_level_values("instrument").nunique() if ok else 0
+    rows = len(df) if ok else 0
 
     return {
-        "ok": True,
-        "calendar_days": expected_len,
-        "total_stocks": total,
-        "valid_stocks": valid,
-        "stocks_missing_fields": len(missing_fields_stocks),
-        "stocks_all_nan": len(all_nan_stocks),
-        "missing_files": len(missing_issues),
-        "issues": issues[:100],  # 最多返回100条
-        "all_nan_stocks": all_nan_stocks[:50],
-        "summary": f"校验完成: {total} 只股票, {valid} 只有效, "
-                   f"{len(missing_fields_stocks)} 只缺字段, "
-                   f"{len(all_nan_stocks)} 只全NaN",
+        "ok": ok,
+        "rows": rows,
+        "columns": list(df.columns) if ok else [],
+        "total_stocks": total_stocks,
+        "summary": f"qlib 加载验证: {total_stocks} 只股票, {rows} 行数据",
     }
