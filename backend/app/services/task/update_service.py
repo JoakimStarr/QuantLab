@@ -85,6 +85,9 @@ async def _invalidate_latest_date(universe: str) -> None:
     用于数据损坏场景的断点续传：不清空已有数据文件，仅让路径判断逻辑
     认为数据需要全量重建（smart_sync.predict_sync_path 在 latest_date=None
     时返回 chenditc_full）。
+
+    错误信息遵循前端解析格式 `[分类] 详情\\n建议: 建议内容`，
+    前端 DataStatus.vue 据此显示数据损坏告警横幅 + 重试按钮。
     """
     from sqlalchemy import select
     try:
@@ -95,9 +98,15 @@ async def _invalidate_latest_date(universe: str) -> None:
             row = rec.scalar_one_or_none()
             if row is not None:
                 row.latest_date = None
-                row.last_error = "数据损坏，已标记需全量重建"
+                row.status = "failed"
+                row.last_error = (
+                    "[数据损坏] 检测到数据完整性问题，已标记 latest_date 失效。\n"
+                    "建议: 下次定时同步将自动走 chenditc 全量重建，无需手动干预。"
+                    "如需立即重建可点击「智能同步」。"
+                )
                 row.last_updated = datetime.now()
                 await session.commit()
+                logger.warning("universe=%s 已标记数据损坏，下次同步走全量重建", universe)
     except Exception as e:
         logger.warning("标记 latest_date 失效失败: %s", e)
 

@@ -12,6 +12,12 @@ class BacktestResult(Base):
     start_date = Column(String, nullable=False)
     end_date = Column(String, nullable=False)
 
+    # 回测参数（v2.4.1 起持久化，用于参数扫描查重缓存）
+    # 策略默认回测时从 strategy 取值写入；参数扫描时为各候选组合
+    topk = Column(Integer, nullable=True)
+    n_drop = Column(Integer, nullable=True)
+    rebalance_freq = Column(String, nullable=True)
+
     # 核心绩效指标
     annual_return = Column(Float, nullable=True)
     annual_volatility = Column(Float, nullable=True)
@@ -35,4 +41,8 @@ class BacktestResult(Base):
         Index("idx_backtest_created_at", "created_at"),
         # 参数扫描/历史查重：WHERE strategy_id=? AND start_date=? AND end_date=?
         Index("idx_backtest_strategy_period", "strategy_id", "start_date", "end_date"),
+        # 参数扫描持久化缓存精确查重：
+        # WHERE strategy_id=? AND start_date=? AND end_date=? AND topk=? AND rebalance_freq=?
+        Index("idx_backtest_sweep_lookup",
+              "strategy_id", "start_date", "end_date", "topk", "rebalance_freq"),
     )

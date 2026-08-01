@@ -46,6 +46,21 @@
         </div>
     </div>
 
+      <!-- 数据损坏告警横幅：latest_date 被置空 + last_error 标记数据损坏时显示 -->
+      <el-alert
+        v-if="isDataCorrupt"
+        class="mb-6 corrupt-alert"
+        title="数据损坏 — 已标记下次同步全量重建"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          检测到数据完整性问题，latest_date 已置空。下次定时同步（工作日 18:00）将自动走 chenditc 全量重建路径。
+          如需立即重建，点击右侧「智能同步」按钮。
+        </template>
+      </el-alert>
+
       <!-- 数据覆盖率进度条 -->
       <SectionCard v-if="currentStatus.stock_count || qlib.earliest_date" class="mb-6">
         <div class="coverage-section">
@@ -82,7 +97,7 @@
               <span>{{ formatTime(currentStatus.last_updated) }}</span>
             </span>
           </div>
-          <div v-if="currentStatus.last_error" class="source-error">
+          <div v-if="currentStatus.last_error && !isDataCorrupt" class="source-error">
             <span class="error-icon">!</span>
             <div class="error-content">
               <div class="error-head">
@@ -376,6 +391,14 @@ const pathPrediction = ref(null)
   const showIntegrityDialog = ref(false)
   const integrityResult = ref(null)
 const currentStatus = computed(() => statusList.value[0] || {})
+
+// 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
+// 后端 _invalidate_latest_date 在数据损坏场景写入此状态，触发全量重建告警横幅
+const isDataCorrupt = computed(() => {
+  return currentStatus.value.latest_date === null
+    && !!currentStatus.value.last_error
+    && currentStatus.value.last_error.includes('数据损坏')
+})
 
 const statusLabel = computed(() => {
   const s = currentStatus.value.status

@@ -174,6 +174,8 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     async with async_session() as session:
         result = BacktestResult(
             strategy_id=strategy_id, start_date=start, end_date=end,
+            topk=strategy["topk"], n_drop=strategy["n_drop"],
+            rebalance_freq=strategy["rebalance_freq"],
             annual_return=metrics.get("annual_return"),
             annual_volatility=metrics.get("annual_volatility"),
             sharpe=metrics.get("sharpe"),
@@ -224,6 +226,7 @@ def _result_dict(r: BacktestResult) -> dict:
     return {
         "id": r.id, "strategy_id": r.strategy_id,
         "start_date": r.start_date, "end_date": r.end_date,
+        "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
         "annual_return": r.annual_return, "annual_volatility": r.annual_volatility,
         "sharpe": r.sharpe, "sortino": r.sortino,
         "max_drawdown": r.max_drawdown, "calmar": r.calmar,

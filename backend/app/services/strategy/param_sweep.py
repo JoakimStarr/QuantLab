@@ -5,8 +5,11 @@
    避免每个参数组合重复加载因子（N 个组合从 N 次 IO 降为 1 次）
 2. 参数扫描并行：用 ThreadPoolExecutor 并行运行不同参数组合的 run_backtest
    （qlib C 扩展释放 GIL，多线程可真并行价格回测计算）
-3. 回测结果缓存：基于 (strategy_id, topk, rebalance, start, end) 的内存 LRU 缓存，
-   相同参数重复扫描时秒级返回
+3. 回测结果三级缓存：
+   a. 内存 LRU（128 条）：进程内秒级命中
+   b. DB 持久化（backtest_result 表）：进程重启后仍可命中，避免重复回测
+   c. 实时计算：缓存全 miss 时才真正跑回测
+   查询顺序：内存 LRU → DB → 计算；计算成功后同时写内存 + DB
 """
 import asyncio
 import hashlib
@@ -14,8 +17,11 @@ import json
 import logging
 from collections import OrderedDict
 
+from sqlalchemy import select
+
 from app.core.config import settings
 from app.core.database import async_session
+from app.models.backtest_result import BacktestResult
 from app.models.strategy import Strategy
 
 logger = logging.getLogger(__name__)
@@ -51,10 +57,101 @@ def _bt_cache_put(key: str, value: dict) -> None:
 
 
 def clear_bt_cache() -> int:
-    """清空回测结果缓存，返回清空条数（供调试/手动刷新用）。"""
+    """清空回测结果内存缓存，返回清空条数（供调试/手动刷新用）。
+
+    注意：仅清内存 LRU，DB 持久化缓存保留（如需清 DB 请用后台管理接口）。
+    """
     n = len(_BT_CACHE)
     _BT_CACHE.clear()
     return n
+
+
+# ---------------- DB 持久化缓存 ----------------
+
+async def _db_cache_batch_get(
+    strategy_id: int, start: str, end: str,
+    params: list[tuple[int, int, str]],
+) -> dict[tuple[int, int, str], dict]:
+    """批量从 backtest_result 表查参数扫描结果。
+
+    Args:
+        params: [(topk, n_drop, rebalance), ...] 待查参数组合
+    Returns:
+        {(topk, n_drop, rebalance): result_dict, ...} 命中的记录
+    """
+    if not params:
+        return {}
+    hits = {}
+    try:
+        async with async_session() as session:
+            # 一次查出该策略+区间内所有候选参数的结果，本地按 (topk,n_drop,rebalance) 匹配
+            q = select(BacktestResult).where(
+                BacktestResult.strategy_id == strategy_id,
+                BacktestResult.start_date == start,
+                BacktestResult.end_date == end,
+                BacktestResult.topk.isnot(None),
+                BacktestResult.rebalance_freq.isnot(None),
+            )
+            rows = (await session.execute(q)).scalars().all()
+            # 建索引：{(topk, n_drop, rebalance): row}
+            row_map = {}
+            for r in rows:
+                key = (r.topk, r.n_drop, r.rebalance_freq)
+                # 同参数可能有多条（历史），取最新一条（id 最大）
+                if key not in row_map or r.id > row_map[key].id:
+                    row_map[key] = r
+            for (topk, n_drop, rebalance) in params:
+                r = row_map.get((topk, n_drop, rebalance))
+                if r is None:
+                    continue
+                hits[(topk, n_drop, rebalance)] = _db_row_to_result(r)
+    except Exception as e:
+        logger.warning("DB 缓存查询失败（降级为实时计算）: %s", e)
+    return hits
+
+
+def _db_row_to_result(r: BacktestResult) -> dict:
+    """把 backtest_result 行转成 _run_single_backtest 同结构的 result dict。"""
+    return {
+        "metrics": json.loads(r.metrics) if r.metrics else {},
+        "nav_curve": json.loads(r.nav_curve) if r.nav_curve else None,
+        "turnover": r.turnover,
+    }
+
+
+async def _db_cache_put(strategy_id: int, start: str, end: str,
+                        topk: int, n_drop: int, rebalance: str,
+                        result: dict) -> None:
+    """把单个参数扫描结果写入 backtest_result 表。
+
+    失败不阻塞扫描流程（缓存写入失败仅影响下次命中率）。
+    """
+    if "error" in result:
+        return
+    metrics = result.get("metrics", {})
+    nav_curve = result.get("nav_curve")
+    try:
+        async with async_session() as session:
+            rec = BacktestResult(
+                strategy_id=strategy_id, start_date=start, end_date=end,
+                topk=topk, n_drop=n_drop, rebalance_freq=rebalance,
+                annual_return=metrics.get("annual_return"),
+                annual_volatility=metrics.get("annual_volatility"),
+                sharpe=metrics.get("sharpe"),
+                sortino=metrics.get("sortino"),
+                max_drawdown=metrics.get("max_drawdown"),
+                calmar=metrics.get("calmar"),
+                turnover=result.get("turnover"),
+                win_rate=metrics.get("win_rate"),
+                benchmark_return=metrics.get("benchmark_return"),
+                excess_return=metrics.get("excess_return"),
+                nav_curve=json.dumps(nav_curve) if nav_curve else None,
+                metrics=json.dumps(metrics),
+            )
+            session.add(rec)
+            await session.commit()
+    except Exception as e:
+        logger.warning("DB 缓存写入失败 topk=%s rebalance=%s: %s", topk, rebalance, e)
 
 
 def _preload_score_df(factor_exprs: dict, weights: dict,
@@ -195,8 +292,8 @@ async def run_param_sweep(
         logger.error("参数扫描预加载因子失败: %s", e)
         return [{"error": f"因子预加载失败: {e}"}]
 
-    # ===== Phase 2: 并行参数扫描（带缓存）=====
-    # 构建参数组合列表，先查缓存
+    # ===== Phase 2: 三级缓存查询 + 并行扫描 =====
+    # 2a. 内存 LRU 缓存
     pending = []  # [(topk, n_drop, rebalance, cache_key), ...]
     cached_results = {}  # cache_key -> result
 
@@ -208,12 +305,29 @@ async def run_param_sweep(
             )
             cached = _bt_cache_get(cache_key)
             if cached is not None:
-                logger.info("参数扫描缓存命中: topk=%d rebalance=%s", topk, rebalance)
+                logger.info("参数扫描内存缓存命中: topk=%d rebalance=%s", topk, rebalance)
                 cached_results[cache_key] = cached
             else:
                 pending.append((topk, n_drop, rebalance, cache_key))
 
-    # 并行执行未命中的回测
+    # 2b. DB 持久化缓存（对内存未命中的批量查）
+    # 进程重启后内存清空，DB 缓存仍可命中，避免重复回测
+    if pending:
+        db_params = [(t, nd, r) for t, nd, r, _ in pending]
+        db_hits = await _db_cache_batch_get(strategy_id, start, end, db_params)
+        still_pending = []
+        for topk, n_drop, rebalance, cache_key in pending:
+            hit = db_hits.get((topk, n_drop, rebalance))
+            if hit is not None:
+                logger.info("参数扫描 DB 缓存命中: topk=%d rebalance=%s", topk, rebalance)
+                # 回填内存 LRU，下次进程内直接命中
+                _bt_cache_put(cache_key, hit)
+                cached_results[cache_key] = hit
+            else:
+                still_pending.append((topk, n_drop, rebalance, cache_key))
+        pending = still_pending
+
+    # 2c. 实时并行计算（缓存全 miss 的组合）
     # 用 ThreadPoolExecutor：qlib 的 C 扩展（计算价格回测）会释放 GIL，多线程可并行
     # 比 ProcessPoolExecutor 快（避免子进程 qlib 重新初始化 + score_df 序列化开销）
     new_results = {}
@@ -225,7 +339,10 @@ async def run_param_sweep(
                     executor, _run_single_backtest,
                     score_df, topk, n_drop, s.benchmark, rebalance, start, end, backend,
                 )
+                # 双写：内存 LRU + DB 持久化（DB 写失败不阻塞）
                 _bt_cache_put(cache_key, computed)
+                await _db_cache_put(strategy_id, start, end,
+                                    topk, n_drop, rebalance, computed)
                 return cache_key, computed
             except Exception as e:
                 logger.error("参数扫描失败 topk=%d rebalance=%s: %s", topk, rebalance, e)
