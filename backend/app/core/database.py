@@ -82,6 +82,12 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # 确认表已创建
+    async with engine.begin() as conn:
+        tables = await conn.run_sync(
+            lambda sync_conn: sync_conn.dialect.get_table_names(sync_conn)
+        )
+    logger.info("数据库表初始化完成，共 %d 张表: %s", len(tables), tables)
     try:
         await asyncio.to_thread(_run_alembic_upgrade)
     except Exception as e:
