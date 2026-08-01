@@ -48,6 +48,9 @@ alembic>=1.13
 # baostock: A-share daily K-line / valuation / ST-flag data source (baostock_client dep)
 baostock>=0.8.9
 
+# 绩效指标计算（替代自研实现）
+empyrical>=0.4.2
+
 # 缓存工具：LRU 缓存 IC 评价结果等
 cachetools>=5.3.0
 

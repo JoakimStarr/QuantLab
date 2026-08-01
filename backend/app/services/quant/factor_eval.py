@@ -1,13 +1,14 @@
-"""因子评价封装：基于 qlib 数据 + pandas 计算 IC/RankIC/ICIR/换手/衰减。
+"""因子评价封装：基于 alphalens-reloaded 计算 IC/RankIC/ICIR/分层收益/换手/衰减。
 
-设计：数据通过 qlib D.features 加载，指标用 pandas 手动计算，
-避免依赖 qlib.contrib.eval 不稳定 API。
+设计：数据通过 qlib D.features 加载，内部使用 alphalens-reloaded 计算指标，
+保留原有接口签名不变以实现外部调用无感知。
 """
 import re
 import logging
 from functools import lru_cache
 import numpy as np
 import pandas as pd
+import alphalens
 from app.services.quant.qlib_init import init_qlib
 from app.core.config import settings
 
@@ -204,29 +205,49 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
     return df.rename(columns={df.columns[0]: "label"})
 
 
+def _to_alphalens_factor_data(factor_df: pd.DataFrame, label_df: pd.DataFrame,
+                               period_name: str = "1D") -> pd.DataFrame | None:
+    """将 (factor_df, label_df) 转换为 alphalens 兼容格式。
+
+    factor_df: MultiIndex (datetime, instrument), 列 "factor"
+    label_df: MultiIndex (datetime, instrument), 列 "label"（前向收益）
+    period_name: 前向收益周期列名，alphalens 约定如 "1D"/"5D"
+    Returns: MultiIndex (date, asset), 列 ["factor", period_name]，或 None
+    """
+    merged = factor_df.join(label_df, how="inner").dropna()
+    if merged.empty:
+        return None
+    factor_data = merged.rename(columns={"label": period_name})
+    factor_data.index = factor_data.index.set_names(["date", "asset"])
+    return factor_data
+
+
 def compute_ic(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> dict:
     """计算 IC/RankIC/ICIR/IR。
 
     factor_df, label_df: MultiIndex (datetime, instrument)，列名 factor/label
+
+    注意：alphalens-reloaded 的 factor_information_coefficient 计算的是
+    Spearman Rank IC（即 RankIC），Pearson IC 在此手动计算。
     """
-    merged = factor_df.join(label_df, how="inner").dropna()
-    if merged.empty:
+    factor_data = _to_alphalens_factor_data(factor_df, label_df)
+    if factor_data is None or factor_data.empty:
         return {"ic": None, "rank_ic": None, "icir": None, "ir": None, "n_days": 0}
 
-    # 截面 IC：每日 Pearson 相关
-    daily_ic = merged.groupby(level="datetime").apply(
-        lambda g: g["factor"].corr(g["label"]) if len(g) >= 2 else np.nan,
-        include_groups=False,
-    ).dropna()
-    daily_rank_ic = merged.groupby(level="datetime").apply(
-        lambda g: g["factor"].corr(g["label"], method="spearman") if len(g) >= 2 else np.nan,
+    # alphalens 的 factor_information_coefficient 计算的是 Spearman Rank IC
+    rank_ic_df = alphalens.performance.factor_information_coefficient(factor_data)
+    daily_rank_ic = rank_ic_df["1D"].dropna()
+
+    # Pearson IC 手动计算
+    daily_ic = factor_data.groupby(level="date").apply(
+        lambda g: g["factor"].corr(g["1D"]) if len(g) >= 2 else np.nan,
         include_groups=False,
     ).dropna()
 
     ic_mean = float(daily_ic.mean()) if len(daily_ic) else None
-    ic_std = float(daily_ic.std()) if len(daily_ic) > 1 else None
+    ic_std = float(daily_ic.std(ddof=1)) if len(daily_ic) > 1 else None
     rank_ic_mean = float(daily_rank_ic.mean()) if len(daily_rank_ic) else None
-    rank_ic_std = float(daily_rank_ic.std()) if len(daily_rank_ic) > 1 else None
+    rank_ic_std = float(daily_rank_ic.std(ddof=1)) if len(daily_rank_ic) > 1 else None
 
     icir = float(ic_mean / ic_std) if ic_mean is not None and ic_std else None
     ir = float(rank_ic_mean / rank_ic_std) if rank_ic_mean is not None and rank_ic_std else None
@@ -262,14 +283,13 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
                   preloaded_close_df: pd.DataFrame = None) -> dict:
     """计算 IC 衰减：因子与未来 1~max_lag 日收益的 IC 序列。
 
-    优化：一次查询 $close 后本地 shift 计算各 lag 前向收益，避免 N 次 qlib IO。
-    进一步优化：调用方可传入 preloaded_close_df 跳过重复 IO（批量评价场景）。
+    使用 alphalens 多周期前向收益功能，一次查询 $close 后本地计算各 lag 的 IC。
+    优化：调用方可传入 preloaded_close_df 跳过重复 IO（批量评价场景）。
     """
     start = factor_df.index.get_level_values("datetime").min()
     end = factor_df.index.get_level_values("datetime").max()
 
     if preloaded_close_df is not None and not preloaded_close_df.empty:
-        # 复用预加载的 $close，避免每个因子重复 IO
         try:
             close_df = preloaded_close_df.rename(columns={"$close": "close"}).copy()
         except Exception as e:
@@ -282,9 +302,9 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
         market = settings.quant.get("universe", "csi300")
         instruments = _load_instruments(market)
 
-        # 一次查询 $close，本地算各 lag 收益
         try:
-            close_df = D.features(instruments, ["$close"], start_time=str(start.date()), end_time=str(end.date()), freq="day")
+            close_df = D.features(instruments, ["$close"],
+                                  start_time=str(start.date()), end_time=str(end.date()), freq="day")
             if close_df is None or close_df.empty:
                 return {}
             close_df = close_df.rename(columns={"$close": "close"})
@@ -292,21 +312,40 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
             logger.debug("decay 查询 $close 失败: %s", e)
             return {}
 
+    # 转换为 alphalens 格式：wide prices (date × instrument)
+    close_wide = close_df["close"].unstack(level="instrument")
+    # 确保日期索引有序
+    close_wide = close_wide.sort_index()
+
+    # 提取因子 Series
+    factor_s = factor_df["factor"].copy()
+    factor_s.index = factor_s.index.set_names(["date", "asset"])
+
+    # 使用 alphalens 多周期前向收益，一次计算所有 lag
+    periods = tuple(range(1, max_lag + 1))
+    try:
+        alphalens_factor_data = alphalens.utils.get_clean_factor_and_forward_returns(
+            factor=factor_s,
+            prices=close_wide,
+            periods=periods,
+            quantiles=5,
+            max_loss=0.35,
+        )
+    except Exception as e:
+        logger.debug("decay alphalens 前向收益计算失败: %s", e)
+        return {}
+
+    # 计算各周期 IC
+    ic_df = alphalens.performance.factor_information_coefficient(alphalens_factor_data)
+
     decay = {}
     for lag in range(1, max_lag + 1):
-        try:
-            # 前向 lag 日收益：close.shift(-lag) / close - 1（按 instrument 分组）
-            close_df["fwd_ret"] = close_df.groupby(level="instrument")["close"].shift(-lag) / close_df["close"] - 1
-            m = factor_df.join(close_df[["fwd_ret"]].rename(columns={"fwd_ret": "label"}), how="inner").dropna()
-            if m.empty:
-                continue
-            ic = m.groupby(level="datetime").apply(
-                lambda g: g["factor"].corr(g["label"]) if len(g) > 5 else np.nan,
-                include_groups=False,
-            ).dropna()
-            decay[lag] = round(float(ic.mean()), 4) if len(ic) else None
-        except Exception as e:
-            logger.debug("decay lag=%s 失败: %s", lag, e)
+        period_col = f"{lag}D"
+        if period_col in ic_df.columns:
+            ic_series = ic_df[period_col].dropna()
+            decay[lag] = round(float(ic_series.mean()), 4) if len(ic_series) else None
+        else:
+            decay[lag] = None
     return decay
 
 
@@ -352,8 +391,10 @@ def compute_quantile_returns(
 ) -> dict:
     """计算因子分组收益（分层回测）。
 
-    每个截面按因子值分 n_groups 组，统计各组日均收益、净值曲线、多空收益
-    及组间收益单调性。
+    使用 alphalens 进行分层收益计算：
+    1. 从前向收益重构 mock prices（收益尺度不变，仅用作 alphalens 输入）
+    2. 用 alphalens 计算各分位组日均收益
+    3. 输出各组净值曲线、多空收益及组间收益单调性
 
     Args:
         factor_df: MultiIndex(datetime, instrument) DataFrame，含 factor_col
@@ -372,33 +413,54 @@ def compute_quantile_returns(
     if merged.empty:
         return {"error": "无有效数据"}
 
-    dates = sorted(merged.index.get_level_values("datetime").unique())
+    # 从前向收益重构 mock prices（alphalens 需要 prices 而非直接的前向收益）
+    # 构造方法：每个 instrument 独立，price_t = 100 * cumprod(1 + return_{<t})
+    ret_wide = merged[return_col].unstack(level="instrument")
+    # 极端值裁剪，避免 mock prices 爆炸
+    ret_clipped = ret_wide.clip(-0.5, 1.0)
+    price_wide = 100.0 * (1 + ret_clipped).cumprod()
+    price_wide = price_wide.ffill().bfill()
 
-    group_daily_returns = {i: [] for i in range(1, n_groups + 1)}
-    group_dates = {i: [] for i in range(1, n_groups + 1)}
+    # 因子 Series
+    factor_s = merged[factor_col].copy()
+    factor_s.index = factor_s.index.set_names(["date", "asset"])
 
-    for dt in dates:
-        day_data = merged.xs(dt, level="datetime").dropna(subset=[factor_col, return_col])
-        if len(day_data) < n_groups:
-            continue
-        # 按因子值分位分组：qcut 可能因重复值失败，降级用 rank
+    try:
+        # 使用 alphalens 准备数据（含分位分配）
+        factor_data = alphalens.utils.get_clean_factor_and_forward_returns(
+            factor=factor_s,
+            prices=price_wide,
+            quantiles=n_groups,
+            periods=(1,),
+            max_loss=0.35,
+        )
+    except Exception as e:
+        logger.debug("quantile_returns alphalens 准备失败: %s", e)
+        return {"error": f"alphalens 数据处理失败: {e}"}
+
+    if factor_data is None or factor_data.empty:
+        return {"error": "alphalens 处理后无有效数据"}
+
+    # 获取各分位组日均收益（by_date=True 得到每日每组均值）
+    mean_ret, _ = alphalens.performance.mean_return_by_quantile(factor_data, by_date=True)
+
+    if mean_ret is None or mean_ret.empty:
+        return {"error": "无有效分组收益数据"}
+
+    # 转换 mean_ret 格式：MultiIndex(date, factor_quantile) → {group: [returns]}
+    # mean_ret 的列是周期名（如 "1D"），行是 (date, factor_quantile)
+    period_col = mean_ret.columns[0]  # "1D"
+
+    group_daily_returns = {}
+    group_dates = {}
+    for g in range(1, n_groups + 1):
         try:
-            day_data = day_data.copy()
-            day_data["group"] = pd.qcut(day_data[factor_col], n_groups, labels=False, duplicates="drop") + 1
-        except Exception:
-            ranks = day_data[factor_col].rank(method="first")
-            day_data = day_data.copy()
-            day_data["group"] = pd.cut(ranks, n_groups, labels=False) + 1
-        day_data = day_data.dropna(subset=["group"])
-        if day_data["group"].nunique() < 2:
-            continue
-
-        for g in range(1, n_groups + 1):
-            g_data = day_data[day_data["group"] == g]
-            if len(g_data) > 0:
-                g_return = float(g_data[return_col].mean())
-                group_daily_returns[g].append(g_return)
-                group_dates[g].append(dt)
+            g_data = mean_ret.xs(g, level="factor_quantile")[period_col].dropna()
+            group_daily_returns[g] = g_data.values.tolist()
+            group_dates[g] = g_data.index.tolist()
+        except KeyError:
+            group_daily_returns[g] = []
+            group_dates[g] = []
 
     # 各组净值曲线与统计
     group_nav = {}
@@ -407,25 +469,27 @@ def compute_quantile_returns(
         returns = group_daily_returns[g]
         nav = np.cumprod(1 + np.array(returns)) if returns else np.array([1.0])
         group_nav[g] = nav.tolist()
-        mean_ret = float(np.mean(returns)) if returns else 0.0
-        std_ret = float(np.std(returns)) if returns else 1.0
-        sharpe = mean_ret / std_ret * np.sqrt(252) if std_ret > 0 else 0.0
+        mean_ret_val = float(np.mean(returns)) if returns else 0.0
+        std_ret = float(np.std(returns, ddof=1)) if returns and len(returns) > 1 else 1.0
+        sharpe = mean_ret_val / std_ret * np.sqrt(252) if std_ret > 0 else 0.0
         group_stats.append({
             "group": g,
-            "mean_daily_return": mean_ret,
-            "annualized_return": float(mean_ret * 252),
+            "mean_daily_return": mean_ret_val,
+            "annualized_return": float(mean_ret_val * 252),
             "sharpe": float(sharpe),
             "days": len(returns),
         })
 
     # 多空收益（最高组 - 最低组），按日期对齐
-    long_series = pd.Series(group_daily_returns[n_groups], index=group_dates[n_groups], name="long")
-    short_series = pd.Series(group_daily_returns[1], index=group_dates[1], name="short")
+    long_series = pd.Series(group_daily_returns.get(n_groups, []),
+                            index=group_dates.get(n_groups, []), name="long")
+    short_series = pd.Series(group_daily_returns.get(1, []),
+                             index=group_dates.get(1, []), name="short")
     aligned = pd.concat([long_series, short_series], axis=1).dropna()
-    long_short = (aligned["long"] - aligned["short"]).tolist()
+    long_short = (aligned["long"] - aligned["short"]).tolist() if not aligned.empty else []
     long_short_nav = (np.cumprod(1 + np.array(long_short)) if long_short else np.array([1.0])).tolist()
 
-    # 单调性：组号与组均收益的 Spearman 相关（pandas 实现，无需 scipy）
+    # 单调性：组号与组均收益的 Spearman 相关
     mean_returns = [group_stats[g - 1]["mean_daily_return"] for g in range(1, n_groups + 1)]
     mono_corr = float(pd.Series(mean_returns).corr(pd.Series(range(1, n_groups + 1)), method="spearman"))
     if np.isnan(mono_corr):
@@ -439,7 +503,7 @@ def compute_quantile_returns(
         "long_short_nav": long_short_nav,
         "monotonicity_score": mono_corr,
         "n_groups": n_groups,
-        "dates": [str(d.date()) for d in aligned.index.tolist()],
+        "dates": [str(d.date()) if hasattr(d, 'date') else str(d) for d in aligned.index.tolist()],
     }
 
 
@@ -451,16 +515,13 @@ def compute_quantile_returns(
 def _daily_rank_ic_series(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.Series:
     """每日截面 Spearman IC 序列（私有复用）。
 
-    与 compute_ic 中 daily_rank_ic 计算口径一致，避免在多个深度分析函数中重复书写。
+    使用 alphalens 的 factor_information_coefficient（Spearman Rank IC）计算。
     """
-    merged = factor_df.join(label_df, how="inner").dropna()
-    if merged.empty:
+    factor_data = _to_alphalens_factor_data(factor_df, label_df)
+    if factor_data is None or factor_data.empty:
         return pd.Series(dtype=float)
-    daily_ic = merged.groupby(level="datetime").apply(
-        lambda g: g["factor"].corr(g["label"], method="spearman") if len(g) >= 2 else np.nan,
-        include_groups=False,
-    ).dropna()
-    return daily_ic
+    rank_ic_df = alphalens.performance.factor_information_coefficient(factor_data)
+    return rank_ic_df["1D"].dropna()
 
 
 def compute_ic_distribution(factor_df: pd.DataFrame, label_df: pd.DataFrame, n_bins: int = 20) -> dict:
