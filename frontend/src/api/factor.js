@@ -31,6 +31,12 @@ export function seedAlpha158() {
 }
 
 
+// 补算 Alpha158 历史因子的评价指标（修复导入时未触发评价导致的指标 NULL）
+export function backfillAlpha158Metrics() {
+  return request.post('/factors/backfill-alpha158-metrics')
+}
+
+
 export function getQuantileAnalysis(id, params) {
   return request.get('/factors/' + id + '/quantile-analysis', { params })
 }

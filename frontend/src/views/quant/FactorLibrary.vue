@@ -9,6 +9,7 @@
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
+        <el-button :icon="MagicStick" :loading="backfillingMetrics" @click="onBackfillAlpha158" title="为已存在但缺指标的 Alpha158 因子补算 IC/RankIC/ICIR/换手">补算指标</el-button>
         <el-button type="primary" :icon="Plus" @click="onAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
@@ -145,12 +146,12 @@ defineOptions({ name: 'FactorLibrary' })
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { Plus, Refresh, Download, Warning } from '@element-plus/icons-vue'
+import { Plus, Refresh, Download, Warning, MagicStick } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import VChart from 'vue-echarts'
 import { useFactorStore } from '@/stores/factor'
 import { syncQuantData } from '@/api/quant'
-import { seedAlpha158, getQuantileAnalysis, neutralizeFactor, decayCheck } from '@/api/factor'
+import { seedAlpha158, backfillAlpha158Metrics, getQuantileAnalysis, neutralizeFactor, decayCheck } from '@/api/factor'
 
 const router = useRouter()
 const factorStore = useFactorStore()
@@ -160,6 +161,7 @@ const factors = computed(() => factorStore.factors)
 const loading = computed(() => factorStore.loading)
 const syncing = ref(false)
 const seedingAlpha158 = ref(false)
+const backfillingMetrics = ref(false)
 const decayChecking = ref(false)
 const decayMap = ref({})  // factor_id -> is_decaying
 
@@ -231,12 +233,37 @@ async function onSeedAlpha158() {
   seedingAlpha158.value = true
   try {
     const data = await seedAlpha158()
-    ElMessage.success(`Alpha158 导入成功：${data?.count ?? 0} 个因子`)
+    if (data?.already_imported) {
+      // 重复点击：后端已识别为已导入，提示而非误导为"成功 0 个"
+      ElMessage.info(data?.message || 'Alpha158 已导入，无需重复操作')
+    } else if (data?.evaluated != null) {
+      // 新导入：分两段显示导入数 + 评价数
+      ElMessage.success(
+        `${data.message || ''}（导入 ${data.count} 个，评价 ${data.evaluated} 个，失败 ${data.eval_failed || 0} 个）`
+      )
+    } else {
+      ElMessage.success(`Alpha158 导入成功：${data?.count ?? 0} 个因子`)
+    }
     await loadFactors()
   } catch {
     /* 拦截器已提示 */
   } finally {
     seedingAlpha158.value = false
+  }
+}
+
+async function onBackfillAlpha158() {
+  backfillingMetrics.value = true
+  try {
+    const data = await backfillAlpha158Metrics()
+    ElMessage.success(
+      data?.message || `补算完成 ${data?.evaluated || 0}/${data?.total || 0}`
+    )
+    await loadFactors()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    backfillingMetrics.value = false
   }
 }
 

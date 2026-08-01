@@ -146,6 +146,18 @@ async def seed_alpha158_api():
     return ApiResponse(ok=True, data=result)
 
 
+@router.post("/backfill-alpha158-metrics")
+async def backfill_alpha158_metrics_api():
+    """为已导入但缺指标的 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
+
+    用于修复历史遗留：导入时未触发评价导致指标为 NULL 的因子。
+    进程池并行计算，158 个因子通常 30~60 秒完成（取决于 CPU 数）。
+    """
+    from app.services.factor.alpha158 import backfill_alpha158_metrics
+    result = await backfill_alpha158_metrics()
+    return ApiResponse(ok=result.get("ok", True), data=result)
+
+
 @router.get("/{factor_id}/quantile-analysis")
 async def quantile_analysis_api(
     factor_id: int,
