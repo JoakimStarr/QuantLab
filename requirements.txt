@@ -23,6 +23,7 @@ pydantic>=2.8.0
 # 安全：口令哈希 + 登录限流
 bcrypt>=4.0
 slowapi>=0.1.9
+prometheus-client>=0.20.0
 
 # 量化回测与AI因子挖掘
 # pyqlib: 微软AI量化框架（因子评价/回测/组合分析），CPU密集型，worker进程调用

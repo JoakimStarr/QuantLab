@@ -33,7 +33,7 @@ app:
   description: 自用量化研究工具 - 因子挖掘、回测与策略管理
   name: QuantLab
   timezone: Asia/Shanghai
-  version: 2.1.0
+  version: 2.3.0
 data:
   db_path: data/quantlab.db
   models_dir: models

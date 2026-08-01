@@ -25,6 +25,7 @@ from app.core.errors import (
     validation_error_handler,
 )
 from app.core.logging_config import setup_logging
+from app.core.metrics import router as metrics_router, ws_active_connections
 from app.core.middleware import setup_middleware
 from app.core.ratelimit import limiter
 from app.core.recovery import recover_stale_mining, recover_stale_sync
@@ -111,6 +112,11 @@ async def _starlette_method_not_allowed_handler(request: Request, exc: Starlette
 
 app.add_exception_handler(404, _starlette_not_found_handler)
 app.add_exception_handler(405, _starlette_method_not_allowed_handler)
+
+# Prometheus /metrics 端点（无需鉴权，供 Prometheus 抓取）
+app.include_router(metrics_router)
+
+# 业务 API 路由
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(docs_router, prefix="/api/v1")
@@ -141,6 +147,59 @@ async def health():
         checks["qlib"] = "ok" if qlib_ok else "not_available"
     except Exception as e:
         checks["qlib"] = f"error: {e}"
+    # 调度器检查
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from app.core.scheduler import scheduler
+
+        if isinstance(scheduler, AsyncIOScheduler) and scheduler.running:
+            checks["scheduler"] = "running"
+        else:
+            checks["scheduler"] = "stopped"
+            if status != "degraded":
+                status = "degraded"
+    except Exception:
+        checks["scheduler"] = "unknown"
+    # 磁盘空间检查（data 目录）
+    try:
+        import shutil
+
+        data_path = settings.PROJECT_ROOT / "data"
+        if data_path.exists():
+            usage = shutil.disk_usage(str(data_path))
+            free_gb = usage.free / (1024**3)
+            checks["disk"] = f"{free_gb:.1f}GB free"
+            if free_gb < 1.0:
+                checks["disk"] += " (LOW)"
+                status = "degraded"
+        else:
+            checks["disk"] = "data dir not found"
+    except Exception:
+        checks["disk"] = "unknown"
+    # WebSocket 连接数
+    try:
+        checks["ws_connections"] = len(ws_manager._connections)
+    except Exception:
+        checks["ws_connections"] = "unknown"
+    # AI Provider 检查（不发起真实请求，仅验证 key 是否已配置）
+    try:
+        from app.core.config import is_placeholder_api_key
+
+        providers = []
+        for name, key in (
+            ("opencodezen", settings.opencodezen_api_key),
+            ("glm", settings.glm_api_key),
+            ("siliconflow", settings.siliconflow_api_key),
+        ):
+            if key and not is_placeholder_api_key(key):
+                providers.append(name)
+        checks["ai_providers"] = ",".join(providers) if providers else "none"
+        if not providers:
+            checks["ai_providers"] += " (check .env API keys)"
+            status = "degraded"
+    except Exception:
+        checks["ai_providers"] = "unknown"
     return {
         "status": status,
         "timestamp": datetime.now().isoformat(),

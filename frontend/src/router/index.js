@@ -120,6 +120,17 @@ const routes = [
         }
       },
       {
+        path: 'admin/metrics',
+        name: 'AdminMetrics',
+        component: () => import('@/views/quant/AdminMetrics.vue'),
+        meta: {
+          title: '系统监控',
+          icon: 'Monitor',
+          transition: 'fade-in-up',
+          keepAlive: false
+        }
+      },
+      {
         path: ':pathMatch(.*)*',
         name: 'NotFound',
         component: () => import('@/views/quant/NotFound.vue'),

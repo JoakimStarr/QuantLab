@@ -1,6 +1,7 @@
 """认证 API：登录/登出/状态。"""
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+
 from app.core.auth import create_token, require_user, verify_admin_password
 from app.core.config import settings
 from app.core.ratelimit import limiter
@@ -23,13 +24,18 @@ async def auth_status():
 @limiter.limit(settings.login_rate_limit)
 async def login(request: Request, req: LoginRequest):
     """简单密码登录，返回 JWT token。口令用 bcrypt 校验，登录限流防暴力破解。"""
+    from app.core.audit_log import audit
+
     if not verify_admin_password(req.password):
+        audit("login_failed", detail="密码错误")
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
             status_code=401,
             content={"ok": False, "error": {"code": "AUTH_FAILED", "message": "密码错误", "status": 401}},
         )
     token = create_token({"role": "admin"}, expire_seconds=86400 * 7)  # 7天
+    audit("login_success", user="admin", detail="管理员登录成功")
     return ApiResponse(ok=True, data={"token": token, "token_type": "bearer"})
 
 

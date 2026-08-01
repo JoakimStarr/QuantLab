@@ -66,6 +66,7 @@ const menuItems = [
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
   { path: '/docs', title: '技术文档', icon: 'Reading' },
   { path: '/system/logs', title: '日志管理', icon: 'Document' },
+  { path: '/admin/metrics', title: '系统监控', icon: 'Monitor' },
 ]
 
 // /docs 用前缀匹配，使 /docs/data-layer 也高亮"文档"项

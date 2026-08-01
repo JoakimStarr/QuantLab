@@ -52,6 +52,13 @@ class WebSocketManager:
             self._connections.add(conn)
         logger.info("WebSocket 连接已建立，当前连接数: %d", len(self._connections))
         self._ensure_reaper()
+        # Prometheus gauge
+        try:
+            from app.core.metrics import ws_active_connections
+
+            ws_active_connections.set(len(self._connections))
+        except Exception:
+            pass
         return conn
 
     async def disconnect(self, ws: WebSocket) -> None:
@@ -62,6 +69,13 @@ class WebSocketManager:
                     self._connections.discard(conn)
                     break
         logger.info("WebSocket 连接已断开，当前连接数: %d", len(self._connections))
+        # Prometheus gauge
+        try:
+            from app.core.metrics import ws_active_connections
+
+            ws_active_connections.set(len(self._connections))
+        except Exception:
+            pass
 
     def update_heartbeat(self, ws: WebSocket) -> None:
         """更新心跳时间戳（轻量，无需加锁，monotonic 写入是原子的）。"""

@@ -1,14 +1,15 @@
 """AI 因子挖掘 API：LLM/符号回归挖掘任务管理。"""
+import asyncio
 import json
 import logging
-import asyncio
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query, BackgroundTasks, Request
-from sqlalchemy import select, func
 
-from app.core.database import get_db, async_session
-from app.core.errors import AppError
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from sqlalchemy import func, select
+
 from app.core.config import settings
+from app.core.database import async_session, get_db
+from app.core.errors import AppError
 from app.core.ratelimit import limiter
 from app.models.mining_task import MiningTask
 from app.schemas.common import ApiResponse
@@ -80,7 +81,7 @@ async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str 
         # 信号量限流：超出 max_concurrent 的任务在此排队，超时只计实际执行时间
         async with sem:
             await asyncio.wait_for(coro_factory(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("%s 任务超时 task_id=%s (timeout=%ss)", label, task_id, timeout)
         await _mark_failed(task_id, f"任务超时 (timeout={timeout}s)")
     except Exception as e:
@@ -114,11 +115,22 @@ def _task_dict(r: MiningTask) -> dict:
 
 
 async def _create_task(task_type: str, params: dict) -> int:
+    from app.core.audit_log import audit
+    from app.core.metrics import mining_tasks_total
+
     async with async_session() as session:
         t = MiningTask(type=task_type, status="pending", params=json.dumps(params))
         session.add(t)
         await session.commit()
         await session.refresh(t)
+        audit(
+            "mining_submit",
+            resource=f"task:{t.id}",
+            detail=f"提交 {task_type} 挖掘任务",
+            task_type=task_type,
+            params=params,
+        )
+        mining_tasks_total.labels(type=task_type, status="pending").inc()
         return t.id
 
 
