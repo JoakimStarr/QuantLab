@@ -2,9 +2,10 @@
 
 写入 logs/audit.jsonl，每行一条 JSON，便于 ELK/Loki 采集与合规审计。
 """
-import json
 import logging
 from datetime import datetime
+
+from pythonjsonlogger import jsonlogger
 
 from app.core.config import settings
 
@@ -20,7 +21,12 @@ def _ensure_audit_handler() -> None:
     handler = logging.FileHandler(
         str(log_dir / "audit.jsonl"), encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setFormatter(
+        jsonlogger.JsonFormatter(
+            "%(asctime)s %(levelname)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False  # 不传播到 root logger，避免重复输出
@@ -51,4 +57,4 @@ def audit(
         "detail": detail,
         **extra,
     }
-    logger.info(json.dumps(entry, ensure_ascii=False, default=str))
+    logger.info("audit", extra=entry)

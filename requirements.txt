@@ -41,7 +41,7 @@ protobuf<4
 setuptools<81
 # gplearn: 符号回归/遗传规划自动搜索因子表达式
 gplearn>=0.4.2
-cvxpy>=1.5
+PyPortfolioOpt>=1.5.1
 # 数据库迁移
 alembic>=1.13
 
@@ -54,8 +54,12 @@ empyrical>=0.4.2
 # 缓存工具：LRU 缓存 IC 评价结果等
 cachetools>=5.3.0
 
-# 结构化日志（structlog 替换自研 JSONFormatter）
+# 结构化日志（structlog + python-json-logger 替换自研 JSONFormatter）
 structlog>=24.4.0
+python-json-logger>=6.1.0
 
 # 重试：tenacity 替代手写重试循环
 tenacity>=8.5.0
+
+# Redis：异步 Pub/Sub 进度共享（多实例）
+redis>=5.0.0
