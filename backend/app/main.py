@@ -9,7 +9,6 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.config import router as config_router
@@ -52,7 +51,6 @@ async def lifespan(app: FastAPI):
     from app.core.executor import shutdown_executors
 
     shutdown_executors()
-
 
 
 _app_kwargs = {
@@ -124,11 +122,14 @@ async def health():
     checks = {}
     # 数据库检查
     try:
-        from app.core.database import engine
+        from app.core.database import health_check as db_health
 
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        checks["database"] = "ok"
+        result = await db_health()
+        if result["status"] == "ok":
+            checks["database"] = "ok"
+        else:
+            checks["database"] = f"error: {result.get('error', 'unknown')}"
+            status = "degraded"
     except Exception as e:
         checks["database"] = f"error: {e}"
         status = "degraded"

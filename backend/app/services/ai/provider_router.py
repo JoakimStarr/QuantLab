@@ -18,7 +18,10 @@ class ProviderRouter:
         return cls._singleton_instance
 
     def __init__(self):
-        if getattr(self, "_initialized", False):
+        # 单例缓存：仅在已成功初始化（至少一个 provider 可用）时跳过重新初始化。
+        # 如果上次初始化失败（所有 provider 都不可用），允许本次重试——
+        # 避免 .env 延迟加载或服务启动顺序导致单例被永久锁死为"无可用 Provider"。
+        if getattr(self, "_initialized", False) and (self.primary or self.fallback or self.tertiary):
             return
         self._initialized = True
         self.primary = None
@@ -35,11 +38,16 @@ class ProviderRouter:
             try:
                 self.primary = LLMClient(
                     api_key=opencodezen_key,
-                    base_url=primary_cfg.get("base_url", "https://opencode.ai/zen/v1"),
-                    model=primary_cfg.get("model", "gpt-4o-mini"),
+                    base_url=primary_cfg.get("base_url") or "https://opencode.ai/zen/v1",
+                    model=primary_cfg.get("model") or "gpt-4o-mini",
                     timeout=primary_cfg.get("timeout_seconds", 15),
                     max_tokens=primary_cfg.get("max_tokens", 512),
                     temperature=primary_cfg.get("temperature", 0.3),
+                )
+                logger.info(
+                    "Primary AI provider (opencodezen) 已就绪: model=%s, key=%s...",
+                    self.primary.model,
+                    opencodezen_key[:8],
                 )
             except Exception as e:
                 logger.warning("Primary AI provider (opencodezen) 初始化失败: %s", e)
@@ -50,11 +58,16 @@ class ProviderRouter:
             try:
                 self.fallback = LLMClient(
                     api_key=glm_key,
-                    base_url=fallback_cfg.get("base_url", "https://open.bigmodel.cn/api/paas/v4"),
-                    model=fallback_cfg.get("model", "glm-4.7-flash"),
+                    base_url=fallback_cfg.get("base_url") or "https://open.bigmodel.cn/api/paas/v4",
+                    model=fallback_cfg.get("model") or "glm-4.7-flash",
                     timeout=fallback_cfg.get("timeout_seconds", 15),
                     max_tokens=fallback_cfg.get("max_tokens", 512),
                     temperature=fallback_cfg.get("temperature", 0.3),
+                )
+                logger.info(
+                    "Fallback AI provider (glm) 已就绪: model=%s, key=%s...",
+                    self.fallback.model,
+                    glm_key[:8],
                 )
             except Exception as e:
                 logger.warning("Fallback AI provider (glm) 初始化失败: %s", e)
@@ -65,18 +78,29 @@ class ProviderRouter:
             try:
                 self.tertiary = LLMClient(
                     api_key=siliconflow_key,
-                    base_url=tertiary_cfg.get("base_url", "https://api.siliconflow.cn/v1"),
-                    model=tertiary_cfg.get("model", "Qwen/Qwen2.5-7B-Instruct"),
+                    base_url=tertiary_cfg.get("base_url") or "https://api.siliconflow.cn/v1",
+                    model=tertiary_cfg.get("model") or "Qwen/Qwen2.5-7B-Instruct",
                     timeout=tertiary_cfg.get("timeout_seconds", 12),
                     max_tokens=tertiary_cfg.get("max_tokens", 512),
                     temperature=tertiary_cfg.get("temperature", 0.3),
+                )
+                logger.info(
+                    "Tertiary AI provider (siliconflow) 已就绪: model=%s, key=%s...",
+                    self.tertiary.model,
+                    siliconflow_key[:8],
                 )
             except Exception as e:
                 logger.warning("Tertiary AI provider (siliconflow) 初始化失败: %s", e)
 
         if not self.primary and not self.fallback and not self.tertiary:
+            # 重置 _initialized，允许下次调用时重试
+            # （.env 可能延迟加载，或用户刚配置了 key）
+            self._initialized = False
             raise AIProviderUnavailableError(
-                "未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量"
+                "未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量。"
+                f"当前 key 状态: opencodezen={'有' if opencodezen_key and not is_placeholder_api_key(opencodezen_key) else '无'}, "
+                f"glm={'有' if glm_key and not is_placeholder_api_key(glm_key) else '无'}, "
+                f"siliconflow={'有' if siliconflow_key and not is_placeholder_api_key(siliconflow_key) else '无'}"
             )
 
         self.force_json = settings.ai_provider.get("force_json_output", True)

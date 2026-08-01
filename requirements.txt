@@ -1,7 +1,9 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.6
 sqlalchemy>=2.0.36
-aiosqlite>=0.20.0
+# Postgres 驱动：异步运行时用 asyncpg；Alembic 迁移用 psycopg
+asyncpg>=0.29.0
+psycopg[binary]>=3.2.0
 # AKShare 版本锁定 - 接口变动频繁，升级需测试
 akshare==1.18.63
 openai>=1.50.0
