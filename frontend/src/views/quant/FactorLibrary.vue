@@ -61,6 +61,11 @@
             <span class="badge" :class="`badge--${categoryBadge(row.category)}`">{{ categoryLabel(row.category) }}</span>
           </template>
         </el-table-column>
+        <el-table-column prop="description" label="描述" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="cell-desc">{{ row.description || '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="expression" label="表达式" width="280" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="cell-expr">{{ row.expression }}</span>
@@ -561,6 +566,15 @@ onMounted(loadFactors)
   display: inline-block;
   max-width: 100%;
   word-break: break-all;
+}
+.cell-desc {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .num {
   font-family: var(--font-mono);
