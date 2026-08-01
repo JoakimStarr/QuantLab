@@ -26,4 +26,6 @@ class SyncHistory(Base):
     __table_args__ = (
         Index("idx_sync_history_universe", "universe"),
         Index("idx_sync_history_status", "status"),
+        # 按股票池查最近同步记录：WHERE universe=? ORDER BY started_at DESC LIMIT N
+        Index("idx_sync_history_universe_started", "universe", "started_at"),
     )

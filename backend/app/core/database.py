@@ -41,13 +41,21 @@ def _resolve_database_url() -> str:
 
 DATABASE_URL = _resolve_database_url()
 
-# Postgres 调优：固定 pool 大小，连接复用避免反复 TLS 握手
+# Postgres 连接池调优：
+# - pool_size / max_overflow: 固定池 + 溢出，连接复用避免反复 TLS 握手
+# - pool_pre_ping: 健康检查，剔除已被服务端断开的失效连接
+# - pool_recycle: 1h 主动回收，避免 Postgres 默认 idle_timeout (2h) 后连接僵死
+# - pool_timeout: 30s 等不到连接就报错，避免请求无限堆积
+# - pool_use_lifo: 后进先出，热点连接优先复用，冷连接自然淘汰
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
     max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
-    pool_pre_ping=True,  # 健康检查，剔除失效连接
+    pool_pre_ping=True,
+    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "3600")),
+    pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
+    pool_use_lifo=True,
 )
 
 async_session = async_sessionmaker(

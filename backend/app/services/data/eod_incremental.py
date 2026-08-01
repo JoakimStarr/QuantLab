@@ -579,9 +579,13 @@ async def _incremental_sync_eod_akshare(
     """
     import asyncio
     from functools import partial
+    from app.core.ratelimit import get_akshare_bucket
 
     cal_set = set(old_calendar) if old_calendar else set()
     loop = asyncio.get_running_loop()
+    # 令牌桶限速：替代固定 sleep 间隔，平均速率稳定且允许小幅突发
+    # 在 executor 提交前 acquire，避免线程池里多个 fetch 同时打满 akshare
+    rate_bucket = get_akshare_bucket()
 
     success_count = 0
     fail_count = 0
@@ -590,6 +594,8 @@ async def _incremental_sync_eod_akshare(
 
     for i, qlib_code in enumerate(codes):
         try:
+            # 限速：每次调用 akshare 前取 1 个令牌（默认 3 req/s）
+            await rate_bucket.acquire(timeout=60)
             fn = partial(_fetch_eod_akshare, qlib_code, start_str, end_str)
             df = await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=30)
 

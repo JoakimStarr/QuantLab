@@ -25,4 +25,6 @@ class MiningTask(Base):
     __table_args__ = (
         Index("idx_mining_type_status", "type", "status"),
         Index("idx_mining_created_at", "created_at"),
+        # 任务列表高频查询：WHERE status=? ORDER BY created_at DESC LIMIT N
+        Index("idx_mining_status_created", "status", "created_at"),
     )

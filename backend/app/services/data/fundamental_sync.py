@@ -10,7 +10,7 @@ from typing import Optional
 
 import pandas as pd
 from sqlalchemy import and_, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.database import async_session
 from app.models.fundamental import FundamentalPIT
@@ -50,30 +50,25 @@ async def sync_fundamental_pit(trade_date: str) -> dict:
     records = records.astype(object).where(pd.notna(records), None)
 
     async with async_session() as session:
-        # 查已存在的 code+trade_date（按当日过滤，幂等：同 code+trade_date 跳过）
-        existing = await session.execute(
-            select(FundamentalPIT.code, FundamentalPIT.trade_date).where(
-                FundamentalPIT.trade_date == records["trade_date"].iloc[0]
+        # Postgres ON CONFLICT 幂等写入：code+trade_date 冲突时跳过，
+        # 无需先查再过滤，一次 INSERT 搞定，且无竞态条件
+        all_records = records.to_dict("records")
+        if all_records:
+            stmt = pg_insert(FundamentalPIT.__table__).values(all_records)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["code", "trade_date"]
             )
-        )
-        existing_keys = {(r[0], r[1]) for r in existing.fetchall()}
-
-        # 仅插新记录
-        to_insert = [
-            r
-            for r in records.to_dict("records")
-            if (r["code"], r["trade_date"]) not in existing_keys
-        ]
-
-        if to_insert:
-            await session.execute(sqlite_insert(FundamentalPIT.__table__).values(to_insert))
+            result = await session.execute(stmt)
             await session.commit()
+            inserted = result.rowcount or 0
+        else:
+            inserted = 0
 
         return {
             "date": trade_date,
             "total": len(records),
-            "inserted": len(to_insert),
-            "skipped": len(records) - len(to_insert),
+            "inserted": inserted,
+            "skipped": len(records) - inserted,
         }
 
 

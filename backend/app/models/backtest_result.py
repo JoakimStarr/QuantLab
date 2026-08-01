@@ -33,4 +33,6 @@ class BacktestResult(Base):
     __table_args__ = (
         Index("idx_backtest_strategy", "strategy_id"),
         Index("idx_backtest_created_at", "created_at"),
+        # 参数扫描/历史查重：WHERE strategy_id=? AND start_date=? AND end_date=?
+        Index("idx_backtest_strategy_period", "strategy_id", "start_date", "end_date"),
     )

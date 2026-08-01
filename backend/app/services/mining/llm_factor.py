@@ -1,20 +1,28 @@
 """LLM 生成因子：调用大模型产出 qlib 因子表达式，沙箱校验 + IC 评价后入库。
 
-复用现有 ai/llm_client + ai/provider_router，CPU 密集的 IC 评价放线程池。
+复用现有 ai/llm_client + ai/provider_router，CPU 密集的 IC 评价放进程池并行。
 
-增强：iterative_mine_factors 迭代因子挖掘 —— 每轮生成→校验→IC评价→反馈给 LLM，
-逐轮改进，最终汇总最优因子入库。
+增强：
+- 并行 IC 评价：所有候选因子一次性提交到进程池，asyncio.gather 并行等待
+- IC 结果缓存：相同表达式+日期段不重复计算
+- 批量入库：通过评价的因子用 add_factors_batch 单次 commit
+- iterative_mine_factors 迭代因子挖掘 —— 每轮生成→校验→IC评价→反馈给 LLM
 """
 import json
 import logging
 import asyncio
+import hashlib
 from datetime import datetime
 from app.core.config import settings
 from app.services.factor.expression import validate_expression, ExpressionValidationError
-from app.services.factor.library import add_factor
+from app.services.factor.library import add_factor, add_factors_batch, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
 
 logger = logging.getLogger(__name__)
+
+# IC 评价结果内存缓存：key = md5(expr|start|end)，value = metrics dict
+# 进程重启后清空（可接受：挖掘任务本身是低频操作）
+_ic_cache: dict[str, dict] = {}
 
 _SYSTEM_PROMPT = """你是一位资深量化研究员，擅长构造A股截面选股因子。
 请基于 qlib 表达式语法生成有预测力的因子。"""
@@ -57,7 +65,7 @@ async def _call_llm(messages: list) -> list[dict]:
 
 
 async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
-    """LLM 因子挖掘主流程。
+    """LLM 因子挖掘主流程（并行IC评价 + 批量入库）。
 
     Args:
         task_id: MiningTask.id
@@ -84,39 +92,62 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
         candidates = await _call_llm(messages)
         await _update_task(task_id, candidates_generated=len(candidates))
 
-        passed_ids = []
-        best_ic = 0.0
+        # Phase 1: 沙箱校验（主线程，快）
+        valid = []
         for c in candidates:
-            name = c.get("name", "").strip()
-            expr = c.get("expression", "").strip()
+            name = (c.get("name") or "").strip()
+            expr = (c.get("expression") or "").strip()
             desc = c.get("description", "")
             if not name or not expr:
                 continue
-            # 沙箱校验
             try:
                 validate_expression(expr)
             except ExpressionValidationError as e:
                 logger.info("因子 %s 沙箱拒绝: %s", name, e)
                 continue
-            # IC 评价（CPU 密集，放线程池）
-            try:
-                ic_metrics = await _evaluate_safe(expr)
-            except Exception as e:
-                logger.warning("因子 %s 评价失败: %s", name, e)
+            valid.append({"name": name, "expression": expr, "description": desc})
+
+        if not valid:
+            await _update_task(task_id, status="done", candidates_passed=0,
+                               best_ic=0.0, finished_at=datetime.now())
+            return {"task_id": task_id, "generated": len(candidates),
+                    "passed": 0, "best_ic": 0.0, "factor_ids": []}
+
+        # Phase 2: 并行 IC 评价（进程池，asyncio.gather 并行等待）
+        logger.info("并行评价 %d 个候选因子", len(valid))
+        eval_results = await asyncio.gather(
+            *[_evaluate_safe_cached(v["expression"]) for v in valid],
+            return_exceptions=True,
+        )
+
+        # Phase 3: 筛选通过 IC 阈值的因子
+        passed = []  # [(candidate, metrics), ...]
+        best_ic = 0.0
+        for v, result in zip(valid, eval_results):
+            if isinstance(result, Exception):
+                logger.warning("因子 %s 评价失败: %s", v["name"], result)
                 continue
-            ic = ic_metrics.get("ic")
+            ic = result.get("ic")
             if ic is None or abs(ic) < ic_threshold:
-                logger.info("因子 %s IC=%s 未达标(阈值%s)", name, ic, ic_threshold)
+                logger.info("因子 %s IC=%s 未达标(阈值%s)", v["name"], ic, ic_threshold)
                 continue
-            # 入库
-            factor = await add_factor(name=name, expression=expr, category="llm",
-                                      description=desc, source_task_id=task_id,
-                                      skip_validation=True)
-            # 更新评价指标
-            await _save_metrics(factor["id"], ic_metrics)
-            passed_ids.append(factor["id"])
-            if ic is not None and abs(ic) > abs(best_ic):
+            passed.append((v, result))
+            if abs(ic) > abs(best_ic):
                 best_ic = ic
+
+        # Phase 4: 批量入库 + 逐个保存指标（指标更新轻量，逐个可接受）
+        passed_ids = []
+        if passed:
+            factor_dicts = [
+                {"name": v["name"], "expression": v["expression"],
+                 "category": "llm", "description": v.get("description", ""),
+                 "source_task_id": task_id}
+                for v, _ in passed
+            ]
+            factors = await add_factors_batch(factor_dicts, skip_validation=True)
+            for factor, (_, metrics) in zip(factors, passed):
+                await update_factor_metrics(factor["id"], metrics)
+                passed_ids.append(factor["id"])
 
         await _update_task(
             task_id, status="done", candidates_passed=len(passed_ids),
@@ -257,28 +288,31 @@ async def iterative_mine_factors(
                     continue
                 valid_exprs.append({"name": name, "expression": expr, "description": c.get("description", "")})
 
-            # IC 评价
+            # IC 评价（并行：所有有效因子一次性提交到进程池）
             round_results = []
             best_ic = 0.0
-            for v in valid_exprs:
-                try:
-                    ic_result = await _evaluate_safe(v["expression"])
-                except Exception as e:
-                    logger.warning("因子评价失败: %s, expr=%s", e, v["expression"])
-                    continue
-                ic = ic_result.get("ic") or 0.0
-                if abs(ic) < abs(ic_threshold):
-                    continue
-                round_results.append({
-                    "name": v["name"],
-                    "expression": v["expression"],
-                    "description": v.get("description", ""),
-                    "ic": ic,
-                    "rank_ic": ic_result.get("rank_ic") or 0.0,
-                    "icir": ic_result.get("icir") or 0.0,
-                })
-                if abs(ic) > abs(best_ic):
-                    best_ic = ic
+            if valid_exprs:
+                eval_results = await asyncio.gather(
+                    *[_evaluate_safe_cached(v["expression"]) for v in valid_exprs],
+                    return_exceptions=True,
+                )
+                for v, ic_result in zip(valid_exprs, eval_results):
+                    if isinstance(ic_result, Exception):
+                        logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
+                        continue
+                    ic = ic_result.get("ic") or 0.0
+                    if abs(ic) < abs(ic_threshold):
+                        continue
+                    round_results.append({
+                        "name": v["name"],
+                        "expression": v["expression"],
+                        "description": v.get("description", ""),
+                        "ic": ic,
+                        "rank_ic": ic_result.get("rank_ic") or 0.0,
+                        "icir": ic_result.get("icir") or 0.0,
+                    })
+                    if abs(ic) > abs(best_ic):
+                        best_ic = ic
 
             # 按 IC 排序，保留 top
             round_results.sort(key=lambda x: abs(x.get("ic", 0)), reverse=True)
@@ -289,7 +323,7 @@ async def iterative_mine_factors(
                     factor = await add_factor(name=f["name"], expression=f["expression"],
                                               category="llm", description=f.get("description", ""),
                                               source_task_id=task_id, skip_validation=True)
-                    await _save_metrics(factor["id"], {
+                    await update_factor_metrics(factor["id"], {
                         "ic": f.get("ic"), "rank_ic": f.get("rank_ic"),
                         "icir": f.get("icir"),
                     })
@@ -365,7 +399,7 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
 
 
 async def _evaluate_safe(expr: str) -> dict:
-    """在线程池中运行同步的因子评价，带超时保护防止单因子卡死。"""
+    """在进程池中运行同步的因子评价，带超时保护防止单因子卡死。"""
     from app.services.quant.factor_eval import evaluate_factor
     period = settings.quant.get("default_backtest_period", {})
     start = period.get("start", "2020-01-01")
@@ -378,7 +412,22 @@ async def _evaluate_safe(expr: str) -> dict:
     )
 
 
-async def _save_metrics(factor_id: int, metrics: dict) -> None:
-    from app.services.factor.library import update_factor_metrics
-    await update_factor_metrics(factor_id, metrics)
+def _ic_cache_key(expr: str) -> str:
+    """生成 IC 缓存 key：表达式 + 评价区间。"""
+    period = settings.quant.get("default_backtest_period", {})
+    start = period.get("start", "2020-01-01")
+    end = period.get("end", "2024-12-31")
+    raw = f"{expr}|{start}|{end}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+async def _evaluate_safe_cached(expr: str) -> dict:
+    """带内存缓存的因子评价。相同表达式+日期段不重复计算。"""
+    key = _ic_cache_key(expr)
+    if key in _ic_cache:
+        logger.debug("IC 缓存命中: %s", expr[:40])
+        return _ic_cache[key]
+    result = await _evaluate_safe(expr)
+    _ic_cache[key] = result
+    return result
 

@@ -36,4 +36,6 @@ class Factor(Base):
         Index("idx_factor_category_status", "category", "status"),
         Index("idx_factor_ic", "ic"),
         Index("idx_factor_name", "name"),
+        # 按挖掘任务反查因子：WHERE source_task_id=?（挖掘结果列表高频查询）
+        Index("idx_factor_source_task", "source_task_id"),
     )

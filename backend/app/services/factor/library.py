@@ -60,6 +60,36 @@ async def add_factor(name: str, expression: str, category: str = "builtin",
         return _to_dict(factor)
 
 
+async def add_factors_batch(factors: list[dict], skip_validation: bool = False) -> list[dict]:
+    """批量新增因子，单次 commit。
+
+    Args:
+        factors: [{"name":..., "expression":..., "category":..., "description":..., "source_task_id":...}, ...]
+        skip_validation: 跳过表达式校验（已由调用方校验过时用）
+    Returns:
+        新增因子 dict 列表
+    """
+    if not factors:
+        return []
+    if not skip_validation:
+        for f in factors:
+            validate_expression(f["expression"])
+    async with async_session() as session:
+        objs = []
+        for f in factors:
+            obj = Factor(
+                name=f["name"], expression=f["expression"],
+                category=f.get("category", "builtin"),
+                description=f.get("description"),
+                source_task_id=f.get("source_task_id"),
+            )
+            objs.append(obj)
+        session.add_all(objs)
+        await session.commit()
+        # expire_on_commit=False，commit 后 id 已由 flush 填充
+        return [_to_dict(obj) for obj in objs]
+
+
 async def disable_factor(factor_id: int) -> bool:
     async with async_session() as session:
         r = await session.get(Factor, factor_id)
