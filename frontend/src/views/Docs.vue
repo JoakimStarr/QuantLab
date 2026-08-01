@@ -262,11 +262,19 @@ function ensureDocsifyAssets() {
 
 let docsifyLoaded = null
 
-function loadDocsify() {
-  if (docsifyLoaded) return docsifyLoaded
+// 每次进入页面都强制重新加载 Docsify 脚本（用时间戳去缓存）
+// 避免 Vue Router 切换后 Docsify IIFE 不重跑导致空容器
+function loadDocsify(force = false) {
+  if (docsifyLoaded && !force) return docsifyLoaded
+
+  // 移除已存在的脚本和插件，避免重复实例化
+  const oldScript = document.getElementById('docsify-js')
+  if (oldScript) oldScript.remove()
+  document.querySelectorAll('script[data-docsify-plugin]').forEach((el) => el.remove())
+
   docsifyLoaded = new Promise((resolve, reject) => {
     // ⚠️ 关键：必须在加载 docsify.min.js 之前就设置好 window.$docsify
-    // 因为 Docsify 脚本是 IIFE，加载时立即执行构造函数检查 #docsify-app 元素
+    // 因为 Docsify 脚本是 IIFE，加载时立即执行构造函数检查挂载点元素
     // eslint-disable-next-line no-undef
     window.$docsify = {
       // 挂载点（必须用 #docsify-app，因为我们有这个 id 的 div）
@@ -298,16 +306,19 @@ function loadDocsify() {
       auto2top: true,
     }
 
-    // Docsify 4 主脚本
+    // Docsify 4 主脚本（加时间戳去缓存，强制重跑 IIFE）
     const script = document.createElement('script')
     script.id = 'docsify-js'
-    script.src = '/docsify/lib/docsify.min.js'
+    script.src = `/docsify/lib/docsify.min.js?t=${Date.now()}`
     script.onload = () => {
-      // 搜索插件
+      // 搜索插件（也加时间戳）
       const searchPlugin = document.createElement('script')
-      searchPlugin.src = '/docsify/lib/plugins/search.min.js'
+      searchPlugin.id = 'docsify-search-js'
+      searchPlugin.setAttribute('data-docsify-plugin', 'search')
+      searchPlugin.src = `/docsify/lib/plugins/search.min.js?t=${Date.now()}`
+      searchPlugin.onload = () => resolve()
+      searchPlugin.onerror = () => resolve() // 搜索插件失败不阻塞
       document.head.appendChild(searchPlugin)
-      resolve()
     }
     script.onerror = reject
     document.head.appendChild(script)
@@ -316,11 +327,13 @@ function loadDocsify() {
 }
 
 async function initDocsify() {
-  // 必须等 #docsify-app 元素进入 DOM 再加载脚本
-  // 否则 Docsify 会标记 rendered=true 跳过渲染
+  // 1. 必须等 #docsify-app 元素进入 DOM 再加载脚本
   await nextTick()
-  await loadDocsify()
-  // Docsify 加载即初始化，无需手动调用
+  // 2. 清空容器（避免 Vue 复用组件时残留的 Docsify 内部 DOM）
+  const container = document.getElementById('docsify-app')
+  if (container) container.innerHTML = ''
+  // 3. 强制重新加载 Docsify（IIFE 重新跑，挂载到当前容器）
+  await loadDocsify(true)
 }
 
 async function loadDocs() {
@@ -388,8 +401,14 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  // 清理 Docsify 注入的资源，避免切走页面后样式残留
-  // 注：保留以备扩展
+  // 清理 Docsify 注入的脚本与容器内容，避免重复实例化导致卡顿闪烁
+  const oldScript = document.getElementById('docsify-js')
+  if (oldScript) oldScript.remove()
+  document.querySelectorAll('script[data-docsify-plugin]').forEach((el) => el.remove())
+  const container = document.getElementById('docsify-app')
+  if (container) container.innerHTML = ''
+  // 重置缓存标志，下次进入会强制重新加载
+  docsifyLoaded = null
 })
 </script>
 

@@ -1,3 +1,11 @@
+---
+title: 开源替代方案
+slug: quantlab-开源替代方案
+order: 4
+group: 优化方案
+summary: 各模块可参考的开源替代方案
+---
+
 # QuantLab 开源替代方案
 
 > 生成日期：2026-08-01

@@ -1,3 +1,11 @@
+---
+title: 项目审视分析报告
+slug: quantlab-项目审视分析报告
+order: 3
+group: 优化方案
+summary: 项目初始审视：发现的问题与改造方向
+---
+
 # QuantLab 项目审视分析报告
 
 > 生成日期：2026-08-01

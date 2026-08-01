@@ -43,10 +43,17 @@ async def get_doc_api(slug: str):
 
 # 文档名 -> 文档真实路径的映射（Docsify 的 _sidebar.md 用 slug 作锚点）
 def _readme_md() -> str:
-    """README.md 来自仓库根目录，剥 frontmatter 后返回。"""
+    """README.md 来自仓库根目录，剥 frontmatter 后返回。
+
+    路径推导：
+      backend/app/api/docs.py → parents[0] = backend/app/api
+                            parents[1] = backend/app
+                            parents[2] = backend
+                            parents[3] = 项目根（QuantLab/，README.md 在这里）
+    """
     from pathlib import Path
     from app.services.docs.loader import _strip_frontmatter
-    p = Path(__file__).resolve().parents[4] / "README.md"
+    p = Path(__file__).resolve().parents[3] / "README.md"
     if not p.exists():
         return "# QuantLab\n\nREADME.md 缺失。"
     return _strip_frontmatter(p.read_text(encoding="utf-8"))
