@@ -13,9 +13,9 @@
 | 优先级 | 领域 | 问题数 | 总工作量 | 核心收益 |
 |--------|------|--------|----------|----------|
 | **P0** | 方法论 + 安全 | 4 | 5-7 天 | 因子质量 + 系统安全 |
-| **P1** | 性能 + 体验 | 8 | 10-14 天 | 效率 + 用户体验 |
-| **P2** | 数据库 + 运维 | 5 | 5-7 天 | 稳定性 + 可维护性 |
-| **P3** | 代码质量 + 监控 | 4 | 4-5 天 | 可观测性 + 代码整洁 |
+| **P1** | 性能 + 体验 | 12 | 14-18 天 | 效率 + 用户体验 |
+| **P2** | 数据库 + 运维 + 策略 | 8 | 8-10 天 | 稳定性 + 可维护性 |
+| **P3** | 代码质量 + 监控 | 6 | 5-6 天 | 可观测性 + 代码整洁 |
 
 ### 1.2 总体时间线
 
@@ -553,18 +553,233 @@ async def run_mixed(func, *args, is_cpu_bound=False, **kwargs):
 
 ---
 
-## 九、附录
+## 九、新增发现：因子挖掘/策略回测/策略管理深度优化点
 
-### 9.1 相关文档
+> 以下为对因子挖掘、策略回测、策略管理三个模块深度代码审查后新增发现的优化点，**补充到对应优先级中**。
 
-- [QuantLab_项目审视分析报告.md](file:///home/joakim/Project/QuantLab/docs/QuantLab_项目审视分析报告.md) — 问题发现
-- [QuantLab_因子挖掘优化方案.md](file:///home/joakim/Project/QuantLab/docs/QuantLab_因子挖掘优化方案.md) — 因子挖掘专项优化
+### 9.1 因子挖掘新增优化点
 
-### 9.2 版本号建议
+#### P1-05: 符号回归默认参数过大
+
+**现状**：[symbolic.py](file:///home/joakim/Project/QuantLab/backend/app/services/mining/symbolic.py#L175-L184) 中 `population=1000, generations=30, tournament_size=20`，即使数据集很小也使用同样参数，浪费大量时间。
+
+**改造**：根据数据集大小自适应调整参数：
+- 数据量 < 5000 行：`population=500, generations=10, tournament_size=10`
+- 数据量 < 20000 行：`population=800, generations=20, tournament_size=15`
+- 数据量 >= 20000 行：`population=1000, generations=30, tournament_size=20`
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/mining/symbolic.py` | 根据 `len(X_train)` 动态调整 gplearn 参数 |
+
+#### P1-06: AutoML SHAP 计算阻塞事件循环
+
+**现状**：[automl.py](file:///home/joakim/Project/QuantLab/backend/app/services/mining/automl.py#L226-L247) 中 `_compute_shap()` 在同步 `_fit()` 的调用链中执行，但 SHAP 计算（特别是 `TreeExplainer`）同样耗时，会阻塞事件循环。
+
+**改造**：将 `_compute_shap()` 放入 `run_in_executor` 异步执行。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/mining/automl.py` | SHAP 计算改为 `run_in_executor` |
+
+#### P1-07: 挖掘 API 参数传递方式不合理
+
+**现状**：[api/mining.py](file:///home/joakim/Project/QuantLab/backend/app/api/mining.py) 中 `n_rounds`, `candidates` 等参数通过 URL Query 传递，URL 长度受限（特别在 factor_ids 列表较长时），且前端硬编码参数。
+
+**改造**：改为 JSON Body 传递参数，同时支持扩展参数（如 `eval_horizon`、`universe` 等）。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/api/mining.py` | 使用 `PUT`/`POST` body 接收参数 |
+| `frontend/src/api/mining.js` | 对应修改请求格式 |
+| `frontend/src/views/quant/Mining.vue` | 增加 horizon 配置项 |
+
+#### P2-01: 符号回归时序分割后评价不完整
+
+**现状**：[symbolic.py](file:///home/joakim/Project/QuantLab/backend/app/services/mining/symbolic.py#L157-L165) 只做了简单的 80/20 时序分割，但评价时 gplearn 只在训练集上训练，验证集仅用于计算过拟合指标。最终对 top 程序的 IC 评价使用 `evaluate_factor_with_validation`，但输入的 `valid_start/valid_end` 是验证集区间，**没有做 3-fold 分割**。
+
+**改造**：在 `evaluate_factor_with_validation` 内部已经做了样本分割，但符号回归的 `valid_start/valid_end` 区间如果太短（< 1 年），evaluate_factor_with_validation 内部的再分割会导致数据不足。建议符号回归的验证期至少 1 年。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/mining/symbolic.py` | 验证期长度检查，不足时自动扩展 |
+
+### 9.2 策略回测新增优化点
+
+#### P1-08: Walk-forward 回测串行执行且无缓存
+
+**现状**：[walk_forward.py](file:///home/joakim/Project/QuantLab/backend/app/services/quant/walk_forward.py#L85-L167) 中 `run_walk_forward()` 对 N 个 topk × M 个窗口全部串行执行，没有利用并行。且每次窗口重复调用 `run_backtest()` 加载价格数据，但 `score_df` 已在内存中。
+
+**改造**：
+1. 对每个窗口的 topk 搜索使用 `ThreadPoolExecutor` 并行（qlib C 扩展释放 GIL）
+2. 对窗口本身也做并行（窗口间独立）
+3. 缓存训练期回测结果：相同参数组合的窗口间可能复用
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/quant/walk_forward.py` | 并行化窗口搜索 + 结果缓存 |
+| `backend/app/services/quant/backtest_engine.py` | `run_backtest()` 支持预加载的 `price_df` 复用 |
+
+#### P1-09: 回测状态管理器仅内存存储
+
+**现状**：[backtest_status.py](file:///home/joakim/Project/QuantLab/backend/app/services/strategy/backtest_status.py) 使用内存 dict + threading.Lock 存储回测状态，进程重启后丢失，多实例部署不共享。
+
+**改造**：改用 Redis 或数据库存储回测状态，支持跨实例共享和进程重启恢复。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/core/config.py` | 增加 `BacktestStatusStorage` 配置（memory/redis/db） |
+| `backend/app/services/strategy/backtest_status.py` | 抽象出存储后端接口 |
+| `backend/app/services/strategy/backtest_status_db.py` | 新建 DB 存储后端 |
+
+#### P1-10: 策略回测使用静态权重，未利用滚动 IC 动态权重
+
+**现状**：[manager.py](file:///home/joakim/Project/QuantLab/backend/app/services/strategy/manager.py#L148-L152) 中 `weights[meta["name"]] = meta.get("ic") or 0.0` 使用因子库的静态 IC 字段作为权重。但 [backtest_engine.py](file:///home/joakim/Project/QuantLab/backend/app/services/quant/backtest_engine.py#L73-L132) 中 `compute_combine_weights()` 已实现滚动窗口动态权重，但未被调用。
+
+**改造**：`run_strategy_backtest()` 中增加 `dynamic_weight: bool = True` 参数，启用时调用 `compute_combine_weights()` 计算滚动权重。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/strategy/manager.py` | `run_strategy_backtest()` 增加 `dynamic_weight` 参数 |
+| `backend/app/api/strategy.py` | 回测 API 增加 `dynamic_weight` 参数 |
+| `frontend/src/views/quant/Strategy.vue` | 增加动态权重开关 |
+
+#### P2-02: 参数扫描结果 nav_curve 存为 JSON 过长
+
+**现状**：[manager.py](file:///home/joakim/Project/QuantLab/backend/app/services/strategy/manager.py#L189-L190) 中 `nav_curve=json.dumps(nav_curve)` 存储完整净值曲线，5 年日频约 2500 个点，参数扫描 20 个组合就存 20 份。
+
+**改造**：
+1. 对 `nav_curve` 使用 PostgreSQL 的 `JSONB` 压缩存储（TOAST 自动处理）
+2. 参数扫描结果中不存储 `nav_curve`，仅在需要时从详细回测结果中加载
+3. 或对 `nav_curve` 做降采样（如每周取一个点）
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/strategy/param_sweep.py` | 参数扫描结果中省略 `nav_curve` |
+| `backend/app/models/backtest_result.py` | `nav_curve` 字段增加 `deferred=True`（懒加载） |
+
+#### P2-03: 策略创建使用 Query 参数传递 factor_ids 列表
+
+**现状**：[api/strategy.py#L26-L35](file:///home/joakim/Project/QuantLab/backend/app/api/strategy.py#L26-L35) 中创建策略使用 `Query` 参数接收 `factor_ids: list[int]`，URL 长度受限，当因子数量多时可能被截断。
+
+**改造**：改用 `POST` body 传递 JSON 参数。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/api/strategy.py` | 改为 `POST` body 接收参数 |
+| `frontend/src/api/strategy.js` | 对应修改请求格式 |
+
+### 9.3 策略管理新增优化点
+
+#### P2-04: 策略列表没有分页
+
+**现状**：[manager.py#L14-L23](file:///home/joakim/Project/QuantLab/backend/app/services/strategy/manager.py#L14-L23) 中 `list_strategies()` 返回全部策略，没有分页参数。
+
+**改造**：增加 `limit` 和 `offset` 参数，API 也对应增加分页参数。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/strategy/manager.py` | `list_strategies()` 增加 `limit`, `offset` |
+| `backend/app/api/strategy.py` | 对应增加分页参数 |
+| `frontend/src/views/quant/Strategy.vue` | 增加分页组件 |
+
+#### P2-05: 策略详情不包含关联因子名称和最近回测结果
+
+**现状**：[manager.py#L26-L29](file:///home/joakim/Project/QuantLab/backend/app/services/strategy/manager.py#L26-L29) 中 `get_strategy()` 只返回 `factor_ids` 列表（整数），前端需要额外请求因子详情 API 才能显示因子名称。
+
+**改造**：`get_strategy()` 返回时关联加载因子名称和最近回测结果（`sharpe`, `annual_return` 等），减少前端请求次数。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/services/strategy/manager.py` | `get_strategy()` 关联加载因子名称和最近回测 |
+| `frontend/src/views/quant/Strategy.vue` | 简化因子显示逻辑 |
+
+#### P3-01: 策略缺少克隆功能
+
+**现状**：用户无法基于现有策略快速创建副本修改参数，需要手动重新创建。
+
+**改造**：增加 `POST /api/v1/strategies/{id}/clone` 端点，复制策略并命名为 `{name} (副本)`。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `backend/app/api/strategy.py` | 增加 `clone` 端点 |
+| `backend/app/services/strategy/manager.py` | 增加 `clone_strategy()` |
+| `frontend/src/views/quant/Strategy.vue` | 增加克隆按钮 |
+
+#### P3-02: 前端 Mining.vue 轮询未清理风险
+
+**现状**：[Mining.vue#L516-L518](file:///home/joakim/Project/QuantLab/frontend/src/views/quant/Mining.vue#L516-L518) 中 `onBeforeUnmount` 清理了 `tickTimer` 和调用 `stopPolling()`，但 `stopPolling()` 中只清理了 `pollTimer`，如果已经有 WebSocket 连接未清理，可能导致内存泄漏。同时 [Strategy.vue](file:///home/joakim/Project/QuantLab/frontend/src/views/quant/Strategy.vue#L715-L716) 等多个页面都有类似的多定时器管理问题。
+
+**改造**：统一使用 `useIntervalFn` 或自定义组合式函数管理定时器生命周期。
+
+**涉及文件**：
+| 文件 | 操作 |
+|------|------|
+| `frontend/src/composables/useInterval.ts` | 新建，统一定时器管理 |
+| `frontend/src/views/quant/Mining.vue` | 改用 `useInterval` |
+| `frontend/src/views/quant/Strategy.vue` | 改用 `useInterval` |
+| `frontend/src/views/quant/DataStatus.vue` | 改用 `useInterval` |
+
+### 9.4 优化方案汇总表（更新）
+
+| 优先级 | 编号 | 优化项 | 模块 | 工作量 | 依赖 |
+|--------|------|--------|------|--------|------|
+| P0 | F-01 | 因子挖掘样本分割 + 统计检验 | 挖掘 | 3 天 | 无 |
+| P0 | F-02 | Label 修复（5 日收益） | 挖掘 | 0.5 天 | F-01 |
+| P0 | S-01 | 表达式沙箱加固 | 安全 | 1 天 | 无 |
+| P0 | S-02 | JWT 过期 + 默认凭据加固 | 安全 | 1 天 | 无 |
+| P1 | P-01 | 因子评价 Pipeline 优化 | 性能 | 3 天 | F-01 |
+| P1 | F-03 | 滚动 IC + 时序稳健性 | 挖掘 | 1.5 天 | F-01 |
+| P1 | F-04 | 因子多样性约束 | 挖掘 | 1 天 | F-01 |
+| **P1** | **F-05** | **符号回归默认参数过大** | **挖掘** | **0.5 天** | **无** |
+| **P1** | **F-06** | **AutoML SHAP 阻塞事件循环** | **挖掘** | **0.5 天** | **无** |
+| **P1** | **F-07** | **挖掘 API 参数传递方式不合理** | **挖掘** | **1 天** | **无** |
+| **P1** | **B-01** | **Walk-forward 回测串行 + 无缓存** | **回测** | **2 天** | **无** |
+| **P1** | **B-02** | **回测状态仅内存存储** | **回测** | **2 天** | **无** |
+| **P1** | **B-03** | **策略回测使用静态权重** | **回测** | **1 天** | **无** |
+| P1 | P-02 | IC 缓存上限保护 | 性能 | 0.5 天 | 无 |
+| P1 | P-03 | 数据同步增量合并 | 性能 | 2 天 | 无 |
+| P1 | UX-01 | WebSocket 推送 + 前端进度 | 体验 | 3 天 | 无 |
+| P1 | UX-02 | 前端骨架屏 + 加载状态 | 体验 | 1 天 | 无 |
+| P1 | UX-03 | 错误边界 + 错误提示优化 | 体验 | 1 天 | 无 |
+| P1 | UX-04 | 大数据量表格性能 | 体验 | 1 天 | 无 |
+| P2 | OPS-01 | Docker 部署加固 | 运维 | 1 天 | 无 |
+| P2 | DB-01 | 数据库归档策略 | 数据库 | 2 天 | 无 |
+| P2 | DB-02 | 数据库连接池监控 | 数据库 | 1 天 | 无 |
+| P2 | OPS-02 | 日志系统结构化 | 运维 | 1 天 | 无 |
+| P2 | OPS-03 | CI/CD 配置 | 运维 | 1 天 | 无 |
+| **P2** | **F-08** | **符号回归评价期不足** | **挖掘** | **0.5 天** | **F-01** |
+| **P2** | **B-04** | **参数扫描 nav_curve 存储过大** | **回测** | **1 天** | **无** |
+| **P2** | **B-05** | **策略创建 URL 参数受限** | **策略** | **0.5 天** | **无** |
+| **P2** | **B-06** | **策略列表无分页** | **策略** | **0.5 天** | **无** |
+| **P2** | **B-07** | **策略详情不含因子名称** | **策略** | **0.5 天** | **无** |
+| P3 | OPS-04 | Prometheus 指标补充 | 运维 | 1 天 | 无 |
+| P3 | P-04 | 执行器优化 | 性能 | 1 天 | 无 |
+| P3 | OPS-05 | 请求 Trace 追踪 | 运维 | 1 天 | 无 |
+| P3 | UX-05 | 前端状态管理统一 | 体验 | 1 天 | 无 |
+| **P3** | **B-08** | **策略克隆功能** | **策略** | **0.5 天** | **无** |
+| **P3** | **UX-06** | **前端轮询统一清理** | **体验** | **1 天** | **无** |
+
+> 新增 14 项优化点（粗体），总问题数从 22 增加到 **36 项**。
+> 总工作量从约 30 天增加到约 **45 天**。
+
+### 9.5 版本号建议（更新）
 
 | 阶段 | 版本号 | 内容 |
 |------|--------|------|
 | P0 完成 | v2.5.0 | 因子质量 + 安全加固 |
-| P1 完成 | v2.6.0 | 性能 + 体验优化 |
-| P2 完成 | v2.7.0 | 运维 + 数据库加固 |
-| P3 完成 | v2.8.0 | 可观测性 + 代码优化 |
+| P1 完成 | v2.6.0 | 性能 + 体验优化（含因子挖掘深度优化） |
+| P2 完成 | v2.7.0 | 数据库 + 运维 + 策略回测优化 |
+| P3 完成 | v2.8.0 | 可观测性 + 代码优化 + 策略管理优化 |
