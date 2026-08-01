@@ -124,6 +124,22 @@ app.include_router(docs_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health():
+    return await _build_health_payload()
+
+
+@app.get("/api/v1/health")
+async def health_v1():
+    """健康检查别名：与 /health 同源，挂在 /api/v1 前缀下以兼容前端 api 实例调用。
+
+    前端 api 实例 baseURL=/api/v1，调 api.get('/health') 会请求 /api/v1/health；
+    之前该路径不存在，被 SPA fallback 捕获并重定向到 /docs（307），导致 AdminMetrics
+    无法正确显示健康状态。现统一两个路径走同一份逻辑。
+    """
+    return await _build_health_payload()
+
+
+async def _build_health_payload() -> dict:
+    """统一健康检查：DB/qlib/调度器/磁盘/WS/AI。"""
     status = "ok"
     checks = {}
     # 数据库检查

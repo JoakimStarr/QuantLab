@@ -120,7 +120,7 @@ async function fetchMetrics() {
 
 async function fetchAuditLogs() {
   try {
-    const res = await api.get('/v1/logs', { params: { file: 'audit.jsonl', limit: 20 } })
+    const res = await api.get('/logs', { params: { file: 'audit.jsonl', limit: 20 } })
     auditLogs.value = (res.data?.data?.items || []).reverse()
   } catch (e) {
     auditLogs.value = []
