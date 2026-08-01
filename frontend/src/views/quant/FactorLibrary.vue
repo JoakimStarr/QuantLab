@@ -71,27 +71,52 @@
             <span class="cell-expr">{{ row.expression }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="ic" label="IC" width="90" align="right" sortable>
+        <el-table-column prop="ic" label="IC" width="100" align="right" sortable>
+          <template #header>
+            <el-tooltip :content="METRIC_TIPS.ic" placement="top" effect="dark">
+              <span class="th-tip">IC</span>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="num" :class="numClass(row.ic)">{{ fmt(row.ic, 3) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="rank_ic" label="RankIC" width="90" align="right" sortable>
+        <el-table-column prop="rank_ic" label="RankIC" width="100" align="right" sortable>
+          <template #header>
+            <el-tooltip :content="METRIC_TIPS.rank_ic" placement="top" effect="dark">
+              <span class="th-tip">RankIC</span>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="num" :class="numClass(row.rank_ic)">{{ fmt(row.rank_ic, 3) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="icir" label="ICIR" width="90" align="right" sortable>
+        <el-table-column prop="icir" label="ICIR" width="100" align="right" sortable>
+          <template #header>
+            <el-tooltip :content="METRIC_TIPS.icir" placement="top" effect="dark">
+              <span class="th-tip">ICIR</span>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="num">{{ fmt(row.icir, 2) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="turnover" label="换手" width="90" align="right" sortable>
+        <el-table-column prop="turnover" label="换手" width="100" align="right" sortable>
+          <template #header>
+            <el-tooltip :content="METRIC_TIPS.turnover" placement="top" effect="dark">
+              <span class="th-tip">换手</span>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="num">{{ fmt(row.turnover, 2) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
+        <el-table-column label="状态" width="100" align="center">
+          <template #header>
+            <el-tooltip :content="METRIC_TIPS.status" placement="top" effect="dark">
+              <span class="th-tip">状态</span>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="badge" :class="row.status === 'active' ? 'badge--success' : 'badge--muted'">
               {{ row.status === 'active' ? '启用' : '禁用' }}
@@ -176,6 +201,15 @@ const showQuantile = ref(false)
 const quantileLoading = ref(false)
 const quantileFactor = ref(null)
 const quantileResult = ref(null)
+
+// 指标 tooltip 说明（hover 在表头即可查看）
+const METRIC_TIPS = {
+  ic: 'IC（Information Coefficient）：因子值与下期收益的相关系数。绝对值越大，因子预测力越强；一般认为 |IC| ≥ 0.03 才有显著预测能力。',
+  rank_ic: 'RankIC：因子排名与收益排名的相关系数（Spearman 系数）。比 IC 更稳健，对极端值不敏感；|RankIC| ≥ 0.05 通常是有效因子的参考线。',
+  icir: 'ICIR（IC Information Ratio）：IC 均值 / IC 标准差，反映因子预测的稳定性。ICIR ≥ 0.5 表示因子稳健，≥ 1 表示非常稳定。',
+  turnover: '换手率：因子分层组合在调仓时的股票变动比例。越低说明因子选股越稳定，但过低可能意味因子区分度不足；通常 20%-50% 为合理区间。',
+  status: '因子状态：启用（active）= 因子可被策略使用；禁用 = 因子被暂时屏蔽（不会进入策略组合，但保留评价数据）。',
+}
 
 // === 因子中性化 ===
 const showNeutralize = ref(false)
@@ -653,5 +687,13 @@ onMounted(loadFactors)
 }
 .factor-table :deep(.el-table__body tr.row--decaying:hover > td.el-table__cell) {
   background: rgba(210, 69, 69, 0.14) !important;
+}
+
+// 表头 tooltip 容器：保持表头可点击排序，hover 时显示提示
+.th-tip {
+  display: inline-block;
+  cursor: help;
+  border-bottom: 1px dashed var(--text-tertiary);
+  padding-bottom: 1px;
 }
 </style>
