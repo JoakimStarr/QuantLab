@@ -5,6 +5,7 @@
 """
 import re
 import logging
+from functools import lru_cache
 import numpy as np
 import pandas as pd
 from app.services.quant.qlib_init import init_qlib
@@ -20,11 +21,12 @@ _DEFAULT_LABEL = "Ref($close, -1) / $close - 1"
 _AUTOML_EXPR_RE = re.compile(r"^AutoML\((lightgbm|linear),\s*([\d,\s]+)\)$", re.IGNORECASE)
 
 
-def _load_instruments(market: str) -> list:
-    """加载股票池代码列表，默认过滤北交所（bj 开头）股票。
+@lru_cache(maxsize=8)
+def _load_instruments_cached(market: str) -> tuple:
+    """缓存的股票池加载（按 market 缓存），返回 tuple 满足 lru_cache 要求。
 
-    通过 qlib D.list_instruments 获取成分股列表，
-    根据 settings.quant.include_bj 控制是否保留北交所股票。
+    同一进程内多次调用只会触发一次 qlib D.list_instruments 查询，
+    避免 Alpha158 批量评价等场景里 158 次重复 IO。
     """
     from qlib.data import D
     inst_list = D.instruments(market=market)
@@ -37,7 +39,17 @@ def _load_instruments(market: str) -> list:
         codes = [c for c in codes if not c.lower().startswith("bj")]
         if original_count != len(codes):
             logger.info("过滤北交所股票: %d -> %d", original_count, len(codes))
-    return codes
+    return tuple(codes)
+
+
+def _load_instruments(market: str) -> list:
+    """加载股票池代码列表，默认过滤北交所（bj 开头）股票。
+
+    通过 qlib D.list_instruments 获取成分股列表，
+    根据 settings.quant.include_bj 控制是否保留北交所股票。
+    内部走 _load_instruments_cached 实现进程级缓存。
+    """
+    return list(_load_instruments_cached(market))
 
 
 def _resolve_task_id_from_factor_ids(method: str, factor_ids: list):
@@ -246,27 +258,39 @@ def compute_turnover(factor_df: pd.DataFrame) -> float:
     return round(float(np.mean(turnovers)), 4) if turnovers else None
 
 
-def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int = 10) -> dict:
+def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int = 10,
+                  preloaded_close_df: pd.DataFrame = None) -> dict:
     """计算 IC 衰减：因子与未来 1~max_lag 日收益的 IC 序列。
 
     优化：一次查询 $close 后本地 shift 计算各 lag 前向收益，避免 N 次 qlib IO。
+    进一步优化：调用方可传入 preloaded_close_df 跳过重复 IO（批量评价场景）。
     """
-    init_qlib()
-    from qlib.data import D
-    market = settings.quant.get("universe", "csi300")
-    instruments = _load_instruments(market)
     start = factor_df.index.get_level_values("datetime").min()
     end = factor_df.index.get_level_values("datetime").max()
 
-    # 一次查询 $close，本地算各 lag 收益
-    try:
-        close_df = D.features(instruments, ["$close"], start_time=str(start.date()), end_time=str(end.date()), freq="day")
-        if close_df is None or close_df.empty:
+    if preloaded_close_df is not None and not preloaded_close_df.empty:
+        # 复用预加载的 $close，避免每个因子重复 IO
+        try:
+            close_df = preloaded_close_df.rename(columns={"$close": "close"}).copy()
+        except Exception as e:
+            logger.debug("decay 使用预加载 close 失败，回退查询: %s", e)
+            preloaded_close_df = None
+
+    if preloaded_close_df is None:
+        init_qlib()
+        from qlib.data import D
+        market = settings.quant.get("universe", "csi300")
+        instruments = _load_instruments(market)
+
+        # 一次查询 $close，本地算各 lag 收益
+        try:
+            close_df = D.features(instruments, ["$close"], start_time=str(start.date()), end_time=str(end.date()), freq="day")
+            if close_df is None or close_df.empty:
+                return {}
+            close_df = close_df.rename(columns={"$close": "close"})
+        except Exception as e:
+            logger.debug("decay 查询 $close 失败: %s", e)
             return {}
-        close_df = close_df.rename(columns={"$close": "close"})
-    except Exception as e:
-        logger.debug("decay 查询 $close 失败: %s", e)
-        return {}
 
     decay = {}
     for lag in range(1, max_lag + 1):
@@ -287,20 +311,26 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
 
 
 def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None,
-                    horizon: int = None) -> dict:
+                    horizon: int = None, preloaded_label_df: pd.DataFrame = None,
+                    preloaded_close_df: pd.DataFrame = None) -> dict:
     """完整因子评价：IC/RankIC/ICIR/换手/衰减。
 
     Args:
         horizon: 预测周期（标签前向收益天数）。默认从 config 读取。
+        preloaded_label_df: 预加载的标签 DataFrame，避免批量场景下重复 IO。
+        preloaded_close_df: 预加载的 $close DataFrame，传入 compute_decay 避免重复 IO。
     """
     if horizon is None:
         horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
     label_expr = f"Ref($close, -{horizon}) / $close - 1"
     factor_df = load_factor_values(factor_expr, start, end, universe)
-    label_df = load_label(start, end, label_expr=label_expr, universe=universe)
+    if preloaded_label_df is not None:
+        label_df = preloaded_label_df
+    else:
+        label_df = load_label(start, end, label_expr=label_expr, universe=universe)
     ic_metrics = compute_ic(factor_df, label_df)
     turnover = compute_turnover(factor_df)
-    decay = compute_decay(factor_df, label_df)
+    decay = compute_decay(factor_df, label_df, preloaded_close_df=preloaded_close_df)
     return {
         **ic_metrics,
         "turnover": turnover,

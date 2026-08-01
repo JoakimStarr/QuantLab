@@ -1,7 +1,8 @@
 """Alpha158 基准因子集导入。"""
 import asyncio
 import logging
-from typing import List, Dict
+from datetime import datetime
+from typing import Callable, List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -168,20 +169,181 @@ ALPHA158_EXPRESSIONS: List[Dict] = [
 ]
 
 
-async def seed_alpha158() -> dict:
+async def _flush_batch_metrics(buffer: list) -> None:
+    """批量更新因子评价指标到 DB（每批一次 commit）。
+
+    Args:
+        buffer: [(factor_id, metrics_dict), ...]
+    """
+    from app.core.database import async_session
+    from app.models.factor import Factor
+
+    if not buffer:
+        return
+
+    async with async_session() as session:
+        for fid, metrics in buffer:
+            r = await session.get(Factor, fid)
+            if r is not None and metrics:
+                r.ic = metrics.get("ic")
+                r.rank_ic = metrics.get("rank_ic")
+                r.icir = metrics.get("icir")
+                r.ir = metrics.get("ir")
+                r.turnover = metrics.get("turnover")
+                r.eval_start = metrics.get("eval_start")
+                r.eval_end = metrics.get("eval_end")
+                r.evaluated_at = datetime.now()
+        await session.commit()
+
+
+async def batch_evaluate_alpha158(
+    batch_size: int = 20,
+    max_concurrent: int = 16,
+    eval_start: str = None,
+    eval_end: str = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> dict:
+    """批量并行评价 Alpha158 因子（优化版：预加载共用数据 + 线程池 + 批次写入）。
+
+    性能优化点：
+    1. 预加载前向收益标签（158 个因子共用 1 次）
+    2. 预加载 $close 价格数据（decay 共用）
+    3. 线程池而非进程池（qlib C 扩展释放 GIL）
+    4. 分批并发控制（max_concurrent 限制内存峰值）
+    5. 数据库批量写入（每 batch_size 条一次 commit）
+
+    Args:
+        batch_size: DB 批次写入大小
+        max_concurrent: 最大并发任务数
+        eval_start/eval_end: 评价区间，默认从 config 读取
+        progress_callback: 进度回调 (done, total, current_name)
+    """
+    from sqlalchemy import select
+    from app.core.config import settings
+    from app.core.database import async_session
+    from app.core.executor import run_io_cpu  # 线程池，qlib 释放 GIL
+    from app.models.factor import Factor
+    from app.services.quant.factor_eval import evaluate_factor, load_label
+    from app.services.quant.qlib_init import init_qlib
+
+    # 1. 取参数
+    period = settings.quant.get("default_backtest_period", {})
+    eval_start = eval_start or period.get("start", "2020-01-01")
+    eval_end = eval_end or period.get("end", "2024-12-31")
+    universe = settings.quant.get("universe", "csi300")
+    horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
+
+    # 2. 查询所有 alpha158 因子
+    async with async_session() as session:
+        rows = await session.execute(
+            select(Factor.id, Factor.name, Factor.expression).where(
+                Factor.category == "alpha158"
+            )
+        )
+        targets = rows.all()
+
+    if not targets:
+        return {"ok": True, "evaluated": 0, "failed": 0, "total": 0,
+                "message": "无 Alpha158 因子"}
+
+    expr_map = {r.id: r.expression for r in targets}
+    total = len(targets)
+
+    # 3. 预加载共用数据（关键优化！避免 N 次重复 IO）
+    logger.info("Alpha158 批量评价: 预加载共用数据 (label + close), 待评价 %d 因子", total)
+    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    preloaded_label_df = load_label(eval_start, eval_end, label_expr=label_expr, universe=universe)
+
+    # 预加载 $close 用于 decay 计算
+    init_qlib()
+    from qlib.data import D
+    instruments = D.list_instruments(D.instruments(market=universe), freq="day")
+    preloaded_close_df = D.features(
+        list(instruments.keys()), ["$close"],
+        start_time=eval_start, end_time=eval_end, freq="day"
+    )
+    logger.info(
+        "Alpha158 预加载完成: label=%s, close=%s",
+        preloaded_label_df.shape,
+        preloaded_close_df.shape if preloaded_close_df is not None else "N/A",
+    )
+
+    # 4. 信号量控制并发
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def _eval_one(fid: int) -> tuple:
+        async with sem:
+            expr = expr_map[fid]
+            try:
+                # 传入预加载数据，避免重复 IO
+                metrics = await run_io_cpu(
+                    evaluate_factor, expr, eval_start, eval_end, universe,
+                    preloaded_label_df=preloaded_label_df,
+                    preloaded_close_df=preloaded_close_df,
+                )
+                return fid, metrics, None
+            except Exception as e:
+                return fid, None, str(e)[:200]
+
+    # 5. 创建所有任务（受信号量控制）
+    tasks = [_eval_one(r.id) for r in targets]
+
+    # 使用 as_completed 风格以便更新进度
+    success = 0
+    failed = 0
+    results_buffer: list = []  # 批量写入缓冲
+
+    for i, coro in enumerate(asyncio.as_completed(tasks)):
+        try:
+            fid, metrics, err = await coro
+            if err:
+                logger.warning("Alpha158 id=%d 评价失败: %s", fid, err)
+                failed += 1
+            else:
+                results_buffer.append((fid, metrics))
+                success += 1
+        except Exception as e:
+            logger.warning("Alpha158 评价异常: %s", e)
+            failed += 1
+
+        # 进度回调
+        if progress_callback and (i + 1) % 10 == 0:
+            try:
+                progress_callback(i + 1, total, f"已完成 {i+1}/{total}")
+            except Exception:
+                pass
+
+        # 批量写入
+        if len(results_buffer) >= batch_size:
+            await _flush_batch_metrics(results_buffer)
+            results_buffer = []
+
+    # 处理剩余
+    if results_buffer:
+        await _flush_batch_metrics(results_buffer)
+
+    logger.info("Alpha158 批量评价完成: %d 成功, %d 失败", success, failed)
+    return {
+        "ok": True,
+        "evaluated": success,
+        "failed": failed,
+        "total": total,
+        "message": f"批量评价完成 {success}/{total}",
+    }
+
+
+async def seed_alpha158(progress_callback: Optional[Callable[[int, int, str], None]] = None) -> dict:
     """将 Alpha158 的 158 个因子批量导入因子库，并行计算评价指标。
 
     行为：
     - 已导入则直接返回 ok=True + count=0 + already_imported=True，让前端区分"重复操作"
-    - 新导入后异步并行计算 IC/RankIC/ICIR/turnover（CPU 密集走进程池，asyncio.gather 并行）
+    - 新导入后调用 batch_evaluate_alpha158 统一评价（预加载 label/close + 线程池 + 批次写入）
     - 单个因子评价失败不阻塞整体流程，记录日志后继续
     """
     from sqlalchemy import select
     from app.core.config import settings
     from app.core.database import async_session
-    from app.core.executor import run_cpu
     from app.models.factor import Factor
-    from app.services.quant.factor_eval import evaluate_factor
 
     period = settings.quant.get("default_backtest_period", {})
     eval_start = period.get("start", "2020-01-01")
@@ -198,7 +360,6 @@ async def seed_alpha158() -> dict:
                     "message": "Alpha158 已导入，无需重复操作"}
 
         created = 0
-        new_ids: list[int] = []
         for item in ALPHA158_EXPRESSIONS:
             factor = Factor(
                 name=item["name"],
@@ -211,65 +372,17 @@ async def seed_alpha158() -> dict:
             created += 1
         await session.commit()
 
-        # 取回新因子的 id（按 name 查）
-        rows = await session.execute(
-            select(Factor.id, Factor.name, Factor.expression).where(
-                Factor.category == "alpha158"
-            )
-        )
-        rows = rows.all()
-        new_ids = [r.id for r in rows]
-        expr_map = {r.id: r.expression for r in rows}
+    logger.info("Alpha158 导入完成: %d 个因子，开始批量评价指标", created)
 
-    logger.info("Alpha158 导入完成: %d 个因子，开始并行计算评价指标", created)
-
-    # 并行计算评价指标（进程池 + asyncio.gather）
-    # IC 缓存自动生效：相同 expression 不重复计算（虽然 158 个表达式不重复，但留作未来兼容）
-    async def _eval_one(fid: int) -> tuple[int, dict | None, str | None]:
-        expr = expr_map[fid]
-        try:
-            metrics = await run_cpu(evaluate_factor, expr, eval_start, eval_end)
-            return fid, metrics, None
-        except Exception as e:
-            return fid, None, str(e)[:200]
-
-    eval_results = await asyncio.gather(
-        *[_eval_one(fid) for fid in new_ids],
-        return_exceptions=True,
+    # 委托 batch_evaluate_alpha158 统一优化路径
+    eval_result = await batch_evaluate_alpha158(
+        eval_start=eval_start,
+        eval_end=eval_end,
+        progress_callback=progress_callback,
     )
 
-    # 写回评价指标（按 id 单条 update，避免一个失败影响其他）
-    success = 0
-    failed = 0
-    for item in eval_results:
-        if isinstance(item, Exception):
-            logger.warning("Alpha158 评价异常: %s", item)
-            failed += 1
-            continue
-        fid, metrics, err = item
-        if err:
-            logger.warning("Alpha158 因子 id=%d 评价失败: %s", fid, err)
-            failed += 1
-            continue
-        try:
-            async with async_session() as session:
-                r = await session.get(Factor, fid)
-                if r is not None and metrics:
-                    r.ic = metrics.get("ic")
-                    r.rank_ic = metrics.get("rank_ic")
-                    r.icir = metrics.get("icir")
-                    r.ir = metrics.get("ir")
-                    r.turnover = metrics.get("turnover")
-                    r.eval_start = metrics.get("eval_start", eval_start)
-                    r.eval_end = metrics.get("eval_end", eval_end)
-                    from datetime import datetime
-                    r.evaluated_at = datetime.now()
-                    await session.commit()
-                    success += 1
-        except Exception as e:
-            logger.warning("Alpha158 因子 id=%d 指标落库失败: %s", fid, e)
-            failed += 1
-
+    success = eval_result.get("evaluated", 0)
+    failed = eval_result.get("failed", 0)
     logger.info("Alpha158 评价完成: %d 成功, %d 失败", success, failed)
     return {
         "ok": True,
@@ -281,7 +394,9 @@ async def seed_alpha158() -> dict:
     }
 
 
-async def backfill_alpha158_metrics() -> dict:
+async def backfill_alpha158_metrics(
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> dict:
     """为已存在但缺指标的 Alpha158 因子补算评价。
 
     用途：修复历史上导入时未触发评价的因子（IC/RankIC/ICIR/turnover 为 NULL）。
@@ -290,9 +405,7 @@ async def backfill_alpha158_metrics() -> dict:
     from sqlalchemy import select
     from app.core.config import settings
     from app.core.database import async_session
-    from app.core.executor import run_cpu
     from app.models.factor import Factor
-    from app.services.quant.factor_eval import evaluate_factor
 
     period = settings.quant.get("default_backtest_period", {})
     eval_start = period.get("start", "2020-01-01")
@@ -306,62 +419,27 @@ async def backfill_alpha158_metrics() -> dict:
             )
         )
         targets = rows.all()
-        expr_map = {r.id: r.expression for r in targets}
 
-    if not expr_map:
+    if not targets:
         return {"ok": True, "evaluated": 0, "total": 0,
                 "message": "Alpha158 所有因子已评价，无需补算"}
 
-    logger.info("Alpha158 补算评价指标: %d 个因子待评价", len(expr_map))
+    logger.info("Alpha158 补算评价指标: %d 个因子待评价", len(targets))
 
-    async def _eval_one(fid: int) -> tuple[int, dict | None, str | None]:
-        expr = expr_map[fid]
-        try:
-            metrics = await run_cpu(evaluate_factor, expr, eval_start, eval_end)
-            return fid, metrics, None
-        except Exception as e:
-            return fid, None, str(e)[:200]
-
-    eval_results = await asyncio.gather(
-        *[_eval_one(fid) for fid in expr_map.keys()],
-        return_exceptions=True,
+    eval_result = await batch_evaluate_alpha158(
+        eval_start=eval_start,
+        eval_end=eval_end,
+        progress_callback=progress_callback,
     )
 
-    success = 0
-    failed = 0
-    for item in eval_results:
-        if isinstance(item, Exception):
-            failed += 1
-            continue
-        fid, metrics, err = item
-        if err or not metrics:
-            failed += 1
-            continue
-        try:
-            async with async_session() as session:
-                r = await session.get(Factor, fid)
-                if r is not None:
-                    r.ic = metrics.get("ic")
-                    r.rank_ic = metrics.get("rank_ic")
-                    r.icir = metrics.get("icir")
-                    r.ir = metrics.get("ir")
-                    r.turnover = metrics.get("turnover")
-                    r.eval_start = metrics.get("eval_start", eval_start)
-                    r.eval_end = metrics.get("eval_end", eval_end)
-                    from datetime import datetime
-                    r.evaluated_at = datetime.now()
-                    await session.commit()
-                    success += 1
-        except Exception as e:
-            logger.warning("补算因子 id=%d 落库失败: %s", fid, e)
-            failed += 1
-
-    logger.info("Alpha158 补算完成: %d/%d 成功", success, len(expr_map))
+    evaluated = eval_result.get("evaluated", 0)
+    failed = eval_result.get("failed", 0)
+    logger.info("Alpha158 补算完成: %d/%d 成功", evaluated, len(targets))
     return {
         "ok": True,
-        "evaluated": success,
+        "evaluated": evaluated,
         "eval_failed": failed,
-        "total": len(expr_map),
-        "message": f"Alpha158 补算完成 {success}/{len(expr_map)}",
+        "total": len(targets),
+        "message": f"Alpha158 补算完成 {evaluated}/{len(targets)}",
     }
 

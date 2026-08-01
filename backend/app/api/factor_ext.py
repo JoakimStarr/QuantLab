@@ -138,9 +138,31 @@ async def auto_import_factors_api(
 
 @router.post("/seed-alpha158")
 async def seed_alpha158_api():
-    """导入 Alpha158 基准因子集（158 个 qlib 标准因子）。"""
+    """导入 Alpha158 基准因子集（158 个 qlib 标准因子）。
+
+    通过 WebSocket 推送 `alpha158_progress` 事件，包含 done/total/message 字段，
+    前端可订阅 ws://<host>/ws 接收实时进度。
+    """
     from app.services.factor.alpha158 import seed_alpha158
-    result = await seed_alpha158()
+    from app.core.websocket_manager import ws_manager
+
+    async def progress_cb(done: int, total: int, msg: str):
+        await ws_manager.broadcast("alpha158_progress", {
+            "done": done, "total": total, "message": msg,
+        })
+
+    result = await seed_alpha158(progress_callback=progress_cb)
+    # 广播完成事件，方便前端区分 done/progress
+    try:
+        await ws_manager.broadcast("alpha158_progress", {
+            "done": result.get("evaluated", 0),
+            "total": result.get("count") or result.get("total") or 158,
+            "message": result.get("message", "完成"),
+            "finished": True,
+        })
+    except Exception:
+        pass
+
     if not result.get("ok"):
         return ApiResponse(ok=False, error={"code": "ALPHA158_SEEDED", "message": result.get("error", "已导入"), "status": 400})
     return ApiResponse(ok=True, data=result)
@@ -151,10 +173,28 @@ async def backfill_alpha158_metrics_api():
     """为已导入但缺指标的 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
 
     用于修复历史遗留：导入时未触发评价导致指标为 NULL 的因子。
-    进程池并行计算，158 个因子通常 30~60 秒完成（取决于 CPU 数）。
+    线程池并发 + 预加载共用 label/close，158 个因子通常显著快于原版（取决于 IO）。
+    进度通过 WebSocket `alpha158_progress` 事件推送。
     """
     from app.services.factor.alpha158 import backfill_alpha158_metrics
-    result = await backfill_alpha158_metrics()
+    from app.core.websocket_manager import ws_manager
+
+    async def progress_cb(done: int, total: int, msg: str):
+        await ws_manager.broadcast("alpha158_progress", {
+            "done": done, "total": total, "message": msg,
+        })
+
+    result = await backfill_alpha158_metrics(progress_callback=progress_cb)
+    try:
+        await ws_manager.broadcast("alpha158_progress", {
+            "done": result.get("evaluated", 0),
+            "total": result.get("total", 0),
+            "message": result.get("message", "补算完成"),
+            "finished": True,
+        })
+    except Exception:
+        pass
+
     return ApiResponse(ok=result.get("ok", True), data=result)
 
 
