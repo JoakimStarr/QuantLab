@@ -32,6 +32,9 @@ class ProviderRouter:
         fallback_cfg = settings.ai_provider.get("fallback", {})
         tertiary_cfg = settings.ai_provider.get("tertiary", {})
 
+        # 收集各 provider 初始化失败原因，便于在最终错误中暴露给用户
+        init_errors: list[str] = []
+
         # Primary: opencodezen
         opencodezen_key = settings.opencodezen_api_key
         if opencodezen_key and not is_placeholder_api_key(opencodezen_key):
@@ -51,6 +54,7 @@ class ProviderRouter:
                 )
             except Exception as e:
                 logger.warning("Primary AI provider (opencodezen) 初始化失败: %s", e)
+                init_errors.append(f"opencodezen: {e}")
 
         # Fallback: glm
         glm_key = settings.glm_api_key
@@ -71,6 +75,7 @@ class ProviderRouter:
                 )
             except Exception as e:
                 logger.warning("Fallback AI provider (glm) 初始化失败: %s", e)
+                init_errors.append(f"glm: {e}")
 
         # Tertiary: siliconflow
         siliconflow_key = settings.siliconflow_api_key
@@ -91,16 +96,23 @@ class ProviderRouter:
                 )
             except Exception as e:
                 logger.warning("Tertiary AI provider (siliconflow) 初始化失败: %s", e)
+                init_errors.append(f"siliconflow: {e}")
 
         if not self.primary and not self.fallback and not self.tertiary:
             # 重置 _initialized，允许下次调用时重试
             # （.env 可能延迟加载，或用户刚配置了 key）
             self._initialized = False
-            raise AIProviderUnavailableError(
-                "未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量。"
-                f"当前 key 状态: opencodezen={'有' if opencodezen_key and not is_placeholder_api_key(opencodezen_key) else '无'}, "
+            key_status = (
+                f"opencodezen={'有' if opencodezen_key and not is_placeholder_api_key(opencodezen_key) else '无'}, "
                 f"glm={'有' if glm_key and not is_placeholder_api_key(glm_key) else '无'}, "
                 f"siliconflow={'有' if siliconflow_key and not is_placeholder_api_key(siliconflow_key) else '无'}"
+            )
+            detail = f"当前 key 状态: {key_status}"
+            if init_errors:
+                detail += "。初始化失败原因: " + "; ".join(init_errors)
+            raise AIProviderUnavailableError(
+                "未配置任何可用的 AI Provider，请检查 OPENCODEZEN_API_KEY / GLM_API_KEY / SILICONFLOW_API_KEY 环境变量。"
+                + detail
             )
 
         self.force_json = settings.ai_provider.get("force_json_output", True)

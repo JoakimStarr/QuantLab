@@ -1,6 +1,7 @@
 import json
 import re
 import asyncio
+import httpx
 from openai import AsyncOpenAI
 import openai
 from app.core.errors import AIProviderUnavailableError, AINotConfiguredError
@@ -44,10 +45,17 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.temperature = temperature
         # AsyncOpenAI 客户端：base_url 应为基础 URL（不含 /chat/completions），SDK 自动拼接
+        # trust_env=False：忽略 HTTP_PROXY/ALL_PROXY 等环境变量，直连 API。
+        # 原因：用户 shell 可能设了 ALL_PROXY=socks://...（Clash/V2Ray），
+        # httpx 不支持 socks:// scheme 会直接报错 "Unknown scheme for proxy URL"，
+        # 且所有 AI provider（opencodezen/glm/siliconflow）均在 NO_PROXY 内或为国内服务，
+        # 无需走代理。
+        self._http_client = httpx.AsyncClient(trust_env=False, timeout=timeout)
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=self.base_url,
             timeout=timeout,
+            http_client=self._http_client,
         )
 
     async def chat_completion(self, messages: list, force_json: bool = True) -> dict:
