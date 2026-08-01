@@ -1,10 +1,14 @@
 import json
 import re
 import asyncio
+import logging
 import httpx
 from openai import AsyncOpenAI
 import openai
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from app.core.errors import AIProviderUnavailableError, AINotConfiguredError
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_json(text: str):
@@ -71,76 +75,76 @@ class LLMClient:
             kwargs["response_format"] = {"type": "json_object"}
 
         last_error = None
-        content = None  # 预初始化，防止 JSONDecodeError 处理时未定义
-        for attempt in range(3):
+        # 外层最多 2 次：第一次带 response_format，不支持则降级重试
+        for attempt in range(2):
             try:
-                # 第二次尝试若之前可能因 response_format 失败，去掉重试
-                if attempt > 0 and use_response_format and "response_format" in kwargs:
-                    kwargs.pop("response_format", None)
-                    use_response_format = False
-
-                resp = await self._client.chat.completions.create(**kwargs)
-                choice = resp.choices[0]
-                message = choice.message
-                content = getattr(message, "content", None) or ""
-                finish_reason = choice.finish_reason
-                # 推理模型的 reasoning_content 是非标准扩展字段，用 getattr 安全取
-                reasoning = getattr(message, "reasoning_content", "") or ""
-                usage = getattr(resp, "usage", None)
-                tokens = getattr(usage, "total_tokens", 0) if usage else 0
-
-                # 检查内容是否为空
-                if not content or not content.strip():
-                    # 推理模型 reasoning 耗尽 max_tokens：content 永远为空，重试无意义
-                    if finish_reason == "length" and reasoning:
-                        raise ValueError(
-                            f"推理模型 reasoning 耗尽 max_tokens={self.max_tokens}"
-                            f"（reasoning 长度 {len(reasoning)}），"
-                            f"请增大 ai_provider.max_tokens 或改用非推理模型"
-                        )
-                    if attempt == 0 and "response_format" in kwargs:
-                        # 第一次返回空内容，可能是不支持 response_format，下次尝试不使用
-                        kwargs.pop("response_format", None)
-                        use_response_format = False
-                        await asyncio.sleep(1)
-                        continue
-                    raise ValueError("模型返回空内容")
-
-                if force_json:
-                    parsed = _extract_json(content)
-                else:
-                    parsed = content
-                return {"content": parsed, "tokens": tokens, "model": self.model, "provider": self.base_url}
-            except openai.APITimeoutError:
-                last_error = AIProviderUnavailableError(f"请求超时 (timeout={self.timeout}s)")
-            except openai.RateLimitError:
-                wait = (attempt + 1) * 3
-                await asyncio.sleep(wait)
-                last_error = AIProviderUnavailableError(f"API 速率限制 (429)，已等待 {wait}s 重试")
-                continue
-            except openai.BadRequestError as e:
+                return await self._call_with_retry(kwargs, force_json)
+            except (openai.BadRequestError, ValueError) as e:
+                # JSONDecodeError 是 ValueError 的子类，优先判断
+                if isinstance(e, json.JSONDecodeError):
+                    content_preview = str(e)[:200]
+                    raise AIProviderUnavailableError(f"返回结果非合法JSON: {content_preview}")
                 # 400：可能是 response_format 不支持，降级重试
                 if "response_format" in kwargs:
                     kwargs.pop("response_format", None)
                     use_response_format = False
+                    logger.info("response_format not supported, retrying without it")
                     await asyncio.sleep(1)
-                    last_error = AIProviderUnavailableError(f"请求参数错误(降级 response_format): {str(e)[:200]}")
+                    last_error = e
                     continue
-                last_error = AIProviderUnavailableError(f"请求参数错误: {str(e)[:200]}")
-            except json.JSONDecodeError as e:
-                content_preview = content[:200] if content else "空内容"
-                last_error = AIProviderUnavailableError(f"返回结果非合法JSON: {content_preview}")
-            except ValueError as e:
-                last_error = AIProviderUnavailableError(f"模型返回内容无效: {str(e)}")
-                # 推理模型 token 不足不可重试（重试结果相同），直接跳出让 router 切换 provider
-                if "推理模型 reasoning 耗尽" in str(e):
-                    break
-            except openai.APIStatusError as e:
-                last_error = AIProviderUnavailableError(f"调用失败: HTTP {e.status_code} {str(e)[:200]}")
-            except openai.APIError as e:
-                last_error = AIProviderUnavailableError(f"调用失败: {str(e)[:200]}")
+                # 推理模型 reasoning 耗尽不可重试
+                if isinstance(e, ValueError) and "推理模型 reasoning 耗尽" in str(e):
+                    raise AIProviderUnavailableError(f"模型返回内容无效: {str(e)}")
+                raise AIProviderUnavailableError(
+                    f"请求参数错误: {str(e)[:200]}"
+                    if isinstance(e, openai.BadRequestError)
+                    else f"模型返回内容无效: {str(e)}"
+                )
             except Exception as e:
-                last_error = AIProviderUnavailableError(f"调用失败: {str(e)[:200]}")
-            if attempt < 2:
-                await asyncio.sleep(2)  # 增加重试间隔，给 API 更多恢复时间
-        raise last_error
+                raise AIProviderUnavailableError(f"调用失败: {str(e)[:200]}")
+
+        raise AIProviderUnavailableError(f"所有重试均失败: {last_error}")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((
+            openai.APITimeoutError,
+            openai.RateLimitError,
+            openai.APIStatusError,
+            openai.APIError,
+            json.JSONDecodeError,
+        )),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def _call_with_retry(self, kwargs: dict, force_json: bool) -> dict:
+        """实际的 API 调用，由 tenacity 管理网络级重试。"""
+        resp = await self._client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        message = choice.message
+        content = getattr(message, "content", None) or ""
+        finish_reason = choice.finish_reason
+        # 推理模型的 reasoning_content 是非标准扩展字段，用 getattr 安全取
+        reasoning = getattr(message, "reasoning_content", "") or ""
+        usage = getattr(resp, "usage", None)
+        tokens = getattr(usage, "total_tokens", 0) if usage else 0
+
+        # 检查内容是否为空
+        if not content or not content.strip():
+            # 推理模型 reasoning 耗尽 max_tokens：content 永远为空，重试无意义
+            if finish_reason == "length" and reasoning:
+                raise ValueError(
+                    f"推理模型 reasoning 耗尽 max_tokens={self.max_tokens}"
+                    f"（reasoning 长度 {len(reasoning)}），"
+                    f"请增大 ai_provider.max_tokens 或改用非推理模型"
+                )
+            # 空内容由外层处理 response_format 降级
+            raise ValueError("模型返回空内容")
+
+        if force_json:
+            parsed = _extract_json(content)
+        else:
+            parsed = content
+
+        return {"content": parsed, "tokens": tokens, "model": self.model, "provider": self.base_url}

@@ -13,7 +13,7 @@ import logging
 import asyncio
 import hashlib
 from datetime import datetime
-from collections import OrderedDict
+from cachetools import LRUCache
 from app.core.config import settings
 from app.core.gpu_utils import is_gpu_available
 from app.services.factor.expression import validate_expression, ExpressionValidationError
@@ -26,8 +26,7 @@ logger = logging.getLogger(__name__)
 _HAS_GPU = is_gpu_available()
 
 # 本地 IC 缓存（LRU，上限保护）
-_IC_CACHE: OrderedDict[str, dict] = OrderedDict()
-_IC_CACHE_MAX = 1024
+_IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
 _SYSTEM_PROMPT = """你是一位资深量化研究员，擅长构造A股截面选股因子。
 请基于 qlib 表达式语法生成有预测力的因子。"""
@@ -456,11 +455,8 @@ def _ic_cache_key(expr: str) -> str:
 
 
 def _ic_cache_put(key: str, value: dict) -> None:
-    """写入 IC 缓存，超上限时淘汰最早条目。"""
+    """写入 IC 缓存（LRUCache 自动淘汰最久未访问条目）。"""
     _IC_CACHE[key] = value
-    _IC_CACHE.move_to_end(key)
-    if len(_IC_CACHE) > _IC_CACHE_MAX:
-        _IC_CACHE.popitem(last=False)
 
 
 async def _evaluate_safe_cached(expr: str) -> dict:

@@ -1,154 +1,166 @@
-"""JWT 认证模块：token 签发与校验 + 可配置鉴权依赖。"""
-import re
-import time
-import hmac
-import hashlib
-import json
-import base64
+"""认证模块：使用 fastapi-users 开源库实现 JWT 鉴权 + zxcvbn 密码强度校验。
+
+保留与现有代码兼容的导出接口：
+- require_user: 业务接口鉴权依赖（AUTH_ENABLED=False 时放行）
+- current_user: 强制鉴权的 current_user 依赖
+- verify_token: token 校验（WebSocket 兼容）
+- warn_insecure_config: 启动时安全配置告警
+- check_password_strength: zxcvbn 密码强度校验
+"""
 import logging
-import bcrypt
-from fastapi import Request, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import os
+from typing import Optional, Union
+
+import zxcvbn
+from fastapi import Depends, HTTPException, Request
+from fastapi_users import FastAPIUsers
+from fastapi_users.authentication import (
+    AuthenticationBackend,
+    BearerTransport,
+    JWTStrategy,
+)
+from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-security = HTTPBearer(auto_error=False)
+# ============================================================
+# fastapi-users 认证后端配置
+# ============================================================
 
-# 明文口令首次校验时哈希后缓存，避免每次重新哈希
-_admin_hash_cache: bytes | None = None
-
-
-def _get_secret() -> str:
-    return settings.secret_key
+bearer_transport = BearerTransport(tokenUrl="api/v1/auth/login")
 
 
-def _b64decode(segment: str) -> bytes:
-    return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+def get_jwt_strategy() -> JWTStrategy:
+    """JWT 策略工厂：使用 settings.secret_key 签名，有效期从配置读取。"""
+    return JWTStrategy(
+        secret=settings.secret_key,
+        lifetime_seconds=settings.security.access_token_expire_hours * 3600,
+    )
 
 
-def _get_admin_hash() -> bytes:
-    """获取管理员口令的 bcrypt 哈希字节。
+auth_backend = AuthenticationBackend(
+    name="jwt",
+    transport=bearer_transport,
+    get_strategy=get_jwt_strategy,
+)
 
-    优先使用 ADMIN_PASSWORD_HASH（推荐）；否则将 ADMIN_PASSWORD 明文哈希一次后缓存。
+
+# ============================================================
+# User DB / User Manager 依赖
+# ============================================================
+
+async def get_user_db(db: AsyncSession = Depends(get_db)) -> SQLAlchemyUserDatabase:
+    """提供 SQLAlchemyUserDatabase 依赖。"""
+    yield SQLAlchemyUserDatabase(db, User)
+
+
+# 循环导入规避：user_manager 依赖 auth（settings），所以延迟导入
+from app.core.user_manager import UserManager  # noqa: E402
+
+
+async def get_user_manager(
+    user_db: SQLAlchemyUserDatabase = Depends(get_user_db),
+) -> UserManager:
+    """提供 UserManager 依赖。"""
+    yield UserManager(user_db)
+
+
+# ============================================================
+# FastAPI Users 实例
+# ============================================================
+
+fastapi_users = FastAPIUsers[User, int](
+    get_user_manager,
+    [auth_backend],
+)
+
+
+# ============================================================
+# 兼容接口：业务接口鉴权依赖
+# ============================================================
+
+async def require_user(
+    request: Request,
+    user: Optional[User] = Depends(fastapi_users.current_user(optional=True)),
+) -> Union[User, dict]:
+    """业务接口鉴权依赖。
+
+    AUTH_ENABLED=False（本地开发）时直接放行，返回模拟用户信息；
+    AUTH_ENABLED=True 时强制校验 Bearer token，返回 User 模型实例。
     """
-    global _admin_hash_cache
-    if settings.admin_password_hash:
-        return settings.admin_password_hash.encode()
-    if _admin_hash_cache is None:
-        _admin_hash_cache = bcrypt.hashpw(settings.admin_password.encode(), bcrypt.gensalt())
-    return _admin_hash_cache
+    if not settings.auth_enabled:
+        return {"role": "admin", "sub": "local-dev"}
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录或 token 已过期")
+    return user
 
 
-def verify_admin_password(password: str) -> bool:
-    """校验管理员口令（bcrypt 恒定时间比较）。"""
+current_user = fastapi_users.current_user()
+
+
+# ============================================================
+# 兼容接口：Token 校验（WebSocket 无状态场景）
+# ============================================================
+
+def verify_token(token: str) -> Optional[dict]:
+    """校验 JWT token 并返回 payload（WebSocket 等无状态场景使用）。
+
+    使用 fastapi-users 内部的 JWT 解码逻辑（pyjwt），
+    返回 dict 兼容旧接口格式，校验失败返回 None。
+    """
     try:
-        return bcrypt.checkpw(password.encode(), _get_admin_hash())
-    except Exception:
-        return False
+        from fastapi_users.authentication.strategy.jwt import decode_jwt
 
-
-def create_refresh_token(data: dict) -> str:
-    """签发 refresh token（7 天有效期）。"""
-    return create_token(data, expire_seconds=604800)
-
-
-def check_password_strength(password: str) -> tuple[bool, str]:
-    """检查密码强度。
-
-    要求：长度 >= 8，包含大写字母、小写字母、数字、特殊字符至少3种。
-    """
-    if len(password) < 8:
-        return False, "密码长度至少 8 位"
-    categories = 0
-    if re.search(r'[A-Z]', password): categories += 1
-    if re.search(r'[a-z]', password): categories += 1
-    if re.search(r'[0-9]', password): categories += 1
-    if re.search(r'[^A-Za-z0-9]', password): categories += 1
-    if categories < 3:
-        return False, "密码需包含大写字母、小写字母、数字、特殊字符中至少3种"
-    return True, ""
-
-
-def create_token(data: dict, expire_seconds: int | None = None) -> str:
-    """签发简单 JWT-like token（HS256）。
-
-    默认过期时间从 settings.security.access_token_expire_hours 读取。
-    """
-    if expire_seconds is None:
-        expire_seconds = settings.security.access_token_expire_hours * 3600
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
-    exp = int(time.time()) + expire_seconds
-    payload_data = {**data, "exp": exp, "iat": int(time.time())}
-    payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).rstrip(b"=").decode()
-    msg = f"{header}.{payload}"
-    sig = base64.urlsafe_b64encode(hmac.new(_get_secret().encode(), msg.encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-    return f"{msg}.{sig}"
-
-
-def verify_token(token: str) -> dict | None:
-    """校验 token 并返回 payload，失败返回 None。
-
-    安全要点：
-    - 强制 header.alg == HS256，拒绝 alg:none 等绕过
-    - hmac.compare_digest 恒定时间比较签名
-    - 校验 exp 过期
-    """
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-        header, payload, sig = parts
-        # 校验算法，防止 alg:none 绕过
-        header_data = json.loads(_b64decode(header))
-        if header_data.get("alg") != "HS256":
-            return None
-        msg = f"{header}.{payload}"
-        expected_sig = base64.urlsafe_b64encode(hmac.new(_get_secret().encode(), msg.encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-        if not hmac.compare_digest(sig, expected_sig):
-            return None
-        data = json.loads(_b64decode(payload))
-        if data.get("exp", 0) < time.time():
-            return None
-        return data
+        payload = decode_jwt(
+            token,
+            settings.secret_key,
+            audience=["fastapi-users:auth"],
+        )
+        return {
+            "sub": str(payload.get("sub")),
+            "role": "admin",
+            "exp": payload.get("exp"),
+        }
     except Exception:
         return None
 
 
-def _extract_payload(request: Request, credentials: HTTPAuthorizationCredentials | None) -> dict | None:
-    """从 Bearer header 或 cookie 提取并校验 token。"""
-    if credentials:
-        return verify_token(credentials.credentials)
-    token = request.cookies.get("auth_token")
-    if token:
-        return verify_token(token)
-    return None
+# ============================================================
+# 兼容接口：密码强度校验
+# ============================================================
 
+def check_password_strength(password: str) -> tuple[bool, str]:
+    """使用 zxcvbn 检查密码强度。
 
-async def require_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-):
-    """业务接口鉴权依赖。
-
-    AUTH_ENABLED=False（本地开发）时直接放行；否则强制校验 token。
+    Returns:
+        (True, "") 如果密码强度合格（score >= 2）；
+        (False, 原因) 如果密码强度不足。
     """
-    if not settings.auth_enabled:
-        return {"role": "admin", "sub": "local-dev"}
-    payload = _extract_payload(request, credentials)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="未登录或 token 已过期")
-    return payload
+    result = zxcvbn.zxcvbn(password)
+    if result["score"] < 2:
+        suggestions = result.get("feedback", {}).get("suggestions", [])
+        msg = "密码强度不足"
+        if suggestions:
+            msg += "：" + "；".join(suggestions)
+        return False, msg
+    return True, ""
 
+
+# ============================================================
+# 兼容接口：安全配置告警
+# ============================================================
 
 def warn_insecure_config() -> None:
     """启动时输出安全配置告警。
 
-    开发环境（APP_ENV=development）降为 DEBUG，避免无鉴权/默认口令告警刷屏
-    （本地开发本就预期如此）；生产环境保持 WARNING 以提醒加固。
+    开发环境（APP_ENV=development）降为 DEBUG 级别，
+    生产环境保持 WARNING 级别。
     """
-    import os
     is_dev = os.getenv("APP_ENV", "development") == "development"
     level = logging.DEBUG if is_dev else logging.WARNING
     for w in settings.validate_security():

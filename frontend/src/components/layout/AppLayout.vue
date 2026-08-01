@@ -18,16 +18,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, provide } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from './Sidebar.vue'
 import TopBar from './TopBar.vue'
 import MobileTabBar from './MobileTabBar.vue'
-import wsClient from '@/api/websocket'
+import { useWebSocket } from '@/composables/useWebSocket'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const wsClient = useWebSocket()
+provide('wsClient', wsClient)
 
 // 需缓存的页面名（route.name 且 meta.keepAlive），组件名需与之匹配
 const keepAliveNames = computed(() =>
@@ -40,10 +42,6 @@ onMounted(() => {
   // 建立 WebSocket 连接（鉴权开启时附带 token）
   const token = authStore.authEnabled ? authStore.token : undefined
   wsClient.connect(token)
-})
-
-onUnmounted(() => {
-  wsClient.close()
 })
 </script>
 

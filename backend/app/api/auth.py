@@ -1,17 +1,29 @@
-"""认证 API：登录/登出/状态。"""
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+"""认证 API：注册/登录/登出/状态。使用 fastapi-users 路由。"""
+from fastapi import APIRouter, Depends
 
-from app.core.auth import create_token, require_user, verify_admin_password
+from app.core.auth import (
+    auth_backend,
+    fastapi_users,
+    require_user,
+)
 from app.core.config import settings
-from app.core.ratelimit import limiter
+from app.models.user import User
 from app.schemas.common import ApiResponse
+from app.schemas.user import UserCreate, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# fastapi-users 内置路由：/login (POST), /logout (POST), /register (POST)
+router.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="",
+)
+router.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="",
+)
 
-class LoginRequest(BaseModel):
-    password: str
+# 自定义公开接口
 
 
 @router.get("/status")
@@ -20,35 +32,29 @@ async def auth_status():
     return ApiResponse(ok=True, data={"auth_enabled": settings.auth_enabled})
 
 
-@router.post("/login")
-@limiter.limit(settings.login_rate_limit)
-async def login(request: Request, req: LoginRequest):
-    """简单密码登录，返回 JWT token。口令用 bcrypt 校验，登录限流防暴力破解。"""
-    from app.core.audit_log import audit
-
-    if not verify_admin_password(req.password):
-        audit("login_failed", detail="密码错误")
-        from fastapi.responses import JSONResponse
-
-        return JSONResponse(
-            status_code=401,
-            content={"ok": False, "error": {"code": "AUTH_FAILED", "message": "密码错误", "status": 401}},
-        )
-    token = create_token({"role": "admin"}, expire_seconds=86400 * 7)  # 7天
-    audit("login_success", user="admin", detail="管理员登录成功")
-    return ApiResponse(ok=True, data={"token": token, "token_type": "bearer"})
-
-
 @router.get("/me")
-async def me(user: dict = Depends(require_user)):
+async def me(user: User = Depends(require_user)):
     """获取当前用户信息。"""
-    return ApiResponse(ok=True, data={"role": user.get("role", "admin"), "exp": user.get("exp")})
+    if isinstance(user, dict):
+        # AUTH_ENABLED=False 开发模式
+        return ApiResponse(ok=True, data={"role": user.get("role", "admin"), "email": "local-dev"})
+    return ApiResponse(
+        ok=True,
+        data={
+            "id": user.id,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_superuser": user.is_superuser,
+            "is_verified": user.is_verified,
+        },
+    )
 
 
 @router.get("/ai-status")
 async def ai_status():
     """探测可用 AI Provider（公开接口，Mining 页 badge 用）。"""
     from app.services.ai.provider_router import ProviderRouter
+
     router_ = ProviderRouter()
     providers = []
     if router_.primary:

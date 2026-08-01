@@ -1,3 +1,4 @@
+from .user import User
 from .stock_data_status import StockDataStatus
 from .factor import Factor
 from .strategy import Strategy
@@ -8,6 +9,7 @@ from .task_result import TaskResult
 from .fundamental import FundamentalPIT
 
 __all__ = [
+    "User",
     "StockDataStatus",
     "Factor",
     "Strategy",

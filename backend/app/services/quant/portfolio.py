@@ -1,68 +1,80 @@
 """组合绩效指标计算：夏普/索提诺/最大回撤/卡玛/年化/胜率。
 
-从组合日收益序列计算标准量化指标，不依赖 qlib（纯 pandas/numpy）。
+使用 empyrical 库计算标准量化指标，替代自研实现。
 """
 import numpy as np
 import pandas as pd
+from empyrical import (
+    annual_return as _emp_annual_return,
+)
+from empyrical import (
+    annual_volatility as _emp_annual_volatility,
+)
+from empyrical import (
+    calmar_ratio as _emp_calmar,
+)
+from empyrical import (
+    max_drawdown as _emp_max_drawdown,
+)
+from empyrical import (
+    sharpe_ratio as _emp_sharpe,
+)
+from empyrical import (
+    sortino_ratio as _emp_sortino,
+)
 
-# A 股年化交易日
-TRADING_DAYS = 252
+# freq -> empyrical period 映射
+_FREQ_MAP = {"day": "daily", "week": "weekly", "month": "monthly"}
 
 
 def _to_series(returns) -> pd.Series:
     if isinstance(returns, pd.DataFrame):
-        # qlib 返回 DataFrame，取第一列
         returns = returns.iloc[:, 0]
     return pd.Series(returns).dropna()
 
 
+def _to_period(freq: str) -> str:
+    return _FREQ_MAP.get(freq, "daily")
+
+
+def _nan_to_none(v):
+    """将 np.nan 转为 None，保持与原有接口兼容。"""
+    return None if (v is None or (isinstance(v, float) and np.isnan(v))) else v
+
+
 def sharpe_ratio(returns, freq: str = "day") -> float:
     s = _to_series(returns)
-    if len(s) < 2 or s.std() == 0:
+    if len(s) < 2:
         return None
-    ann = TRADING_DAYS if freq == "day" else 52
-    return float(s.mean() / s.std() * np.sqrt(ann))
+    return _nan_to_none(float(_emp_sharpe(s, period=_to_period(freq))))
 
 
 def sortino_ratio(returns, freq: str = "day") -> float:
     s = _to_series(returns)
     if len(s) < 2:
         return None
-    downside = s[s < 0]
-    if len(downside) < 1 or downside.std() == 0:
-        return None
-    ann = TRADING_DAYS if freq == "day" else 52
-    return float(s.mean() / downside.std() * np.sqrt(ann))
+    return _nan_to_none(float(_emp_sortino(s, period=_to_period(freq))))
 
 
 def max_drawdown(returns) -> float:
     s = _to_series(returns)
     if len(s) < 2:
         return None
-    cum = (1 + s).cumprod()
-    peak = cum.cummax()
-    dd = (cum - peak) / peak
-    return float(dd.min())
+    return _nan_to_none(float(_emp_max_drawdown(s)))
 
 
 def annual_return(returns, freq: str = "day") -> float:
     s = _to_series(returns)
     if len(s) < 2:
         return None
-    cum = (1 + s).prod()
-    ann = TRADING_DAYS if freq == "day" else 52
-    years = len(s) / ann
-    if years <= 0:
-        return None
-    return float(cum ** (1 / years) - 1)
+    return _nan_to_none(float(_emp_annual_return(s, period=_to_period(freq))))
 
 
 def annual_volatility(returns, freq: str = "day") -> float:
     s = _to_series(returns)
     if len(s) < 2:
         return None
-    ann = TRADING_DAYS if freq == "day" else 52
-    return float(s.std() * np.sqrt(ann))
+    return _nan_to_none(float(_emp_annual_volatility(s, period=_to_period(freq))))
 
 
 def win_rate(returns) -> float:
@@ -73,11 +85,10 @@ def win_rate(returns) -> float:
 
 
 def calmar_ratio(returns) -> float:
-    ar = annual_return(returns)
-    mdd = max_drawdown(returns)
-    if ar is None or mdd is None or mdd == 0:
+    s = _to_series(returns)
+    if len(s) < 2:
         return None
-    return float(ar / abs(mdd))
+    return _nan_to_none(float(_emp_calmar(s, period="daily")))
 
 
 def analyze_portfolio(returns, benchmark_returns=None) -> dict:
@@ -104,7 +115,6 @@ def build_nav_curve(returns, benchmark_returns=None) -> dict:
     """构建净值曲线（归一化到 1.0）。"""
     s = _to_series(returns)
     nav = (1 + s).cumprod()
-    # 兼容 DatetimeIndex 与普通索引
     if hasattr(nav.index, "date"):
         dates = [str(d.date()) for d in nav.index]
     else:
@@ -116,7 +126,6 @@ def build_nav_curve(returns, benchmark_returns=None) -> dict:
     if benchmark_returns is not None:
         b = _to_series(benchmark_returns)
         b_nav = (1 + b).cumprod()
-        # 对齐长度
         b_nav = b_nav.reindex(nav.index, method="ffill")
         curve["benchmark"] = [round(float(v), 4) if not np.isnan(v) else None for v in b_nav.values]
     return curve

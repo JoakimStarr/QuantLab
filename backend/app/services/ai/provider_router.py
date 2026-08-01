@@ -1,6 +1,7 @@
 import logging
 import time
 
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from app.core.config import is_placeholder_api_key, settings
 from app.core.errors import AIProviderUnavailableError
 from app.services.ai.llm_client import LLMClient

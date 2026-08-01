@@ -21,8 +21,6 @@ from functools import partial
 from typing import Callable, Optional
 
 import pandas as pd
-import numpy as np
-
 from app.core.config import settings
 from app.core.errors import DataFetchError
 from app.services.data.code_utils import to_qlib_code
@@ -141,67 +139,39 @@ def _write_qlib_csv(qlib_code: str, df: pd.DataFrame, out_dir: Path) -> bool:
 
 
 def _dump_to_qlib_bin(csv_dir: str, qlib_dir: str, include_fields: list[str]) -> None:
-    """将 CSV 目录转为 qlib bin 格式（calendars + instruments + features/<code>/<field>.day.bin）。
+    """使用 qlib 官方 DumpDataAll 进行 bin 转储。
 
-    qlib bin 格式（FileFeatureStorage）：
-    - calendars/day.txt：每行一个日期字符串
-    - instruments/all.txt：tab 分隔 code\\tstart\\tend
-    - features/<code>/<field>.day.bin：[start_index:float32] + [data:float32...]（小端）
+    从 CSV 目录批量转储为 qlib bin 格式：
+    - calendars/day.txt
+    - instruments/all.txt
+    - features/<code>/<field>.day.bin
     """
-    qlib_path = Path(qlib_dir)
-    cal_dir = qlib_path / "calendars"
-    inst_dir = qlib_path / "instruments"
-    feat_dir = qlib_path / "features"
-    for d in (cal_dir, inst_dir, feat_dir):
-        d.mkdir(parents=True, exist_ok=True)
+    from app.services.quant.qlib_dump import DumpAll
 
-    # 1. 读取所有 CSV，构建全局日历
-    csv_files = sorted(Path(csv_dir).glob("*.csv"))
-    if not csv_files:
-        raise ValueError("CSV 目录为空")
-    per_inst = {}  # qlib_code -> DataFrame(index=date)
-    all_dates = set()
-    for f in csv_files:
-        code = f.stem  # e.g. sh600000
-        df = pd.read_csv(f)
-        if "date" not in df.columns:
-            continue
-        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-        df = df.drop_duplicates(subset="date").set_index("date").sort_index()
-        per_inst[code] = df
-        all_dates.update(df.index.tolist())
+    dump = DumpAll(
+        data_path=csv_dir,
+        qlib_dir=qlib_dir,
+        include_fields=",".join(include_fields),
+        date_field_name="date",
+        file_suffix=".csv",
+        max_workers=1,
+    )
+    dump.dump()
 
-    calendar = sorted(all_dates)
-    # 2. 写日历
-    with (cal_dir / "day.txt").open("w", encoding="utf-8") as fp:
-        fp.write("\n".join(calendar) + "\n")
-    cal_index = {d: i for i, d in enumerate(calendar)}
-
-    # 3. 写 instruments 与 features
-    inst_rows = []
-    for code, df in per_inst.items():
-        start_d = df.index[0]
-        end_d = df.index[-1]
-        inst_rows.append(f"{code}\t{start_d}\t{end_d}")
-        code_feat_dir = feat_dir / code
-        code_feat_dir.mkdir(parents=True, exist_ok=True)
-        start_idx = cal_index[start_d]
-        for field in include_fields:
-            if field not in df.columns:
-                continue
-            # 对齐全局日历（从 start_idx 开始）
-            aligned = df[field].reindex(calendar[start_idx:]).astype(np.float32)
-            arr = np.concatenate([[np.float32(start_idx)], aligned.values.astype("<f4")])
-            arr.tofile(code_feat_dir / f"{field}.day.bin")
-
-    with (inst_dir / "all.txt").open("w", encoding="utf-8") as fp:
-        fp.write("\n".join(inst_rows) + "\n")
     # 同时写入配置的 universe 文件（factor_eval 按 universe 读取）
     universe = settings.quant.get("universe", "all")
     if universe != "all":
-        with (inst_dir / f"{universe}.txt").open("w", encoding="utf-8") as fp:
-            fp.write("\n".join(inst_rows) + "\n")
-    logger.info("qlib bin 转储完成: %d 品种, %d 字段, %d 交易日", len(per_inst), len(include_fields), len(calendar))
+        inst_dir = Path(qlib_dir) / "instruments"
+        src = inst_dir / "all.txt"
+        dst = inst_dir / f"{universe}.txt"
+        if src.exists():
+            import shutil
+            shutil.copy2(str(src), str(dst))
+
+    logger.info(
+        "qlib bin 转储完成(使用 qlib DumpDataAll): csv_dir=%s, qlib_dir=%s, fields=%s",
+        csv_dir, qlib_dir, include_fields,
+    )
 
 
 async def sync_to_qlib(
