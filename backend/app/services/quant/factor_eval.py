@@ -286,10 +286,18 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
     return decay
 
 
-def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None) -> dict:
-    """完整因子评价：IC/RankIC/ICIR/换手/衰减。"""
+def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None,
+                    horizon: int = None) -> dict:
+    """完整因子评价：IC/RankIC/ICIR/换手/衰减。
+
+    Args:
+        horizon: 预测周期（标签前向收益天数）。默认从 config 读取。
+    """
+    if horizon is None:
+        horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
+    label_expr = f"Ref($close, -{horizon}) / $close - 1"
     factor_df = load_factor_values(factor_expr, start, end, universe)
-    label_df = load_label(start, end, universe=universe)
+    label_df = load_label(start, end, label_expr=label_expr, universe=universe)
     ic_metrics = compute_ic(factor_df, label_df)
     turnover = compute_turnover(factor_df)
     decay = compute_decay(factor_df, label_df)
@@ -300,6 +308,7 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
         "eval_start": start,
         "eval_end": end,
         "factor_expr": factor_expr,
+        "horizon": horizon,
     }
 
 

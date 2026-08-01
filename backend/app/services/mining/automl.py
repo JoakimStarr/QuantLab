@@ -19,12 +19,17 @@ import numpy as np
 import pandas as pd
 from app.core.database import async_session
 from app.core.config import settings
+from app.core.gpu_utils import is_gpu_available, get_device
 from app.models.mining_task import MiningTask
 from app.models.factor import Factor
 from app.services.factor.library import update_factor_metrics, add_factor
 from app.services.mining.task_utils import update_task_status as _update_task
 
 logger = logging.getLogger(__name__)
+
+# 启动时检测 GPU
+_HAS_GPU = is_gpu_available()
+_DEVICE = get_device()
 
 # 模型持久化目录（锚定项目根，避免受 CWD 影响）
 # automl.py 位于 backend/app/services/mining/，项目根为 parents[4]
@@ -113,8 +118,15 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
                 model = Ridge(alpha=1.0)
             else:
                 from lightgbm import LGBMRegressor
-                model = LGBMRegressor(n_estimators=80, max_depth=4, learning_rate=0.05,
-                                      min_child_samples=20, verbose=-1)
+                lgb_params = dict(
+                    n_estimators=80, max_depth=4, learning_rate=0.05,
+                    min_child_samples=20, verbose=-1,
+                )
+                if _HAS_GPU:
+                    lgb_params["device"] = "gpu"
+                    lgb_params["gpu_device_id"] = 0
+                    logger.info("AutoML 使用 GPU 训练 LightGBM")
+                model = LGBMRegressor(**lgb_params)
             model.fit(X_tr, y_tr)
             return model
 
@@ -133,8 +145,14 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
                     return Ridge(alpha=1.0)
                 else:
                     from lightgbm import LGBMRegressor
-                    return LGBMRegressor(n_estimators=80, max_depth=4, learning_rate=0.05,
-                                         min_child_samples=20, verbose=-1)
+                    lgb_params = dict(
+                        n_estimators=80, max_depth=4, learning_rate=0.05,
+                        min_child_samples=20, verbose=-1,
+                    )
+                    if _HAS_GPU:
+                        lgb_params["device"] = "gpu"
+                        lgb_params["gpu_device_id"] = 0
+                    return LGBMRegressor(**lgb_params)
             cv_result = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: time_series_cv_eval(_model_factory, merged[names], merged["label"], n_splits=5)
             )

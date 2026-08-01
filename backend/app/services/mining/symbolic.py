@@ -14,11 +14,16 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from app.core.config import settings
+from app.core.gpu_utils import is_gpu_available, get_device
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.library import add_factor, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
 
 logger = logging.getLogger(__name__)
+
+# 启动时检测 GPU（gplearn 本身不支持 GPU，但可据此调整并行度）
+_HAS_GPU = is_gpu_available()
+_DEVICE = get_device()
 
 # 基础特征：name -> qlib 子表达式（作为遗传规划的"终端"）
 # 注意：Ref 正数=过去，负数=未来；因子只能用过去数据，避免 look-ahead bias
@@ -127,10 +132,14 @@ def _translate_program(prog_str: str, feature_names: list) -> str:
 
 
 async def mine_with_symbolic(task_id: int) -> dict:
-    """符号回归挖掘主流程。"""
+    """符号回归挖掘主流程（使用多维验证 + GPU 检测）。"""
     sym_cfg = settings.mining.get("symbolic", {})
     ic_threshold = sym_cfg.get("ic_threshold", 0.03)
+    horizon = sym_cfg.get("eval_horizon") or settings.mining.get("llm", {}).get("eval_horizon", 5)
     await _update_task(task_id, status="running", started_at=datetime.now())
+
+    if _HAS_GPU:
+        logger.info("符号回归: GPU 可用（设备: %s），使用并行训练", _DEVICE)
 
     try:
         from gplearn.genetic import SymbolicRegressor
@@ -158,6 +167,10 @@ async def mine_with_symbolic(task_id: int) -> dict:
         # 构建扩展函数集
         function_set = _build_function_set()
 
+        # 有 GPU 时提高并行度（gplearn 使用 n_jobs 并行评估种群）
+        n_jobs = sym_cfg.get("n_jobs", -1 if _HAS_GPU else 1)
+        logger.info("符号回归: n_jobs=%d (GPU=%s)", n_jobs, _HAS_GPU)
+
         est = SymbolicRegressor(
             population_size=sym_cfg.get("population", 1000),
             generations=sym_cfg.get("generations", 30),
@@ -166,7 +179,7 @@ async def mine_with_symbolic(task_id: int) -> dict:
             function_set=function_set,
             const_range=(-1.0, 1.0),  # 启用常数项
             stopping_criteria=0.01,  # 早停
-            n_jobs=1,
+            n_jobs=n_jobs,
             random_state=42,
             verbose=0,
             metric="spearman",  # 秩相关更稳健
@@ -203,16 +216,28 @@ async def mine_with_symbolic(task_id: int) -> dict:
                 logger.info("符号回归表达式沙箱拒绝: %s", e)
                 continue
             evaluated += 1
-            # IC 评价：仅在样本外（验证段）计算，避免 in-sample 高估
-            from app.services.quant.factor_eval import evaluate_factor
+            # 多维验证：样本分割 + 滚动 IC + 统计显著性
+            from app.services.quant.factor_validator import evaluate_factor_with_validation
             from app.core.executor import run_cpu
-            metrics = await run_cpu(evaluate_factor, expr, valid_start, valid_end)
-            ic = metrics.get("ic")
-            if ic is None or abs(ic) < ic_threshold:
-                continue
+            metrics = await run_cpu(
+                evaluate_factor_with_validation, expr, valid_start, valid_end,
+                horizon=horizon,
+            )
+            # 使用 valid_ic 作为主筛选指标
+            valid_ic_val = metrics.get("valid_ic")
+            passed = metrics.get("passed", False)
+            if passed and valid_ic_val is not None and abs(valid_ic_val) >= ic_threshold:
+                pass
+            else:
+                # 兜底：全样本 IC
+                ic = metrics.get("ic")
+                if ic is None or abs(ic) < ic_threshold:
+                    continue
+                valid_ic_val = ic
+                logger.info("符号回归因子 %s 未通过多维验证，全样本 IC=%s 达标作为后备", expr[:40], ic)
             # 过拟合标记与样本标注写入 metrics
             metrics["train_ic"] = train_ic
-            metrics["valid_ic"] = valid_ic
+            metrics["gplearn_valid_ic"] = valid_ic
             metrics["overfit"] = overfit
             metrics["sample"] = "out-of-sample"
             name = f"sym_{task_id}_{len(passed_ids)}"
@@ -221,8 +246,8 @@ async def mine_with_symbolic(task_id: int) -> dict:
                                       source_task_id=task_id, skip_validation=True)
             await update_factor_metrics(factor["id"], metrics)
             passed_ids.append(factor["id"])
-            if abs(ic) > abs(best_ic):
-                best_ic = ic
+            if abs(valid_ic_val) > abs(best_ic):
+                best_ic = valid_ic_val
 
         await _update_task(
             task_id, status="done",
@@ -232,7 +257,7 @@ async def mine_with_symbolic(task_id: int) -> dict:
         )
         return {"task_id": task_id, "evaluated": evaluated,
                 "passed": len(passed_ids), "best_ic": best_ic, "factor_ids": passed_ids,
-                "train_ic": train_ic, "valid_ic": valid_ic, "overfit": overfit}
+                "train_ic": train_ic, "gplearn_valid_ic": valid_ic, "overfit": overfit}
     except Exception as e:
         await _update_task(task_id, status="failed", error=str(e)[:500],
                            finished_at=datetime.now())

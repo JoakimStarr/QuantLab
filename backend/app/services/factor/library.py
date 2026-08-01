@@ -130,7 +130,8 @@ async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = No
     end = end or period.get("end", "2024-12-31")
     # CPU 密集的因子评价走进程池，避免阻塞事件循环
     from app.core.executor import run_cpu
-    metrics = await run_cpu(_eval, factor["expression"], start, end)
+    horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
+    metrics = await run_cpu(_eval, factor["expression"], start, end, horizon=horizon)
     await update_factor_metrics(factor_id, metrics)
     return metrics
 

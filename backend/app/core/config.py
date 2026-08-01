@@ -155,6 +155,12 @@ class MiningSettings(CompatModel):
             "candidates_per_run": 10,
             "eval_timeout_seconds": 60,
             "ic_threshold": 0.03,
+            "eval_horizon": 5,  # 预测周期（标签前向收益天数）
+            "significance_alpha": 0.05,  # 统计显著性水平
+            "stability_threshold": 0.5,  # IC 稳定性阈值（IC/IC_std）
+            "positive_ratio_threshold": 0.55,  # IC > 0 占比阈值
+            "decay_threshold": -0.01,  # IC 衰减阈值
+            "diversity_threshold": 0.8,  # 因子多样性相关阈值
             "allowed_ops": [
                 "Ref",
                 "Mean",
