@@ -169,54 +169,53 @@ ALPHA158_EXPRESSIONS: List[Dict] = [
 ]
 
 
-async def _flush_batch_metrics(buffer: list) -> None:
-    """批量更新因子评价指标到 DB（每批一次 commit）。
+async def _update_single_factor_metrics(fid: int, metrics: dict) -> None:
+    """实时写入单个因子评价指标到 DB（每算完一个立即 commit，保证数据不丢）。
 
     Args:
-        buffer: [(factor_id, metrics_dict), ...]
+        fid: 因子 ID
+        metrics: 评价指标字典
     """
     from app.core.database import async_session
     from app.models.factor import Factor
 
-    if not buffer:
+    if not metrics:
         return
-
     async with async_session() as session:
-        for fid, metrics in buffer:
-            r = await session.get(Factor, fid)
-            if r is not None and metrics:
-                r.ic = metrics.get("ic")
-                r.rank_ic = metrics.get("rank_ic")
-                r.icir = metrics.get("icir")
-                r.ir = metrics.get("ir")
-                r.turnover = metrics.get("turnover")
-                r.eval_start = metrics.get("eval_start")
-                r.eval_end = metrics.get("eval_end")
-                r.evaluated_at = datetime.now()
+        r = await session.get(Factor, fid)
+        if r is not None:
+            r.ic = metrics.get("ic")
+            r.rank_ic = metrics.get("rank_ic")
+            r.icir = metrics.get("icir")
+            r.ir = metrics.get("ir")
+            r.turnover = metrics.get("turnover")
+            r.eval_start = metrics.get("eval_start")
+            r.eval_end = metrics.get("eval_end")
+            r.evaluated_at = datetime.now()
         await session.commit()
 
 
 async def batch_evaluate_alpha158(
-    batch_size: int = 20,
+    batch_size: int = 1,
     max_concurrent: int = 16,
     eval_start: str = None,
     eval_end: str = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
-    """批量并行评价 Alpha158 因子（优化版：预加载共用数据 + 线程池 + 批次写入）。
+    """批量并行评价 Alpha158 因子（优化版：预加载共用数据 + 线程池 + 实时写入）。
 
     性能优化点：
     1. 预加载前向收益标签（158 个因子共用 1 次）
     2. 预加载 $close 价格数据（decay 共用）
     3. 线程池而非进程池（qlib C 扩展释放 GIL）
-    4. 分批并发控制（max_concurrent 限制内存峰值）
-    5. 数据库批量写入（每 batch_size 条一次 commit）
+    4. 并发控制（max_concurrent 限制内存峰值）
+    5. 实时写入：每算完一个因子立即 commit，保证数据不丢
 
     Args:
-        batch_size: DB 批次写入大小
+        batch_size: 保留参数，实际已改为实时写入（每因子独立 commit）
         max_concurrent: 最大并发任务数
         eval_start/eval_end: 评价区间，默认从 config 读取
-        progress_callback: 进度回调 (done, total, current_name)
+        progress_callback: 进度回调 (done, total, current_name)，每次完成都触发
     """
     from sqlalchemy import select
     from app.core.config import settings
@@ -288,10 +287,9 @@ async def batch_evaluate_alpha158(
     # 5. 创建所有任务（受信号量控制）
     tasks = [_eval_one(r.id) for r in targets]
 
-    # 使用 as_completed 风格以便更新进度
+    # 使用 as_completed 实时写入每条结果（不攒批，保证数据不丢）
     success = 0
     failed = 0
-    results_buffer: list = []  # 批量写入缓冲
 
     for i, coro in enumerate(asyncio.as_completed(tasks)):
         try:
@@ -300,27 +298,22 @@ async def batch_evaluate_alpha158(
                 logger.warning("Alpha158 id=%d 评价失败: %s", fid, err)
                 failed += 1
             else:
-                results_buffer.append((fid, metrics))
+                # 实时写入：每算完一个因子立即 commit，保证数据不丢
+                await _update_single_factor_metrics(fid, metrics)
                 success += 1
         except Exception as e:
             logger.warning("Alpha158 评价异常: %s", e)
             failed += 1
 
-        # 进度回调
-        if progress_callback and (i + 1) % 10 == 0:
+        # 实时进度回调：每次完成都触发，让前端看到每个因子逐步出现
+        if progress_callback:
             try:
-                progress_callback(i + 1, total, f"已完成 {i+1}/{total}")
+                progress_callback(
+                    success + failed, total,
+                    f"因子 {success + failed}/{total} 已完成 (成功 {success} / 失败 {failed})",
+                )
             except Exception:
                 pass
-
-        # 批量写入
-        if len(results_buffer) >= batch_size:
-            await _flush_batch_metrics(results_buffer)
-            results_buffer = []
-
-    # 处理剩余
-    if results_buffer:
-        await _flush_batch_metrics(results_buffer)
 
     logger.info("Alpha158 批量评价完成: %d 成功, %d 失败", success, failed)
     return {
