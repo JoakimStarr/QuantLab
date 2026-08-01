@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/**/*.{js,vue,scss}\""
+    "format": "prettier --write \"src/**/*.{js,vue,scss}\"",
+    "check:vue": "node vue_parse_check.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",

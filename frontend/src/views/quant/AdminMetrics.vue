@@ -14,17 +14,17 @@
           <el-tag :type="checks.database === 'ok' ? 'success' : 'danger'" size="small">
             {{ checks.database || '...' }}
           </el-tag>
-        </el-descriptions>
+        </el-descriptions-item>
         <el-descriptions-item label="QLib">
           <el-tag :type="checks.qlib === 'ok' ? 'success' : 'info'" size="small">
             {{ checks.qlib || '...' }}
           </el-tag>
-        </el-descriptions>
+        </el-descriptions-item>
         <el-descriptions-item label="调度器">
           <el-tag :type="checks.scheduler === 'running' ? 'success' : 'warning'" size="small">
             {{ checks.scheduler || '...' }}
           </el-tag>
-        </el-descriptions>
+        </el-descriptions-item>
         <el-descriptions-item label="磁盘空间">
           {{ checks.disk || '...' }}
         </el-descriptions-item>
