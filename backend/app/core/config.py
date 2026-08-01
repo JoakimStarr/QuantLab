@@ -93,6 +93,12 @@ class SchedulerSettings(CompatModel):
     quant_data_update_time: str = "18:00"
 
 
+class RedisSettings(CompatModel):
+    """Redis 连接配置"""
+    url: str = ""
+    enabled: bool = False
+
+
 class LoggingSettings(CompatModel):
     dir: str = "logs"
     level: str = "INFO"
@@ -296,6 +302,7 @@ class Settings:
         self.ai_provider = AIProviderSettings(**(cfg.get("ai_provider") or {}))
         self.api = APISettings(**(cfg.get("api") or {}))
         self.scheduler = SchedulerSettings(**(cfg.get("scheduler") or {}))
+        self.redis = RedisSettings(**(cfg.get("redis") or {}))
         self.logging = LoggingSettings(**(cfg.get("logging") or {}))
         self.quant = QuantSettings(**(cfg.get("quant") or {}))
         self.mining = MiningSettings(**(cfg.get("mining") or {}))

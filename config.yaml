@@ -39,6 +39,10 @@ data:
   models_dir: models
   processed_dir: data/processed
   raw_dir: data/raw
+redis:
+  url: "redis://localhost:6379/0"
+  enabled: false
+
 logging:
   dir: logs
   handlers:
