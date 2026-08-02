@@ -14,9 +14,9 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",
+    "@vueuse/core": "^14.4.0",
     "axios": "^1.7.0",
     "dayjs": "^1.11.0",
-    "docsify": "^4.13.1",
     "echarts": "^5.5.0",
     "element-plus": "^2.7.0",
     "fuse.js": "^7.5.0",

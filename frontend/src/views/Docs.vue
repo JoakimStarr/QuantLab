@@ -1,16 +1,12 @@
 <!--
   Docs.vue - 技术文档查看器
 
-  使用 Docsify 4.x 开源库实现：
-  - 自动从后端 API fetch markdown 渲染
-  - 内置可点击目录（右侧浮动）
+  使用 markdown-it + highlight.js 渲染 Markdown 文档：
+  - 从后端 API 获取文档列表和内容
+  - markdown-it 渲染 HTML，highlight.js 代码高亮
+  - 自动生成 TOC 侧边栏（h1/h2/h3）
   - 滚动时自动高亮当前章节
-  - 代码高亮、搜索、emoji 等插件开箱即用
-
-  设计要点：
-  - 通过 window.$docsify 配置项动态指定 homepage，切换文档无需重新初始化
-  - 使用路由 hash (#/slug) 实现文档间跳转和浏览器前进/后退
-  - Docsify 会自动 fetch /api/v1/docs/md/<slug> 拿 markdown
+  - 支持字体缩放、侧边栏位置切换
 -->
 <template>
   <div class="docs-page">
@@ -66,29 +62,74 @@
       </div>
     </div>
 
-    <!-- Docsify 渲染容器 -->
-    <!-- Docsify 会接管这个 div 的内容。结构：
-         <aside class="sidebar">   ← Docsify 内部生成
-         <section class="content">  ← Docsify 内部生成（带自动目录）
-         -->
-    <div id="docsify-app" class="docsify-host" />
+    <!-- 主内容区域：侧边栏 + 正文 -->
+    <div class="docs-body" :class="`sidebar--${sidebarPos}`">
+      <!-- TOC 侧边栏 -->
+      <aside class="docs-sidebar">
+        <div class="toc-title">目录</div>
+        <nav class="toc-nav">
+          <a
+            v-for="item in toc"
+            :key="item.id"
+            :href="'#' + item.id"
+            :class="['toc-item', `toc-h${item.level}`, { 'toc-item--active': activeHeading === item.id }]"
+            @click.prevent="scrollToHeading(item.id)"
+          >{{ item.text }}</a>
+        </nav>
+        <div v-if="!toc.length" class="toc-empty">无标题结构</div>
+      </aside>
+
+      <!-- 文档正文 -->
+      <main class="docs-content" ref="contentRef" :style="{ fontSize: fontSize + 'px' }" @scroll="onContentScroll">
+        <div v-if="!doc" class="docs-empty">
+          <el-icon :size="48" color="var(--el-text-color-placeholder)"><Document /></el-icon>
+          <p>请从上方选择一篇文档</p>
+        </div>
+        <div v-else class="markdown-body" v-html="renderedHtml" />
+      </main>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ZoomIn, ZoomOut } from '@element-plus/icons-vue'
-import { listDocs as fetchDocList } from '@/api/docs'
+import { ZoomIn, ZoomOut, Document } from '@element-plus/icons-vue'
+import { listDocs as fetchDocList, getDoc } from '@/api/docs'
+import MarkdownIt from 'markdown-it'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
 
 const route = useRoute()
 const router = useRouter()
 
 const docs = ref([])
+const doc = ref(null)
 const currentSlug = ref('')
 const sidebarPos = ref(localStorage.getItem('docs_sidebar_pos') || 'right')
 const fontSize = ref(parseInt(localStorage.getItem('docs_font_size') || '15', 10))
 const fontSizeLabel = computed(() => `${fontSize.value}px`)
+const contentRef = ref(null)
+const toc = ref([])
+const activeHeading = ref('')
+const loading = ref(false)
+
+// markdown-it 实例（带 highlight.js 代码高亮）
+const md = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+  highlight(str, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return '<pre class="hljs"><code>' + hljs.highlight(str, { language: lang, ignoreIllegals: true }).value + '</code></pre>'
+      } catch { /* fall through */ }
+    }
+    // 没有语言或高亮失败，用通用转义
+    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>'
+  },
+})
 
 const groupedDocs = computed(() => {
   const groups = new Map()
@@ -102,264 +143,111 @@ const groupedDocs = computed(() => {
   }))
 })
 
-// ---------------------------------------------------------------------------
-// Docsify 集成
-// ---------------------------------------------------------------------------
+const renderedHtml = computed(() => {
+  if (!doc.value) return ''
+  return md.render(doc.value.content)
+})
 
-// 基础 URL（前后端分离部署时改这里）
-// Docsify 会在这个路径下 fetch <slug>.md
-const DOCS_BASE = '/api/v1/docs/md'
-
-function ensureDocsifyAssets() {
-  // 动态注入 Docsify CSS + JS（仅一次）
-  if (document.getElementById('docsify-css')) return
-
-  const css = document.createElement('link')
-  css.id = 'docsify-css'
-  css.rel = 'stylesheet'
-  // 使用本地 npm 包路径（vite 打包后会引用 node_modules 中的资源）
-  css.href = '/docsify/themes/vue.css'
-  document.head.appendChild(css)
-
-  // 自定义样式覆盖 Docsify 默认外观
-  const customCss = document.createElement('style')
-  customCss.id = 'docsify-custom-css'
-  customCss.textContent = `
-    /* 让 Docsify 适配 Element Plus 主题色 */
-    :root {
-      --docsifytabs--bg: var(--el-bg-color);
-      --docsifytabs--tab-background-active: var(--el-color-primary-light-9);
-      --code-theme-background: var(--el-fill-color-light);
-    }
-    .docsify-host { background: var(--el-bg-color-page); }
-    .docsify-host .markdown-section {
-      max-width: 100%;
-      padding: 24px 32px;
-      color: var(--el-text-color-primary);
-      font-size: ${fontSize.value}px;
-      line-height: 1.7;
-    }
-    .docsify-host .markdown-section h1,
-    .docsify-host .markdown-section h2,
-    .docsify-host .markdown-section h3 {
-      color: var(--el-text-color-primary);
-      font-weight: 600;
-    }
-    .docsify-host .markdown-section h2 {
-      border-bottom: 1px solid var(--el-border-color-lighter);
-      padding-bottom: 8px;
-      margin-top: 32px;
-    }
-    .docsify-host .markdown-section code {
-      background: var(--el-fill-color-light);
-      color: #d63384;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 0.92em;
-    }
-    .docsify-host .markdown-section pre {
-      background: #1e1e1e;
-      color: #d4d4d4;
-      border-radius: 6px;
-      padding: 16px;
-      overflow-x: auto;
-    }
-    .docsify-host .markdown-section pre code {
-      background: transparent;
-      color: inherit;
-      padding: 0;
-    }
-    .docsify-host .markdown-section a {
-      color: var(--el-color-primary);
-    }
-    .docsify-host .markdown-section blockquote {
-      border-left: 4px solid var(--el-color-primary-light-5);
-      background: var(--el-color-primary-light-9);
-      padding: 12px 16px;
-      border-radius: 0 4px 4px 0;
-    }
-    .docsify-host .markdown-section table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 16px 0;
-    }
-    .docsify-host .markdown-section table th,
-    .docsify-host .markdown-section table td {
-      border: 1px solid var(--el-border-color-lighter);
-      padding: 8px 12px;
-      text-align: left;
-    }
-    .docsify-host .markdown-section table th {
-      background: var(--el-fill-color-light);
-      font-weight: 600;
-    }
-
-    /* 侧边栏 */
-    .docsify-host .sidebar {
-      background: var(--el-bg-color);
-      border-right: 1px solid var(--el-border-color-lighter);
-    }
-    .docsify-host .sidebar > h1 {
-      padding: 16px 20px 8px;
-      margin: 0;
-      font-size: 18px;
-      font-weight: 600;
-      color: var(--el-color-primary);
-    }
-    .docsify-host .sidebar-nav {
-      padding: 0 12px;
-    }
-    .docsify-host .sidebar-nav p,
-    .docsify-host .sidebar-nav strong {
-      color: var(--el-text-color-secondary);
-      padding: 12px 8px 4px;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-    }
-    .docsify-host .sidebar-nav li {
-      margin: 2px 0;
-    }
-    .docsify-host .sidebar-nav li a {
-      display: block;
-      padding: 6px 12px;
-      border-radius: 4px;
-      color: var(--el-text-color-regular);
-      text-decoration: none;
-      transition: all 0.2s;
-    }
-    .docsify-host .sidebar-nav li a:hover {
-      background: var(--el-color-primary-light-9);
-      color: var(--el-color-primary);
-    }
-    .docsify-host .sidebar-nav li.active > a {
-      background: var(--el-color-primary-light-8);
-      color: var(--el-color-primary);
-      font-weight: 500;
-    }
-
-    /* 目录（侧边栏右侧） */
-    .docsify-host .sidebar-toggle {
-      background: var(--el-color-primary);
-    }
-
-    /* 暗色主题适配 */
-    html.dark .docsify-host .markdown-section code {
-      background: #2d2d2d;
-      color: #ff79c6;
-    }
-    html.dark .docsify-host .markdown-section pre {
-      background: #1e1e1e;
-    }
-    html.dark .docsify-host .sidebar {
-      background: #1e1e1e;
-      border-right-color: #333;
-    }
-  `
-  document.head.appendChild(customCss)
+// 解析 TOC 从 markdown 原文（比从 DOM 解析更可靠）
+function generateToc(content) {
+  if (!content) return []
+  const items = []
+  // 匹配 markdown 标题：行首的 # ## ###，后面跟空格和标题文字
+  const headingRe = /^(#{1,3})\s+(.+)$/gm
+  let match
+  while ((match = headingRe.exec(content)) !== null) {
+    const level = match[1].length
+    const text = match[2].trim()
+    // 生成与 markdown-it 一致的锚点 id（slugify）
+    const id = text
+      .toLowerCase()
+      .replace(/[^\w\u4e00-\u9fff]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    items.push({ level, text, id })
+  }
+  return items
 }
 
-let docsifyLoaded = null
-
-// 每次进入页面都强制重新加载 Docsify 脚本（用时间戳去缓存）
-// 避免 Vue Router 切换后 Docsify IIFE 不重跑导致空容器
-function loadDocsify(force = false) {
-  if (docsifyLoaded && !force) return docsifyLoaded
-
-  // 移除已存在的脚本和插件，避免重复实例化
-  const oldScript = document.getElementById('docsify-js')
-  if (oldScript) oldScript.remove()
-  document.querySelectorAll('script[data-docsify-plugin]').forEach((el) => el.remove())
-
-  docsifyLoaded = new Promise((resolve, reject) => {
-    // ⚠️ 关键：必须在加载 docsify.min.js 之前就设置好 window.$docsify
-    // 因为 Docsify 脚本是 IIFE，加载时立即执行构造函数检查挂载点元素
-    // eslint-disable-next-line no-undef
-    window.$docsify = {
-      // 挂载点（必须用 #docsify-app，因为我们有这个 id 的 div）
-      el: '#docsify-app',
-      // Docsify 会 fetch `${basePath}${homepage}` 拿首页 markdown
-      basePath: DOCS_BASE,
-      homepage: 'README.md',
-      // 侧边栏 + 顶部导航（自动 fetch 并渲染）
-      loadSidebar: '_sidebar.md',
-      loadNavbar: '_navbar.md',
-      // 目录最大层级
-      subMaxLevel: 3,
-      // hash 路由（#/slug，便于分享 URL）
-      routerMode: 'hash',
-      // 别名：让 Docsify 把 #/ 路由到 README.md
-      alias: {
-        '/.*/_sidebar.md': '/_sidebar.md',
-        '/.*/_navbar.md': '/_navbar.md',
-      },
-      // 全文搜索
-      search: {
-        paths: 'auto',
-        placeholder: '搜索文档...',
-        noData: '没有找到结果',
-        depth: 6,
-      },
-      name: 'QuantLab 技术文档',
-      repo: 'https://github.com/JoakimStarr/QuantLab',
-      auto2top: true,
-    }
-
-    // Docsify 4 主脚本（加时间戳去缓存，强制重跑 IIFE）
-    const script = document.createElement('script')
-    script.id = 'docsify-js'
-    script.src = `/docsify/lib/docsify.min.js?t=${Date.now()}`
-    script.onload = () => {
-      // 搜索插件（也加时间戳）
-      const searchPlugin = document.createElement('script')
-      searchPlugin.id = 'docsify-search-js'
-      searchPlugin.setAttribute('data-docsify-plugin', 'search')
-      searchPlugin.src = `/docsify/lib/plugins/search.min.js?t=${Date.now()}`
-      searchPlugin.onload = () => resolve()
-      searchPlugin.onerror = () => resolve() // 搜索插件失败不阻塞
-      document.head.appendChild(searchPlugin)
-    }
-    script.onerror = reject
-    document.head.appendChild(script)
-  })
-  return docsifyLoaded
+// 滚动到指定标题
+function scrollToHeading(id) {
+  if (!contentRef.value) return
+  const el = contentRef.value.querySelector('#' + CSS.escape(id))
+  if (el) {
+    // 计算偏移让标题位于视口上方一点
+    const offset = el.getBoundingClientRect().top - contentRef.value.getBoundingClientRect().top - 16
+    contentRef.value.scrollBy({ top: offset, behavior: 'smooth' })
+  }
 }
 
-async function initDocsify() {
-  // 1. 必须等 #docsify-app 元素进入 DOM 再加载脚本
-  await nextTick()
-  // 2. 清空容器（避免 Vue 复用组件时残留的 Docsify 内部 DOM）
-  const container = document.getElementById('docsify-app')
-  if (container) container.innerHTML = ''
-  // 3. 强制重新加载 Docsify（IIFE 重新跑，挂载到当前容器）
-  await loadDocsify(true)
+// 滚动时高亮当前章节
+function onContentScroll() {
+  if (!contentRef.value || !toc.value.length) return
+  const headings = toc.value
+    .map((item) => contentRef.value.querySelector('#' + CSS.escape(item.id)))
+    .filter(Boolean)
+
+  // 从底部往上找第一个可见的标题
+  const scrollTop = contentRef.value.scrollTop
+  const containerTop = contentRef.value.getBoundingClientRect().top + 80 // 偏移量
+
+  let active = headings[0]
+  for (const el of headings) {
+    const rect = el.getBoundingClientRect()
+    if (rect.top <= containerTop) {
+      active = el
+    }
+  }
+  activeHeading.value = active ? active.id : ''
+}
+
+// 监听文档加载完成后滚动到 hash 指定的标题
+function scrollToHash() {
+  const hash = route.hash.replace('#', '')
+  if (hash) {
+    nextTick(() => scrollToHeading(hash))
+  }
+}
+
+async function loadDoc(slug) {
+  if (!slug) return
+  loading.value = true
+  try {
+    const res = await getDoc(slug)
+    doc.value = res?.data || res
+    toc.value = generateToc(doc.value?.content || '')
+    await nextTick()
+    scrollToHash()
+  } catch (e) {
+    console.error('[Docs] load doc failed:', e)
+    doc.value = null
+    toc.value = []
+  } finally {
+    loading.value = false
+  }
 }
 
 async function loadDocs() {
   try {
     const res = await fetchDocList()
-    // 后端 list_docs_api 返回 ApiResponse(ok=True, data={"docs": [...]})
-    // axios 拦截器通常会 unwrap res.data，所以 res 即 ApiResponse
     docs.value = res?.data?.docs || res?.docs || []
     // 默认进入路由中的 slug 或第一个文档
     const querySlug = route.query.slug
     if (querySlug && docs.value.some((d) => d.slug === querySlug)) {
       currentSlug.value = querySlug
     } else if (docs.value.length) {
-      currentSlug.value = 'README'  // 默认进 README
+      currentSlug.value = docs.value[0].slug
     }
-    router.replace({ query: { slug: currentSlug.value } })
+    if (currentSlug.value) {
+      await loadDoc(currentSlug.value)
+    }
   } catch (e) {
-    console.error('[Docs] load docs failed:', e)
+    console.error('[Docs] load docs list failed:', e)
   }
 }
 
 function onDocChange(slug) {
-  // 切换文档：让 Docsify 跳到新路由
   router.replace({ query: { slug } })
-  // Docsify 用 hash 路由，地址 #/slug
-  window.location.hash = `#/${slug}`
+  loadDoc(slug)
 }
 
 watch(
@@ -367,8 +255,7 @@ watch(
   (slug) => {
     if (slug && slug !== currentSlug.value) {
       currentSlug.value = slug
-      // 同步 Docsify 路由
-      window.location.hash = `#/${slug}`
+      loadDoc(slug)
     }
   },
 )
@@ -377,40 +264,161 @@ watch(sidebarPos, (v) => localStorage.setItem('docs_sidebar_pos', v))
 
 function zoomIn() {
   fontSize.value = Math.min(22, fontSize.value + 1)
-  applyFontSize()
+  localStorage.setItem('docs_font_size', String(fontSize.value))
 }
 function zoomOut() {
   fontSize.value = Math.max(12, fontSize.value - 1)
-  applyFontSize()
+  localStorage.setItem('docs_font_size', String(fontSize.value))
 }
 function resetZoom() {
   fontSize.value = 15
-  applyFontSize()
-}
-function applyFontSize() {
   localStorage.setItem('docs_font_size', String(fontSize.value))
-  document.querySelectorAll('.docsify-host .markdown-section').forEach((el) => {
-    el.style.fontSize = `${fontSize.value}px`
-  })
 }
 
 onMounted(async () => {
   await loadDocs()
-  ensureDocsifyAssets()
-  await initDocsify()
 })
 
 onBeforeUnmount(() => {
-  // 清理 Docsify 注入的脚本与容器内容，避免重复实例化导致卡顿闪烁
-  const oldScript = document.getElementById('docsify-js')
-  if (oldScript) oldScript.remove()
-  document.querySelectorAll('script[data-docsify-plugin]').forEach((el) => el.remove())
-  const container = document.getElementById('docsify-app')
-  if (container) container.innerHTML = ''
-  // 重置缓存标志，下次进入会强制重新加载
-  docsifyLoaded = null
+  // 清理
+  doc.value = null
+  toc.value = []
 })
 </script>
+
+<style>
+/* ============================================================
+   markdown-body 样式（非 scoped，因为 v-html 渲染的内容不受 scoped 影响）
+   ============================================================ */
+.markdown-body {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 32px 80px;
+  color: var(--el-text-color-primary);
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 24px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  line-height: 1.3;
+  scroll-margin-top: 20px;
+}
+
+.markdown-body h1 { font-size: 1.8em; margin-top: 0; padding-bottom: 8px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.markdown-body h2 { font-size: 1.45em; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 6px; }
+.markdown-body h3 { font-size: 1.2em; }
+.markdown-body h4 { font-size: 1.05em; }
+
+.markdown-body p { margin: 8px 0; }
+.markdown-body ul, .markdown-body ol { padding-left: 24px; margin: 8px 0; }
+.markdown-body li { margin: 4px 0; }
+
+.markdown-body a {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+.markdown-body a:hover { text-decoration: underline; }
+
+.markdown-body blockquote {
+  margin: 16px 0;
+  padding: 12px 16px;
+  border-left: 4px solid var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+  border-radius: 0 4px 4px 0;
+  color: var(--el-text-color-regular);
+}
+.markdown-body blockquote p { margin: 4px 0; }
+
+.markdown-body table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0;
+  font-size: 0.95em;
+}
+.markdown-body table th,
+.markdown-body table td {
+  border: 1px solid var(--el-border-color-lighter);
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.markdown-body table th {
+  background: var(--el-fill-color-light);
+  font-weight: 600;
+}
+.markdown-body table tr:nth-child(even) {
+  background: var(--el-fill-color-lighter);
+}
+
+.markdown-body code {
+  background: var(--el-fill-color-light);
+  color: #d63384;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.92em;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+}
+
+.markdown-body pre {
+  margin: 16px 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.markdown-body pre code {
+  display: block;
+  padding: 16px;
+  overflow-x: auto;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 0.9em;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--el-border-color-lighter);
+  margin: 24px 0;
+}
+
+.markdown-body :not(pre) > code {
+  background: var(--el-fill-color-light);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.92em;
+  color: #d63384;
+}
+
+/* 暗色主题适配 */
+html.dark .markdown-body code {
+  background: #2d2d2d;
+  color: #ff79c6;
+}
+html.dark .markdown-body table th {
+  background: #2d2d2d;
+}
+html.dark .markdown-body table tr:nth-child(even) {
+  background: #252525;
+}
+html.dark .markdown-body blockquote {
+  background: #1e2a3a;
+  border-left-color: #409eff;
+}
+</style>
 
 <style scoped>
 .docs-page {
@@ -427,6 +435,7 @@ onBeforeUnmount(() => {
   padding: 12px 24px;
   border-bottom: 1px solid var(--el-border-color-lighter);
   background: var(--el-bg-color);
+  flex-shrink: 0;
 }
 
 .docs-select {
@@ -438,28 +447,108 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.docsify-host {
+/* ============================================================
+   主内容区：flex 布局，侧边栏 + 正文
+   ============================================================ */
+.docs-body {
+  display: flex;
   flex: 1;
-  /* Docsify 内部用 position absolute 控制侧栏；这里给容器一个固定布局 */
-  position: relative;
   overflow: hidden;
 }
 
-/* Docsify 内部结构覆盖：把 Docsify 的 .content 撑满容器 */
-.docsify-host :deep(.content) {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  left: 0;
-  overflow-y: auto;
-  padding-top: 0;
+/* 侧边栏在左（默认） */
+.docs-body.sidebar--left {
+  flex-direction: row;
 }
-.docsify-host :deep(.sidebar) {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 260px;
+
+/* 侧边栏在右 */
+.docs-body.sidebar--right {
+  flex-direction: row-reverse;
+}
+
+/* ============================================================
+   TOC 侧边栏
+   ============================================================ */
+.docs-sidebar {
+  width: 240px;
+  flex-shrink: 0;
   overflow-y: auto;
+  background: var(--el-bg-color);
+  border-right: 1px solid var(--el-border-color-lighter);
+  padding: 20px 0;
+}
+.docs-body.sidebar--right .docs-sidebar {
+  border-right: none;
+  border-left: 1px solid var(--el-border-color-lighter);
+}
+
+.toc-title {
+  padding: 0 16px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.toc-nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.toc-item {
+  display: block;
+  padding: 5px 16px;
+  color: var(--el-text-color-regular);
+  text-decoration: none;
+  font-size: 13px;
+  line-height: 1.4;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.toc-item:hover {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.toc-item--active {
+  color: var(--el-color-primary);
+  border-left-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  font-weight: 500;
+}
+
+.toc-h2 { padding-left: 28px; }
+.toc-h3 { padding-left: 40px; }
+
+.toc-empty {
+  padding: 16px;
+  color: var(--el-text-color-placeholder);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ============================================================
+   文档正文
+   ============================================================ */
+.docs-content {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--el-bg-color);
+}
+
+.docs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--el-text-color-placeholder);
 }
 </style>

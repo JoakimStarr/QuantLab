@@ -64,6 +64,13 @@ _BUILTIN_META = {
         "group": "API",
         "summary": "后端API接口文档",
     },
+    "README.md": {
+        "title": "项目简介",
+        "slug": "README",
+        "order": 0,
+        "group": "概览",
+        "summary": "QuantLab 项目概述",
+    },
 }
 
 
@@ -107,6 +114,7 @@ def _slugify(filename: str) -> str:
     name = filename.rsplit(".", 1)[0]
     return re.sub(r"[_\s]+", "-", name).lower()
 
+
 def _parse_meta(path: Path) -> dict:
     """解析 MD 文件的元数据。优先 frontmatter，回退到内置表。"""
     content = path.read_text(encoding="utf-8")
@@ -138,53 +146,6 @@ def _parse_meta(path: Path) -> dict:
     return {**base, "content": body}
 
 
-def get_doc_raw(slug: str) -> Optional[str]:
-    """按 slug 获取文档原始 Markdown 内容（已剥 frontmatter）。
-
-    用于 Docsify 类工具直接 fetch 此 URL 渲染。
-    找不到返回 None。
-    """
-    if not DOCS_DIR.exists():
-        return None
-    for path in DOCS_DIR.glob("*.md"):
-        meta = _parse_meta(path)
-        if meta["slug"] == slug or _slugify(path.name) == slug:
-            return meta["content"]
-    return None
-
-
-def get_sidebar_md() -> str:
-    """生成 Docsify 用的 _sidebar.md（按 group 分组）。
-
-    Docsify 会 fetch 这个 URL，把内容渲染成左侧导航。
-    每行: `- [标题](slug)`
-    """
-    docs = list_docs()
-    # 按 group 分组
-    groups: dict[str, list] = {}
-    for d in docs:
-        groups.setdefault(d["group"], []).append(d)
-
-    lines = []
-    for gname in sorted(groups.keys()):
-        lines.append(f"- **{gname}**")
-        for d in sorted(groups[gname], key=lambda x: (x["order"], x["title"])):
-            # Docsify 用 #/slug 作为路由锚点
-            lines.append(f"  - [{d['title']}]({d['slug']})")
-    return "\n".join(lines) + "\n"
-
-
-def get_navbar_md() -> str:
-    """生成 Docsify 用的 _navbar.md（顶部导航）。
-
-    返回指向项目首页、GitHub、当前页等链接。
-    """
-    return (
-        "- [首页](/)\n"
-        "- [GitHub](https://github.com/JoakimStarr/QuantLab)\n"
-    )
-
-
 def list_docs() -> list:
     """列出所有文档（含元数据），按 order 排序。
 
@@ -207,6 +168,7 @@ def list_docs() -> list:
     docs.sort(key=lambda d: (d["order"], d["title"]))
     return docs
 
+
 def get_doc(slug: str) -> Optional[dict]:
     """按 slug 获取文档内容。
 
@@ -228,4 +190,3 @@ def get_doc(slug: str) -> Optional[dict]:
                 "file": path.name,
             }
     return None
-
