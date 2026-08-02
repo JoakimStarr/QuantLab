@@ -6,20 +6,10 @@ import numpy as np
 import pandas as pd
 from empyrical import (
     annual_return as _emp_annual_return,
-)
-from empyrical import (
     annual_volatility as _emp_annual_volatility,
-)
-from empyrical import (
     calmar_ratio as _emp_calmar,
-)
-from empyrical import (
     max_drawdown as _emp_max_drawdown,
-)
-from empyrical import (
     sharpe_ratio as _emp_sharpe,
-)
-from empyrical import (
     sortino_ratio as _emp_sortino,
 )
 
