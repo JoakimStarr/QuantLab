@@ -131,6 +131,63 @@ const md = new MarkdownIt({
   },
 })
 
+// ============================================================
+// 标题锚点 id 生成（渲染器与 TOC 必须共用同一套规则，否则点击定位失效）
+// 注意：markdown-it 默认不给标题渲染 id 属性，必须注入；否则
+// TOC 点击 scrollToHeading 的 querySelector 找不到目标节点。
+// ============================================================
+
+// 清洗标题里的行内 markdown 标记（粗体/斜体/链接/行内代码），
+// 使"markdown 原文"与"渲染后文本"生成一致的 slug。
+function cleanHeadingText(text) {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // 链接/图片 → 文字
+    .replace(/`([^`]*)`/g, '$1')               // 行内代码 → 文字
+    .replace(/\*\*([^*]+)\*\*/g, '$1')         // 粗体 → 文字
+    .replace(/\*([^*]+)\*/g, '$1')             // 斜体 → 文字
+}
+
+// 与 markdown-it 渲染一致的 slugify（仅保留字母数字与中文，其他转 -）
+function slugifyHeading(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fff]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// 生成带去重计数的 id 生成器：重复标题追加 -1/-2（markdown-it-anchor 同款行为）
+function makeHeadingIdGenerator() {
+  const used = new Set()
+  const gen = (text) => {
+    const base = slugifyHeading(cleanHeadingText(text)) || 'heading'
+    let id = base
+    let i = 1
+    while (used.has(id)) id = `${base}-${i++}`
+    used.add(id)
+    return id
+  }
+  gen.used = used
+  return gen
+}
+
+// 渲染器侧的 id 生成器（每次渲染前重置，与 generateToc 从零对齐）
+const nextHeadingId = makeHeadingIdGenerator()
+
+// 注入 heading id：markdown-it 默认不生成，TOC 定位依赖它
+md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const inline = tokens[idx + 1]
+  let text = ''
+  if (inline && inline.children) {
+    text = inline.children
+      .filter((c) => c.type === 'text' || c.type === 'code_inline')
+      .map((c) => c.content)
+      .join('')
+  }
+  token.attrSet('id', nextHeadingId(text))
+  return self.renderToken(tokens, idx, options)
+}
+
 const groupedDocs = computed(() => {
   const groups = new Map()
   for (const d of docs.value) {
@@ -145,6 +202,8 @@ const groupedDocs = computed(() => {
 
 const renderedHtml = computed(() => {
   if (!doc.value) return ''
+  // 重置渲染器侧 id 去重计数，与 generateToc 从零对齐
+  nextHeadingId.used.clear()
   return md.render(doc.value.content)
 })
 
@@ -152,18 +211,23 @@ const renderedHtml = computed(() => {
 function generateToc(content) {
   if (!content) return []
   const items = []
-  // 匹配 markdown 标题：行首的 # ## ###，后面跟空格和标题文字
-  const headingRe = /^(#{1,3})\s+(.+)$/gm
-  let match
-  while ((match = headingRe.exec(content)) !== null) {
+  const nextId = makeHeadingIdGenerator()
+  const lines = content.split(/\r?\n/)
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+
+    const match = /^(#{1,3})\s+(.+)$/.exec(line)
+    if (!match) continue
+
     const level = match[1].length
-    const text = match[2].trim()
-    // 生成与 markdown-it 一致的锚点 id（slugify）
-    const id = text
-      .toLowerCase()
-      .replace(/[^\w\u4e00-\u9fff]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-    items.push({ level, text, id })
+    const rawText = match[2].trim()
+    items.push({ level, text: cleanHeadingText(rawText), id: nextId(rawText) })
   }
   return items
 }

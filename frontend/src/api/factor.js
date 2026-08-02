@@ -31,9 +31,11 @@ export function seedAlpha158() {
 }
 
 
-// 补算 Alpha158 历史因子的评价指标（修复导入时未触发评价导致的指标 NULL）
-export function backfillAlpha158Metrics() {
-  return request.post('/factors/backfill-alpha158-metrics')
+// 补算 Alpha158 因子的评价指标：传 factorIds 只重算所选因子，不传则补算缺指标的
+export function backfillAlpha158Metrics(factorIds) {
+  return request.post('/factors/backfill-alpha158-metrics', null, {
+    params: { factor_ids: factorIds },
+  })
 }
 
 

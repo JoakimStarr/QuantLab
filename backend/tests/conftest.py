@@ -18,6 +18,28 @@ import pytest
 _DB_REALLY_AVAILABLE = False
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _fake_qlib_module():
+    """qlib 未安装时注入假模块，使 @patch("qlib.data.D") 类 mock 测试可运行。
+
+    qlib 依赖较重（protobuf pin / Python 版本限制），部分 CI/本地环境未安装。
+    纯 mock 测试（回测引擎等）只需 qlib 可 import，用假模块兜底；
+    真实依赖 qlib 的计算测试（因子评价等）在无 qlib 环境会被自身逻辑拒绝。
+    """
+    try:
+        import qlib  # noqa: F401
+    except ImportError:
+        import sys
+        import types
+        fake = types.ModuleType("qlib")
+        fake.__path__ = []
+        fake.data = types.ModuleType("qlib.data")
+        fake.data.D = None  # 占位：@patch("qlib.data.D") 需要目标属性存在
+        sys.modules.setdefault("qlib", fake)
+        sys.modules.setdefault("qlib.data", fake.data)
+    yield
+
+
 @pytest.fixture(scope="session")
 def _db_available() -> bool:
     """检查 DATABASE_URL 是否设置（不实际连接，避免创建临时 event loop）。"""

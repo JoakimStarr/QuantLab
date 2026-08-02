@@ -71,7 +71,8 @@ def _stock_news_em_fixed(symbol: str = "603777") -> pd.DataFrame:
         "connection": "keep-alive",
         "host": "search-api-web.eastmoney.com",
         "referer": f"https://so.eastmoney.com/news/s?keyword={symbol}",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",  # noqa: E501
+
     }
     r = requests.get(url, params=params, headers=headers, timeout=15)
     data_text = r.text

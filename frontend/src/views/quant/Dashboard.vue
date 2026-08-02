@@ -29,6 +29,7 @@
         :items="overviewItems"
         :selected="selectedIndex"
         @update:selected="selectedIndex = $event"
+        @run-stock-kline="runStockKline"
       />
 
       <KLineChart
@@ -46,6 +47,7 @@
         @update:active-indicators="activeIndicators = $event"
         @update:time-range="timeRange = $event"
         @update:custom-range="customRange = $event"
+        @run-stock-kline="runStockKline"
       />
 
       <el-row :gutter="16">
@@ -69,6 +71,7 @@
 <script setup>
 defineOptions({ name: 'Dashboard' })
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
@@ -85,10 +88,12 @@ import { listStrategies, listAllBacktestResults } from '@/api/strategy'
 import { listMiningTasks } from '@/api/mining'
 import { getQuantDataStatus } from '@/api/quant'
 import { listIndices, getIndexKline, getMarketOverview } from '@/api/market'
+import { searchStocks } from '@/api/quant'
 
 const loading = ref(true)
 const initialLoading = ref(true)
 const guideVisible = ref(false)
+const router = useRouter()
 
 const factorTotal = ref(0)
 const factorBySource = ref({ builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 })
@@ -219,6 +224,26 @@ function refreshAll() {
   loadAll()
   loadOverview()
   loadKline()
+}
+
+async function runStockKline(query) {
+  const stockQuery = String(query || '').trim()
+  if (!stockQuery) {
+    ElMessage.warning('请输入股票代码')
+    return
+  }
+
+  try {
+    const res = await searchStocks(stockQuery, 1)
+    const match = res?.items?.[0]
+    if (!match?.code) {
+      ElMessage.warning('未找到匹配的个股')
+      return
+    }
+    router.push({ name: 'QuantData', query: { preview: match.code } })
+  } catch {
+    ElMessage.error('个股搜索失败')
+  }
 }
 
 watch([selectedIndex, selectedPeriod, timeRange, customRange], () => loadKline())

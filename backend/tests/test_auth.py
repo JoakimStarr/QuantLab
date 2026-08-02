@@ -36,7 +36,7 @@ def test_login_correct_and_me(client):
     """正确口令登录拿到 token，/me 可用。"""
     from app.core.config import settings
 
-    r = client.post("/api/v1/auth/login", json={"password": settings.admin_password})
+    r = client.post("/api/v1/auth/login", json={"password": settings.security.admin_password})
     assert r.json()["ok"] is True
     token = r.json()["data"]["token"]
     r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -48,12 +48,12 @@ def test_business_endpoint_protected_when_auth_enabled(client, monkeypatch):
     """开启鉴权后：无 token 业务接口 401，带 token 200。"""
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "_auth_enabled", True)
+    monkeypatch.setattr(settings.security, "auth_enabled", True)
 
     r = client.get("/api/v1/factors")
     assert r.status_code == 401
 
-    r = client.post("/api/v1/auth/login", json={"password": settings.admin_password})
+    r = client.post("/api/v1/auth/login", json={"password": settings.security.admin_password})
     token = r.json()["data"]["token"]
     r = client.get("/api/v1/factors", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
@@ -63,7 +63,7 @@ def test_forged_token_rejected(client, monkeypatch):
     """伪造/篡改 token 应被拒绝。"""
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "_auth_enabled", True)
+    monkeypatch.setattr(settings.security, "auth_enabled", True)
     r = client.get("/api/v1/factors", headers={"Authorization": "Bearer fake.token.here"})
     assert r.status_code == 401
 
@@ -72,7 +72,7 @@ def test_default_secret_key_flagged(monkeypatch):
     """默认 SECRET_KEY 应被启动校验标记。"""
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "_secret_key", "change_this_to_random_string")
+    monkeypatch.setattr(settings.security, "secret_key", "change_this_to_random_string")
     warnings = settings.validate_security()
     assert any("SECRET_KEY" in w for w in warnings)
 

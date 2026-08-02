@@ -29,7 +29,7 @@ router.include_router(
 @router.get("/status")
 async def auth_status():
     """前端探测鉴权是否开启（公开接口，用于决定是否跳转登录页）。"""
-    return ApiResponse(ok=True, data={"auth_enabled": settings.auth_enabled})
+    return ApiResponse(ok=True, data={"auth_enabled": settings.security.auth_enabled})
 
 
 @router.get("/me")

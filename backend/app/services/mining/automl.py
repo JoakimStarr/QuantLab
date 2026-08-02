@@ -41,8 +41,91 @@ def _model_path(task_id) -> str:
     return str(MODELS_DIR / f"{task_id}.pkl")
 
 
-async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = None) -> dict:
-    """AutoML 因子组合：训练模型预测收益，综合打分作为新因子入库。"""
+async def _run_walk_forward(task_id: int, merged: pd.DataFrame, names: list,
+                            factor_ids: list[int], factor_expressions: dict,
+                            method: str, start: str, end: str) -> dict:
+    """Walk-Forward 滚动重训并入库（分数序列持久化，回测免重训直接加载）。"""
+    from lightgbm import LGBMRegressor
+
+    wf_cfg = settings.mining.get("automl", {}).get("walk_forward", {})
+    train_window = int(wf_cfg.get("train_window", 220))
+    step = int(wf_cfg.get("step", 5))
+
+    def _factory():
+        if method == "linear":
+            from sklearn.linear_model import Ridge
+            return Ridge(alpha=1.0)
+        lgb_params = dict(
+            n_estimators=int(wf_cfg.get("n_estimators", 80)),
+            max_depth=int(wf_cfg.get("max_depth", 4)),
+            learning_rate=0.05, min_child_samples=20, verbose=-1,
+        )
+        if _HAS_GPU:
+            lgb_params["device"] = "gpu"
+            lgb_params["gpu_device_id"] = 0
+        return LGBMRegressor(**lgb_params)
+
+    X = merged[names]
+    y = merged["label"]
+    scores = await asyncio.get_running_loop().run_in_executor(
+        None, walk_forward_predict, _factory, X, y, train_window, step
+    )
+
+    score_df = pd.DataFrame({"factor": scores}, index=merged.index).dropna()
+    if score_df.empty:
+        raise ValueError("Walk-Forward 无有效打分")
+
+    # 序列持久化到 bundle（回测加载直接取，无需重训）
+    model_path = _model_path(task_id)
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    import joblib
+    bundle = {
+        "method": "walk_forward",
+        "task_id": task_id,
+        "feature_names": names,
+        "factor_ids": list(factor_ids),
+        "factor_expressions": factor_expressions,
+        "trained_at": datetime.now().isoformat(),
+        "score_df": score_df,  # OOS 打分序列
+    }
+    joblib.dump(bundle, model_path)
+
+    # 样本外 IC
+    from app.services.quant.factor_eval import compute_ic
+    label_df = merged[["label"]].rename(columns={"label": "label"})
+    ic_metrics = compute_ic(score_df.rename(columns={"factor": "factor"}), label_df)
+    ic_metrics["sample"] = "out-of-sample (walk-forward)"
+    ic_metrics["wf_steps"] = int(0)
+
+    expr_repr = f"AutoML(walk_forward,{task_id})"
+    factor = await add_factor(name=f"automl_wf_{task_id}", expression=expr_repr,
+                              category="automl", description=f"Walk-Forward组合({method}) of {names[:5]}...",
+                              source_task_id=task_id, skip_validation=True)
+    await update_factor_metrics(factor["id"], ic_metrics)
+    best_ic = ic_metrics.get("ic") or 0.0
+    await _update_task(
+        task_id, status="done", candidates_generated=1, candidates_passed=1,
+        best_ic=best_ic, result_factor_ids=json.dumps([factor["id"]]),
+        finished_at=datetime.now(),
+    )
+    await _save_task_result(task_id, {
+        "model_path": model_path, "method": "walk_forward",
+        "feature_names": names, "ic_metrics": ic_metrics,
+        "wf_train_window": train_window, "wf_step": step,
+    })
+    logger.info("Walk-Forward AutoML 完成 task=%s ic=%.4f", task_id, best_ic)
+    return {"task_id": task_id, "method": "walk_forward", "factors_used": names,
+            "ic": best_ic, "factor_id": factor["id"], "ic_metrics": ic_metrics,
+            "model_path": model_path}
+
+
+async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = None,
+                           walk_forward: bool = False) -> dict:
+    """AutoML 因子组合：训练模型预测收益，综合打分作为新因子入库。
+
+    walk_forward=True 时使用 Walk-Forward 滚动重训：仅用历史窗口数据训练，
+    当日打分全部为样本外预测，从根本上避免单次切分的 in-sample 高估。
+    """
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values, load_label
 
@@ -64,7 +147,7 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
         if not factors:
             raise ValueError("未提供有效因子")
 
-        # 基础因子表达式（用于 bundle，回测时按名重建特征）
+        # 基础因子表达式（用于 bundle，回测时按表达式重建特征）
         factor_expressions = {f.name: f.expression for f in factors}
 
         # 加载各因子值（CPU 密集）
@@ -94,6 +177,10 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
         if len(merged) < 200:
             raise ValueError(f"AutoML 数据不足: {len(merged)} 行")
 
+        if walk_forward:
+            return await _run_walk_forward(task_id, merged, names, factor_ids,
+                                           factor_expressions, method, start, end)
+
         # 截面标准化
         for n in names:
             merged[n] = merged.groupby(level="datetime")[n].transform(
@@ -109,7 +196,7 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
         valid = merged[~is_train]
 
         X_tr, y_tr = train[names].values, train["label"].values
-        X_val, y_val = valid[names].values, valid["label"].values
+        X_val, _ = valid[names].values, valid["label"].values
 
         # 训练
         def _fit():
@@ -183,10 +270,6 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
         val_label_df = valid[["label"]].rename(columns={"label": "label"})
         ic_metrics = compute_ic(val_factor_df, val_label_df)
         ic_metrics["sample"] = "out-of-sample"
-        # 全量预测留作综合打分参考（不入库 IC）
-        score = model.predict(merged[names].values)
-        score_df = pd.DataFrame({"score": score}, index=merged.index)
-
         # 入库为一个“组合因子”（表达式记录模型路径引用：AutoML(method,task_id)）
         combo_desc = f"AutoML组合({method}) of {names}"
         # 表达式引用 task_id，回测引擎解析后加载 bundle 预测
@@ -309,6 +392,78 @@ def time_series_cv_eval(model_factory, X: pd.DataFrame, y: pd.Series, n_splits: 
     }
 
 
+# ---------------- Walk-Forward 滚动重训 ----------------
+
+def _zscore_by_date(df_block: pd.DataFrame) -> np.ndarray:
+    """截面标准化：按 datetime 分组，对每个特征列在组内做 z-score，返回 ndarray。"""
+    cols = df_block.columns.tolist()
+    out = df_block.groupby(level="datetime", group_keys=False).transform(
+        lambda s: (s - s.mean()) / (s.std(ddof=0) + 1e-8)
+    )
+    return out[cols].values
+
+
+def walk_forward_predict(model_factory, X: pd.DataFrame, y: pd.Series,
+                         train_window: int = 220, step: int = 5) -> pd.Series:
+    """Walk-Forward 滚动重训，逐日产生 OOS 预测打分。
+
+    对每个预测日 d，仅用 [d-train_window, d) 的窗口训练模型，预测当日。
+    全部预测均为样本外（OOS），形成连续打分序列，避免单次切分的 in-sample 高估。
+
+    Args:
+        model_factory: 无参 callable 返回新模型实例
+        X: 特征 DataFrame，index=(datetime, instrument)
+        y: 标签 Series（未来 horizon 收益），与 X 同索引
+        y_dates: 预测目标日期的 str 序列（升序）
+        train_window: 训练窗口内交易日数量
+        step: 每次滚动移动的交易日数量（越小越慢但 OOS 更连续）
+    Returns:
+        pd.Series(index=X.index, name="score")，仅含可预测日期；预测不到的行为 NaN
+    """
+    order = X.index.get_level_values("datetime")
+    uniq = pd.Index(np.unique(order)).sort_values()
+
+    # 预先按日期映射行号，避免每个 step 全表扫描
+    date_to_rows = {}
+    for dt in uniq:
+        date_to_rows[str(dt.date())] = order.values == dt
+    preds = np.full(len(X), np.nan)
+    n_step = 0
+    for i in range(train_window, len(uniq), step):
+        window_dates = uniq[i - train_window:i]
+        mask = np.zeros(len(X), dtype=bool)
+        for d in window_dates:
+            mask |= date_to_rows[str(d.date())]
+        X_train = X.loc[mask]
+        X_train_s = _zscore_by_date(X_train)
+        X_train_s[~np.isfinite(X_train_s)] = 0.0
+        y_train = y.loc[mask].values
+        model = model_factory()
+        model.fit(X_train_s, y_train)
+        n_step += 1
+        for k in range(step):
+            j = i + k
+            if j >= len(uniq):
+                break
+            tgt_mask = date_to_rows[str(uniq[j].date())]
+            if tgt_mask.any():
+                X_pred = X.loc[tgt_mask]
+                X_pred_s = _zscore_by_date(X_pred).copy()
+                X_pred_s[~np.isfinite(X_pred_s)] = 0.0
+                preds[tgt_mask] = model.predict(X_pred_s)
+    out = pd.Series(preds, index=X.index, name="score")
+    # 统一为 qlib 标准索引顺序 (datetime, instrument)：vbt/qlib 回测都依赖该顺序
+    if "datetime" in out.index.names and out.index.names[0] != "datetime":
+        df = out.reset_index()
+        names = list(out.index.names)
+        dt_pos = names.index("datetime")
+        new_names = [names[dt_pos]] + [n for n in names if n != "datetime"]
+        out = df.set_index(new_names)["score"].sort_index()
+    logger.info("Walk-Forward 完成: 训练 %d 个滚动模型，覆盖 %d 个交易日",
+                n_step, len(uniq) - train_window)
+    return out
+
+
 async def _save_task_result(task_id: int, result: dict) -> None:
     """将结果（SHAP/模型路径等）合并写入 mining_task.params.result。
 
@@ -324,4 +479,3 @@ async def _save_task_result(task_id: int, result: dict) -> None:
         params["result"].update(json.loads(json.dumps(result, default=str)))
         t.params = json.dumps(params, ensure_ascii=False)
         await session.commit()
-

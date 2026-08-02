@@ -33,7 +33,7 @@ app:
   description: 自用量化研究工具 - 因子挖掘、回测与策略管理
   name: QuantLab
   timezone: Asia/Shanghai
-  version: 2.6.0
+  version: 3.0.2
 data:
   db_path: data/quantlab.db
   models_dir: models
@@ -89,14 +89,17 @@ mining:
     - $volume
     - $factor
     candidates_per_run: 10
+    diversity_max_factors: 20
     eval_timeout_seconds: 60
     ic_threshold: 0.03
+    significance_alpha: 0.05
   symbolic:
     generations: 30
     ic_threshold: 0.03
     parsimony_coefficient: 0.001
     population: 1000
     tournament_size: 20
+    init_depth: [2, 4]
   text:
     max_news_per_day: 50
     sentiment_labels:

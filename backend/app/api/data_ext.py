@@ -1,6 +1,7 @@
 """数据管理扩展 API：同步进度、数据预览、同步历史、数据源切换"""
 import logging
 import os
+import re
 from datetime import datetime
 from fastapi import APIRouter, Query, Depends, BackgroundTasks
 from sqlalchemy import select
@@ -16,6 +17,36 @@ from app.services.data.eod_incremental import incremental_sync_eod
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
+_stock_catalog_cache: list[dict] | None = None
+_stock_catalog_updated_at: datetime | None = None
+
+
+def _normalize_search_text(text: str) -> str:
+    return re.sub(r"\s+", "", (text or "")).lower()
+
+
+def _get_name_keys(name: str) -> tuple[str, str]:
+    try:
+        from pypinyin import Style, lazy_pinyin
+
+        initials = "".join(lazy_pinyin(name, style=Style.FIRST_LETTER))
+        pinyin = "".join(lazy_pinyin(name))
+        return initials.lower(), pinyin.lower()
+    except Exception:
+        return "", ""
+
+
+async def _get_stock_catalog() -> list[dict]:
+    global _stock_catalog_cache, _stock_catalog_updated_at
+    if _stock_catalog_cache and _stock_catalog_updated_at and (datetime.now() - _stock_catalog_updated_at).seconds < 3600:
+        return _stock_catalog_cache
+
+    from app.services.quant.data_adapter import get_stock_list
+
+    items = await get_stock_list()
+    _stock_catalog_cache = items
+    _stock_catalog_updated_at = datetime.now()
+    return items
 
 
 @router.get("/sync-progress")
@@ -106,6 +137,62 @@ async def data_preview_api(
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, _load)
     return ApiResponse(ok=True, data={"items": data, "code": code.upper(), "count": len(data)})
+
+
+@router.get("/stocks/search")
+async def search_stocks_api(
+    q: str = Query(..., min_length=1, description="股票名称 / 首字母 / 代码"),
+    limit: int = Query(20, ge=1, le=50, description="返回条数上限"),
+):
+    """搜索 A 股：支持中文名称、拼音首字母和股票代码。"""
+    q_norm = _normalize_search_text(q)
+    if not q_norm:
+        return ApiResponse(ok=True, data={"items": [], "query": q, "count": 0})
+
+    catalog = await _get_stock_catalog()
+    matches: list[dict] = []
+    for item in catalog:
+        code = str(item.get("code", "")).strip().lower()
+        name = str(item.get("name", "")).strip()
+        initials, pinyin = _get_name_keys(name)
+        name_norm = _normalize_search_text(name)
+
+        score = -1
+        if q_norm == code:
+            score = 1000
+        elif q_norm == name_norm:
+            score = 950
+        elif q_norm == initials:
+            score = 900
+        elif code.startswith(q_norm):
+            score = 850
+        elif name_norm.startswith(q_norm):
+            score = 800
+        elif initials.startswith(q_norm):
+            score = 760
+        elif q_norm in code:
+            score = 700
+        elif q_norm in name_norm:
+            score = 650
+        elif q_norm in initials:
+            score = 600
+        elif q_norm in pinyin:
+            score = 550
+
+        if score < 0:
+            continue
+
+        matches.append({
+            "code": item.get("code"),
+            "name": name,
+            "qlib_code": item.get("qlib_code"),
+            "initials": initials,
+            "pinyin": pinyin,
+            "score": score,
+        })
+
+    matches.sort(key=lambda x: (-x["score"], x["code"]))
+    return ApiResponse(ok=True, data={"items": matches[:limit], "query": q, "count": len(matches)})
 
 
 @router.get("/sync-history")
@@ -271,6 +358,7 @@ async def sync_industry_api():
         "message": "行业同步暂未开放，后期规划",
         "status": 503,
     })
+
 
 @router.get("/sync-path-prediction")
 async def sync_path_prediction_api():

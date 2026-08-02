@@ -188,6 +188,8 @@ def _read_instruments(provider_uri: str, universe: str):
             seen.add(c)
             codes.append(c)
     return codes
+
+
 def _qlib_code_to_akshare(qlib_code: str):
     """qlib 代码转 akshare 代码
 
@@ -287,7 +289,7 @@ def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
 
 
 def _gen_candidate_dates(start_date, end_date,
-                            old_calendar: list, overwrite: bool) -> list:
+                         old_calendar: list, overwrite: bool) -> list:
     """生成候选同步日期（YYYY-MM-DD）。
 
     遍历 [start_date, end_date] 区间内的工作日；overwrite=False 时跳过日历已有日期，
@@ -376,7 +378,7 @@ def incremental_sync_eod_baostock(
         if date not in cal_set:
             all_new_dates.add(date)
         _up(pct=10 + (date_idx + 1) / total_dates * 50,
-            status="running", message=f"baostock 拉取 {date} ({date_idx+1}/{total_dates})")
+            status="running", message=f"baostock 拉取 {date} ({date_idx + 1}/{total_dates})")
 
         # 代码转换：sh.600000 -> sh600000，并过滤到股票池
         df_all = df_all.copy()
@@ -438,7 +440,7 @@ def incremental_sync_eod_baostock(
         if (stock_idx + 1) % 200 == 0 or stock_idx + 1 == total_stocks:
             _up(pct=60 + (stock_idx + 1) / total_stocks * 30,
                 status="running",
-                message=f"baostock 写入 {stock_idx+1}/{total_stocks} (成功{success_count})")
+                message=f"baostock 写入 {stock_idx + 1}/{total_stocks} (成功{success_count})")
 
     # 更新日历（合并新日期）
     new_dates_sorted = sorted(all_new_dates)
@@ -650,7 +652,7 @@ async def _incremental_sync_eod_akshare(
                         i + 1, len(codes), success_count, fail_count, skip_count)
             _up(pct=10 + (i + 1) / len(codes) * 80,
                 status="running",
-                message=f"akshare 同步 {i+1}/{len(codes)} (成功{success_count},失败{fail_count})")
+                message=f"akshare 同步 {i + 1}/{len(codes)} (成功{success_count},失败{fail_count})")
 
     # 更新日历（合并新日期）
     new_dates_sorted = sorted(all_new_dates)

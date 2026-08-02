@@ -41,6 +41,7 @@ data/*.db
 data/qlib_bin/
 data/raw/
 data/processed/
+data/models/
 
 # Python 缓存
 __pycache__/

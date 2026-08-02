@@ -62,7 +62,7 @@ def sync_industry_data() -> dict:
             json.dump(industry_map, f, ensure_ascii=False, indent=2)
 
         logger.info("行业分类同步完成: %d 个行业, %d 只股票",
-                     len(set(industry_map.values())), len(industry_map))
+                    len(set(industry_map.values())), len(industry_map))
 
         return {
             "ok": True,

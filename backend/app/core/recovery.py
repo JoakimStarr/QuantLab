@@ -161,6 +161,7 @@ async def reap_stale_mining():
             await session.commit()
             logger.info("reaper: 共回收 %d 个僵尸挖掘任务", len(stale))
 
+
 async def rerun_pending_mining() -> None:
     """重启后重跑状态为 pending/running 的挖掘任务（进程崩溃恢复）。
 
@@ -209,6 +210,7 @@ async def _resubmit_mining(task_id: int, task_type: str, params_json: str) -> No
     except Exception:
         params = {}
     # 根据类型派发（与 api/mining.py 保持一致的入口）
+
     async def _run():
         try:
             if task_type == "llm":
@@ -218,10 +220,15 @@ async def _resubmit_mining(task_id: int, task_type: str, params_json: str) -> No
                 await mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n_candidates)
             elif task_type == "symbolic":
                 from app.services.mining.symbolic import mine_with_symbolic
-                await mine_with_symbolic(task_id, **{k: v for k, v in params.items() if k in ("n_candidates", "ic_threshold")})
+                mine_params = {
+                    k: v for k, v in params.items() if k in ("n_candidates", "ic_threshold")
+                }
+                await mine_with_symbolic(task_id, **mine_params)
             elif task_type == "automl":
                 from app.services.mining.automl import mine_with_automl
-                await mine_with_automl(task_id, **{k: v for k, v in params.items() if k in ("factor_ids", "method")})
+                kwargs = {k: v for k, v in params.items() if k in ("factor_ids", "method")}
+                kwargs["walk_forward"] = bool(params.get("walk_forward", False))
+                await mine_with_automl(task_id, **kwargs)
             elif task_type == "text":
                 from app.services.mining.text_factor import mine_with_text
                 await mine_with_text(task_id, **{k: v for k, v in params.items() if k in ("max_news_per_day",)})

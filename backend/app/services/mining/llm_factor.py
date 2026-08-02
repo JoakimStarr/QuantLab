@@ -18,7 +18,9 @@ from app.core.config import settings
 from app.core.gpu_utils import is_gpu_available
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.library import add_factor, add_factors_batch, update_factor_metrics
+from app.core.executor import run_cpu
 from app.services.mining.task_utils import update_task_status as _update_task
+from app.services.quant.factor_validator import bh_corrected_pvalues
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,43 @@ async def _call_llm(messages: list) -> list[dict]:
     return content
 
 
+async def _load_existing_ic_series() -> list:
+    """加载因子库中已达标（|IC|>=阈值）因子的 IC 序列，用于多样性检测。
+
+    - 只取 llm/symbolic 挖掘因子（Alpha158 基准因子量大且相关性高，不参与去重）
+    - 数量上限 diversity_max_factors（默认 20），带内存缓存，重复挖掘不重复计算
+    """
+    from sqlalchemy import select, func
+    from app.core.database import async_session
+    from app.models.factor import Factor
+    from app.services.quant.factor_validator import compute_existing_ic_series
+
+    mining_cfg = settings.mining.get("llm", {})
+    threshold = mining_cfg.get("ic_threshold", 0.03)
+    limit = mining_cfg.get("diversity_max_factors", 20)
+    period = settings.quant.get("default_backtest_period", {})
+    start = period.get("start", "2020-01-01")
+    end = period.get("end", "2024-12-31")
+    horizon = mining_cfg.get("eval_horizon", 5)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Factor.expression)
+            .where(Factor.status == "active")
+            .where(Factor.category.in_(["llm", "symbolic"]))
+            .where(func.abs(Factor.ic) >= threshold)
+            .limit(limit)
+        )
+        exprs = [r[0] for r in result.all()]
+    if not exprs:
+        logger.info("无已达标因子，本次跳过多样性检测")
+        return []
+
+    series_list = await run_cpu(compute_existing_ic_series, exprs, start, end, horizon=horizon)
+    logger.info("多样性检测: 加载 %d 个已有因子 IC 序列", len(series_list))
+    return series_list
+
+
 async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
     """LLM 因子挖掘主流程（并行IC评价 + 批量入库）。
 
@@ -80,6 +119,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
     mining_cfg = settings.mining.get("llm", {})
     n_candidates = n_candidates or mining_cfg.get("candidates_per_run", 10)
     ic_threshold = mining_cfg.get("ic_threshold", 0.03)
+    significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     allowed_ops = mining_cfg.get("allowed_ops", [])
     fields = ["$open", "$close", "$high", "$low", "$volume", "$amount", "$factor"]
 
@@ -119,10 +159,30 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
 
         # Phase 2: 并行多维验证（进程池，asyncio.gather 并行等待）
         logger.info("并行评价 %d 个候选因子（多维验证: 样本分割+统计显著性+滚动IC）", len(valid))
+        # 多样性检测：加载已有因子 IC 序列（缓存，仅需一次）
+        existing_ic_series = await _load_existing_ic_series()
         eval_results = await asyncio.gather(
-            *[_evaluate_with_validation(v["expression"]) for v in valid],
+            *[_evaluate_with_validation(v["expression"], existing_ic_series=existing_ic_series)
+              for v in valid],
             return_exceptions=True,
         )
+
+        # Phase 2.5: BH 多重检验校正（避免多次试验下的假阳性）
+        p_vals = [
+            None if isinstance(r, Exception) else (r.get("significance") or {}).get("p_value")
+            for r in eval_results
+        ]
+        p_adj = bh_corrected_pvalues(p_vals)
+        for i, pa in enumerate(p_adj):
+            if isinstance(eval_results[i], Exception) or pa is None:
+                continue
+            r = eval_results[i]
+            # 复制避免污染 IC 缓存对象（p_adj 依赖本批候选集合）
+            eval_results[i] = {
+                **r,
+                "significance": {**(r.get("significance") or {}), "p_adj": pa},
+                "p_adj": pa,
+            }
 
         # Phase 3: 筛选通过验证的因子（使用 valid_ic 作为主筛选指标）
         passed = []  # [(candidate, metrics), ...]
@@ -131,20 +191,26 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
             if isinstance(result, Exception):
                 logger.warning("因子 %s 评价失败: %s", v["name"], result)
                 continue
+            # BH 校正后显著性（无 p 值视为未通过多重检验保护，但保留兜底路径）
+            sig = result.get("significance") or {}
+            p_adj_val = sig.get("p_adj")
+            bh_ok = p_adj_val is None or p_adj_val < significance_alpha
+            if not bh_ok:
+                logger.info("因子 %s 未通过 BH 多重检验校正: p_adj=%s", v["name"], p_adj_val)
             # 使用 valid_ic 作为主筛选指标
             valid_ic = result.get("valid_ic")
-            if result.get("passed") and valid_ic is not None and abs(valid_ic) >= ic_threshold:
+            if result.get("passed") and valid_ic is not None and abs(valid_ic) >= ic_threshold and bh_ok:
                 passed.append((v, result))
                 if abs(valid_ic) > abs(best_ic):
                     best_ic = valid_ic
             else:
                 reasons = result.get("fail_reasons", [])
                 logger.info("因子 %s 未通过验证: valid_ic=%s, 原因: %s",
-                           v["name"], valid_ic, "; ".join(reasons[:3]))
-                # 兜底：如果 valid_ic 不可用，回退到全样本 IC
+                            v["name"], valid_ic, "; ".join(reasons[:3]))
+                # 兜底：如果 valid_ic 不可用，回退到全样本 IC（仍受 BH 校正约束）
                 if not any("valid_ic" in r for r in reasons):
                     ic = result.get("ic")
-                    if ic is not None and abs(ic) >= ic_threshold:
+                    if ic is not None and abs(ic) >= ic_threshold and bh_ok:
                         logger.info("因子 %s 全样本 IC=%s 达标，作为后备", v["name"], ic)
                         passed.append((v, result))
                         if abs(ic) > abs(best_ic):
@@ -255,6 +321,7 @@ async def iterative_mine_factors(
     """
     mining_cfg = settings.mining.get("llm", {})
     ic_threshold = template.get("ic_threshold") or mining_cfg.get("ic_threshold", 0.03)
+    significance_alpha = mining_cfg.get("significance_alpha", 0.05)
 
     all_best = []
     rounds_history = []
@@ -262,6 +329,7 @@ async def iterative_mine_factors(
     prev_expressions = []
     generated_total = 0
     persisted_ids = []
+    existing_ic_series = None  # 懒加载：仅当存在候选时才计算
 
     if task_id is not None:
         await _update_task(task_id, status="running", started_at=datetime.now())
@@ -299,7 +367,10 @@ async def iterative_mine_factors(
                 except ExpressionValidationError as e:
                     logger.info("迭代因子 %s 沙箱拒绝: %s", name, e)
                     continue
-                if _is_duplicate(expr, [e for e in prev_expressions] + [v["expression"] for v in valid_exprs] + [b["expression"] for b in all_best]):
+                known = [e for e in prev_expressions]
+                known += [v["expression"] for v in valid_exprs]
+                known += [b["expression"] for b in all_best]
+                if _is_duplicate(expr, known):
                     continue
                 valid_exprs.append({"name": name, "expression": expr, "description": c.get("description", "")})
 
@@ -307,21 +378,46 @@ async def iterative_mine_factors(
             round_results = []
             best_ic = 0.0
             if valid_exprs:
+                # 多样性检测序列懒加载一次（复用已有因子库）
+                if existing_ic_series is None:
+                    existing_ic_series = await _load_existing_ic_series()
                 eval_results = await asyncio.gather(
-                    *[_evaluate_safe_cached(v["expression"]) for v in valid_exprs],
+                    *[_evaluate_safe_cached(v["expression"], existing_ic_series=existing_ic_series)
+                      for v in valid_exprs],
                     return_exceptions=True,
                 )
+                # BH 多重检验校正
+                p_vals = [
+                    None if isinstance(r, Exception) else (r.get("significance") or {}).get("p_value")
+                    for r in eval_results
+                ]
+                p_adj = bh_corrected_pvalues(p_vals)
+                for i, pa in enumerate(p_adj):
+                    if isinstance(eval_results[i], Exception) or pa is None:
+                        continue
+                    r = eval_results[i]
+                    eval_results[i] = {
+                        **r,
+                        "significance": {**(r.get("significance") or {}), "p_adj": pa},
+                        "p_adj": pa,
+                    }
                 for v, ic_result in zip(valid_exprs, eval_results):
                     if isinstance(ic_result, Exception):
                         logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
                         continue
+                    # BH 校正后显著性约束
+                    sig = ic_result.get("significance") or {}
+                    p_adj_val = sig.get("p_adj")
+                    bh_ok = p_adj_val is None or p_adj_val < significance_alpha
                     # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
                     valid_ic = ic_result.get("valid_ic")
                     if ic_result.get("passed") and valid_ic is not None and abs(valid_ic) >= ic_threshold:
                         pass
                     else:
                         valid_ic = ic_result.get("ic") or 0.0
-                        if abs(valid_ic) < ic_threshold:
+                        if abs(valid_ic) < ic_threshold or not bh_ok:
+                            if not bh_ok:
+                                logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
                             continue
                         # 未通过验证但全样本 IC 达标，作为后备
                         logger.info("因子 %s 未通过多维验证，全样本 IC=%s 达标作为后备",
@@ -423,12 +519,13 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
     )
 
 
-async def _evaluate_with_validation(expr: str) -> dict:
+async def _evaluate_with_validation(expr: str, existing_ic_series: list = None) -> dict:
     """在进程池中运行多维因子验证，带超时保护。
 
     使用 evaluate_factor_with_validation 替代旧的 evaluate_factor：
     - 样本分割：train/valid/test
     - 滚动 IC + 统计显著性
+    - 多样性检测（existing_ic_series）
     - 使用 valid_ic 作为主筛选指标
     """
     from app.services.quant.factor_validator import evaluate_factor_with_validation
@@ -439,18 +536,19 @@ async def _evaluate_with_validation(expr: str) -> dict:
     timeout = settings.mining.get("llm", {}).get("eval_timeout_seconds", 120)
     from app.core.executor import run_cpu
     return await asyncio.wait_for(
-        run_cpu(evaluate_factor_with_validation, expr, start, end, horizon=horizon),
+        run_cpu(evaluate_factor_with_validation, expr, start, end,
+                horizon=horizon, existing_ic_series=existing_ic_series),
         timeout=timeout,
     )
 
 
-def _ic_cache_key(expr: str) -> str:
-    """生成 IC 缓存 key：表达式 + 评价区间 + horizon。"""
+def _ic_cache_key(expr: str, diversity: bool = False) -> str:
+    """生成 IC 缓存 key：表达式 + 评价区间 + horizon + 多样性状态。"""
     period = settings.quant.get("default_backtest_period", {})
     start = period.get("start", "2020-01-01")
     end = period.get("end", "2024-12-31")
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
-    raw = f"{expr}|{start}|{end}|{horizon}"
+    raw = f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -459,13 +557,17 @@ def _ic_cache_put(key: str, value: dict) -> None:
     _IC_CACHE[key] = value
 
 
-async def _evaluate_safe_cached(expr: str) -> dict:
-    """带内存缓存的因子评价（使用 evaluate_factor_with_validation）。"""
-    key = _ic_cache_key(expr)
+async def _evaluate_safe_cached(expr: str, existing_ic_series: list = None) -> dict:
+    """带内存缓存的因子评价（使用 evaluate_factor_with_validation）。
+
+    缓存 key 包含多样性状态：启用多样性检测与未启用的结果分开缓存，
+    避免复用旧缓存导致多样性约束失效。
+    """
+    diversity = bool(existing_ic_series)
+    key = _ic_cache_key(expr, diversity=diversity)
     if key in _IC_CACHE:
         logger.debug("IC 缓存命中: %s", expr[:40])
         return _IC_CACHE[key]
-    result = await _evaluate_with_validation(expr)
+    result = await _evaluate_with_validation(expr, existing_ic_series=existing_ic_series)
     _ic_cache_put(key, result)
     return result
-

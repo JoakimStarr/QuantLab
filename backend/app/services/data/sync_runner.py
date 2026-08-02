@@ -5,7 +5,7 @@ api 层与 recovery 层均通过本模块触发后台同步。
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from sqlalchemy import select
 
@@ -27,7 +27,7 @@ def collect_qlib_stats(qlib_dir: str) -> dict:
     latest_date = None
     day_txt = base / "calendars" / "day.txt"
     if day_txt.exists():
-        lines = [l.strip() for l in day_txt.read_text(encoding="utf-8").splitlines() if l.strip()]
+        lines = [line.strip() for line in day_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
         if lines:
             latest_date = lines[-1]
     inst_dir = base / "instruments"
@@ -35,7 +35,7 @@ def collect_qlib_stats(qlib_dir: str) -> dict:
     row_count = 0
     if inst_dir.exists():
         for txt in sorted(inst_dir.glob("*.txt")):
-            n = sum(1 for l in txt.read_text(encoding="utf-8").splitlines() if l.strip())
+            n = sum(1 for line in txt.read_text(encoding="utf-8").splitlines() if line.strip())
             row_count += n
             if txt.name == "all.txt":
                 stock_count = n
@@ -51,7 +51,7 @@ def _detect_local_latest_date(qlib_dir: str) -> str | None:
     cal_path = Path(qlib_dir) / "calendars" / "day.txt"
     if not cal_path.exists():
         return None
-    lines = [l.strip() for l in cal_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [line.strip() for line in cal_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return lines[-1] if lines else None
 
 

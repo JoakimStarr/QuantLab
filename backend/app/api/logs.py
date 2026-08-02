@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 # 允许查询的日志文件白名单
-_ALLOWED_FILES = {"app.log", "error.log", "api.jsonl", "perf.jsonl", "audit.jsonl"}
+_ALLOWED_FILES = {"app.log", "error.log", "quantlab.log", "api.jsonl", "perf.jsonl", "audit.jsonl"}
 
 # 文本日志行正则: "2026-07-28 15:34:23,123 [INFO] app.module: message [req=xxx]"
 _TEXT_LOG_RE = re.compile(
@@ -60,6 +60,11 @@ async def get_logs(
         return ApiResponse(ok=True, data={"items": [], "total": 0, "file": file})
 
     is_json = file.endswith(".jsonl")
+    # 探测文件头部是否为 JSON 行（structlog JSON 格式化写出的 .log 文件同样适用）
+    if not is_json and fp.exists() and fp.stat().st_size > 0:
+        with open(fp, "r", encoding="utf-8", errors="replace") as f:
+            first = f.readline().strip()
+        is_json = first.startswith("{") and first.endswith("}")
     entries = _read_log_file(fp, is_json, limit + offset)
 
     # 过滤

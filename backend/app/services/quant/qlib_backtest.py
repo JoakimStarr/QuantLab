@@ -19,6 +19,90 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _position_dates_mapping(positions_normal) -> list:
+    """返回按日期排序的 (date, Position) 对；兼容 dict / Series / DataFrame。"""
+    if isinstance(positions_normal, pd.DataFrame):
+        entries = [(idx, row["position"]) for idx, row in positions_normal.iterrows()]
+    elif isinstance(positions_normal, pd.Series):
+        entries = list(positions_normal.items())
+    elif isinstance(positions_normal, dict):
+        entries = list(positions_normal.items())
+    else:
+        return []
+    return [(k, v) for k, v in entries if v is not None]
+
+
+def extract_trades_from_positions(positions_normal, topk: int = None) -> list:
+    """从逐日持仓快照差分还原逐笔成交明细。
+
+    QLib 不直接导出 order 明细，从相邻持仓快照 diff 得到：
+    - 数量增加 → BUY（含新进建仓）
+    - 数量减少或清仓 → SELL
+    成交价近似为当日该持仓市价（Position.price 每日随行情更新，即 T+1 收盘成交价）。
+
+    Returns:
+        sorted trades: [{date, action, code, price, quantity, total, cost}]
+    """
+    positions = _position_dates_mapping(positions_normal)
+    cfg = settings.quant
+    cost_buy = cfg.get("cost_buy", 0.0013)
+    cost_sell = cfg.get("cost_sell", 0.0023)
+
+    trades = []
+    prev_amounts: dict = {}
+    prev_prices: dict = {}
+    for date_key, pos in positions:
+        if not hasattr(pos, "get_stock_amount_dict") or not hasattr(pos, "get_stock_price"):
+            continue
+        date_str = str(date_key)
+        try:
+            amounts = pos.get_stock_amount_dict() or {}
+        except Exception:
+            continue
+
+        for code, prev_count in prev_amounts.items():
+            cur = amounts.get(code, 0)
+            delta = prev_count - cur
+            if delta > 1e-9:
+                # 清仓/减仓：用当日价（若已清仓则用上日价近似）
+                price = float(pos.get_stock_price(code)) if code in amounts else prev_prices.get(code, 0.0)
+                value = price * delta
+                trades.append({
+                    "date": date_str, "action": "SELL", "code": code, "price": round(price, 4),
+                    "quantity": round(delta, 4), "total": round(value, 2),
+                    "cost": round(value * cost_sell, 2),
+                })
+        for code, cur_count in amounts.items():
+            prev_count = prev_amounts.get(code, 0)
+            delta = cur_count - prev_count
+            if delta > 1e-9:
+                price = float(pos.get_stock_price(code))
+                value = price * delta
+                trades.append({
+                    "date": date_str, "action": "BUY", "code": code, "price": round(price, 4),
+                    "quantity": round(delta, 4), "total": round(value, 2),
+                    "cost": round(value * cost_buy, 2),
+                })
+        prev_amounts = amounts
+        prev_prices = {c: float(pos.get_stock_price(c)) for c in amounts}
+
+    trades.sort(key=lambda t: (t["date"], t["action"], t["code"]))
+    return trades
+
+
+def normalize_benchmark(code: str = None) -> str:
+    """将 benchmark 代码归一化为 qlib 格式（SH000300）。
+
+    前端/用户常传 "000300.SH"（Wind 风格），qlib 数据 instruments 用 "SH000300"。
+    """
+    code = code or settings.quant.get("benchmark", "SH000300")
+    if code and "." in code:
+        sym, market = code.split(".", 1)
+        if market.upper() in ("SH", "SZ", "BJ"):
+            return f"{market.upper()}{sym}"
+    return code
+
+
 def run_qlib_backtest(
     score_df: pd.DataFrame,
     start: str = None,
@@ -54,7 +138,7 @@ def run_qlib_backtest(
     end = end or period.get("end", "2024-12-31")
     topk = topk or settings.quant.get("topk", 50)
     n_drop = n_drop or settings.quant.get("n_drop", 5)
-    benchmark = benchmark or settings.quant.get("benchmark", "SH000300")
+    benchmark = normalize_benchmark(benchmark)
     cost_buy = settings.quant.get("cost_buy", 0.0013)
     cost_sell = settings.quant.get("cost_sell", 0.0023)
     slippage_bps = settings.quant.get("slippage_bps", 0)
@@ -124,10 +208,16 @@ def run_qlib_backtest(
         bench = bench.dropna()
     turnover = float(report_normal["turnover"].mean()) if "turnover" in report_normal else None
 
+    # 逐笔成交明细：从持仓快照差分还原 BUY/SELL 动作
+    trades = []
+    try:
+        trades = extract_trades_from_positions(positions_normal)
+    except Exception as e:
+        logger.warning("还原成交明细失败，trades 置空: %s", e)
+
     # portfolios: 前5个调仓日持仓快照（与 run_backtest 对齐）
     portfolios = []
-    for date_key in list(positions_normal.keys())[:5]:
-        pos = positions_normal[date_key]
+    for date_key, pos in _position_dates_mapping(positions_normal)[:5]:
         holdings = {}
         try:
             # QLib Position 对象: get_stock_list() 返回 {instrument: amount}
@@ -136,13 +226,14 @@ def run_qlib_backtest(
                 holdings[str(inst_key)] = float(amount)
         except Exception as e:
             logger.debug("解析持仓失败 date=%s: %s", date_key, e)
-        portfolios.append({"date": date_key, "holdings": holdings})
+        portfolios.append({"date": str(date_key), "holdings": holdings})
 
     return {
         "returns": returns,
         "benchmark": bench,
         "turnover": turnover,
         "portfolios": portfolios,
+        "trades": trades,
         "start_date": start,
         "end_date": end,
         "topk": topk,

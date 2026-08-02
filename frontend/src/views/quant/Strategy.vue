@@ -110,6 +110,66 @@
         <v-chart v-if="hasChart" :option="chartOption" class="chart-body" autoresize />
         <el-empty v-else description="暂无净值数据" :image-size="64" />
       </section>
+
+      <!-- 回测动作与行为：逐笔成交明细 -->
+      <section class="chart-card" v-if="hasTrades">
+        <div class="chart-header">
+          <h2 class="chart-title">交易明细（动作与行为）</h2>
+          <div class="chart-legend" style="gap: 16px;">
+            <span class="legend-item">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--success);margin-right:6px;"></span>
+              买入 {{ tradeStats.buys }}
+            </span>
+            <span class="legend-item">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--danger);margin-right:6px;"></span>
+              卖出 {{ tradeStats.sells }}
+            </span>
+            <span class="legend-item">总成交额 {{ fmtMoney(tradeStats.total) }}</span>
+            <el-button size="small" @click="exportTrades">导出 CSV</el-button>
+          </div>
+        </div>
+        <div class="trades-filters">
+          <el-radio-group v-model="tradeType" size="small">
+            <el-radio-button label="all">全部</el-radio-button>
+            <el-radio-button label="BUY">买入</el-radio-button>
+            <el-radio-button label="SELL">卖出</el-radio-button>
+          </el-radio-group>
+          <el-input
+            v-model="tradeCode"
+            placeholder="搜索代码，如 SH600519"
+            size="small"
+            clearable
+            style="width: 200px;"
+          >
+            <template #prefix>🔍</template>
+          </el-input>
+        </div>
+        <el-table :data="filteredTrades" size="small" max-height="480" stripe>
+          <el-table-column prop="date" label="日期" width="100">
+            <template #default="{ row }">{{ String(row.date).slice(0, 10) }}</template>
+          </el-table-column>
+          <el-table-column label="动作" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.action === 'BUY' ? 'success' : 'danger'" size="small">
+                {{ row.action === 'BUY' ? '买入' : '卖出' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="code" label="代码" width="130" />
+          <el-table-column label="成交价" width="100" align="right">
+            <template #default="{ row }">{{ Number(row.price).toFixed(3) }}</template>
+          </el-table-column>
+          <el-table-column label="数量" width="110" align="right">
+            <template #default="{ row }">{{ fmtNum(row.quantity, 0) }}</template>
+          </el-table-column>
+          <el-table-column label="金额" width="130" align="right">
+            <template #default="{ row }">{{ fmtMoney(row.total) }}</template>
+          </el-table-column>
+          <el-table-column label="费用" width="110" align="right">
+            <template #default="{ row }">{{ fmtMoney(row.cost) }}</template>
+          </el-table-column>
+        </el-table>
+      </section>
     </template>
 
     <!-- 新建策略对话框 -->
@@ -338,6 +398,63 @@ function fmtNum(v, digits = 3) {
   return Number(v).toFixed(digits)
 }
 
+// === 交易明细（回测动作与行为） ===
+const tradeType = ref('all')
+const tradeCode = ref('')
+
+const hasTrades = computed(() => {
+  const t = currentResult.value?.trades
+  return Array.isArray(t) && t.length > 0
+})
+
+const tradeStats = computed(() => {
+  const t = currentResult.value?.trades || []
+  const buys = t.filter(x => x.action === 'BUY').length
+  const sells = t.filter(x => x.action === 'SELL').length
+  const total = t.reduce((s, x) => s + (Number(x.total) || 0), 0)
+  return { buys, sells, total }
+})
+
+const filteredTrades = computed(() => {
+  const t = currentResult.value?.trades || []
+  let list = t
+  if (tradeType.value !== 'all') {
+    list = list.filter(x => x.action === tradeType.value)
+  }
+  if (tradeCode.value) {
+    const kw = tradeCode.value.trim().toUpperCase()
+    if (kw) list = list.filter(x => String(x.code || '').toUpperCase().includes(kw))
+  }
+  return list
+})
+
+function fmtMoney(v) {
+  if (v == null || isNaN(v)) return '--'
+  const n = Number(v)
+  if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(2) + '亿'
+  if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(0) + '万'
+  return n.toFixed(0)
+}
+
+async function exportTrades() {
+  try {
+    const id = currentResult.value?.id
+    if (id == null) return
+    const { exportTrades } = await import('@/api/quant')
+    const res = await exportTrades(id)
+    // blob 下载：res.data 为 Blob（blobRequest 无统一拦截器）
+    const blob = res?.data || res
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `backtest_${id}_trades.csv`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('导出交易明细失败')
+  }
+}
+
 // === 指标卡（8张，含语义色） ===
 const metricList = computed(() => {
   const m = currentResult.value || {}
@@ -367,6 +484,7 @@ const chartOption = computed(() => {
     grid: { top: 20, right: 24, bottom: 30, left: 50 },
     tooltip: {
       trigger: 'axis',
+      axisPointer: { type: 'line', snap: true },
       backgroundColor: 'var(--bg-card)',
       borderColor: 'var(--border)',
       textStyle: { color: 'var(--text-primary)' },
@@ -402,6 +520,8 @@ const chartOption = computed(() => {
         type: 'line',
         smooth: true,
         showSymbol: false,
+        connectNulls: true,
+        emphasis: { disabled: true },
         lineStyle: { color: 'var(--primary)', width: 2 },
         areaStyle: { color: 'rgba(31, 75, 160, 0.08)' },
         itemStyle: { color: 'var(--primary)' }
@@ -412,6 +532,8 @@ const chartOption = computed(() => {
         type: 'line',
         smooth: true,
         showSymbol: false,
+        connectNulls: true,
+        emphasis: { disabled: true },
         lineStyle: { color: 'var(--text-tertiary)', width: 1.5, type: 'dashed' },
         itemStyle: { color: 'var(--text-tertiary)' }
       }
@@ -970,6 +1092,14 @@ onBeforeUnmount(() => {
 .chart-body {
   width: 100%;
   height: 320px;
+}
+
+/* 交易明细（回测动作与行为） */
+.trades-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 /* Walk-forward 样式 */

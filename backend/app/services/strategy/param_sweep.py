@@ -333,6 +333,7 @@ async def run_param_sweep(
     new_results = {}
     if pending:
         executor = get_io_executor()
+
         async def _run_one(topk, n_drop, rebalance, cache_key):
             try:
                 computed = await loop.run_in_executor(

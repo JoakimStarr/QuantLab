@@ -5,8 +5,6 @@ from typing import Optional
 import zxcvbn
 from fastapi import Request
 from fastapi_users import BaseUserManager, IntegerIDMixin, InvalidPasswordException
-from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
-
 from app.core.config import settings
 from app.models.user import User
 
@@ -16,8 +14,8 @@ logger = logging.getLogger(__name__)
 class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     """用户管理器：负责注册、密码校验、密码重置等。"""
 
-    reset_password_token_secret = settings.secret_key
-    verification_token_secret = settings.secret_key
+    reset_password_token_secret = settings.security.secret_key
+    verification_token_secret = settings.security.secret_key
 
     async def validate_password(self, password: str, user: User) -> None:
         """使用 zxcvbn 校验密码强度（score >= 2 为合格）。"""

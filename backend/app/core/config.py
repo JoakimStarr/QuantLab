@@ -5,17 +5,16 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class CompatModel(BaseModel):
-    """向后兼容层：让 Pydantic 模型同时支持属性访问（`m.universe`）和
-    旧 dict 风格的 `m.get("universe", "csi300")` 调用，避免改动 22+ 个调用点。
+class SettingsBaseModel(BaseModel):
+    """子模型基类：提供 .get() / __getitem__ / __setitem__ 兼容层。
 
-    Pydantic v2 默认禁止对模型做 `obj["key"] = value` 修改（model_config frozen），
+    替换旧 CompatModel，保留 dict 风格访问兼容性，避免改动 22+ 个调用点。
+    Pydantic v2 默认禁止对模型做 obj["key"] = value 修改（model_config frozen），
     但项目旧测试与脚本会直接修改 settings（如下调 topk 做实验），因此显式开启
     item assignment，允许运行时"借用" Pydantic 做轻量校验 + 修改。
-
-    键名既支持字段名也支持 model_extra（v2 默认丢弃未声明字段，可通过 ConfigDict 保留）。
     """
 
     model_config = {"frozen": False, "extra": "ignore"}
@@ -33,17 +32,14 @@ class CompatModel(BaseModel):
             raise KeyError(key) from e
 
     def __setitem__(self, key: str, value: Any) -> None:
-        """允许 `settings.quant["topk"] = 30` 这种旧写法（运行时改字段）。"""
-        # model_extra 未声明字段直接落到 __dict__
+        """允许 settings.quant["topk"] = 30 这种旧写法（运行时改字段）。"""
         if key in self.__class__.model_fields:
             setattr(self, key, value)
         else:
-            # 未声明字段（dict 类型的子段）允许直接赋值
-            # Pydantic v2 不支持 extra 写入，用私有 __dict__
             self.__dict__[key] = value
 
 
-class AppSettings(CompatModel):
+class AppSettings(SettingsBaseModel):
     name: str = "QuantLab"
     version: str = "0.0.0"
     description: str = ""
@@ -51,14 +47,14 @@ class AppSettings(CompatModel):
     debug: bool = False
 
 
-class DataSettings(CompatModel):
+class DataSettings(SettingsBaseModel):
     db_path: str = "data/quantlab.db"
     models_dir: str = "models"
     processed_dir: str = "data/processed"
     raw_dir: str = "data/raw"
 
 
-class AIProviderEndpoint(CompatModel):
+class AIProviderEndpoint(SettingsBaseModel):
     provider: str = ""
     base_url: str = ""
     model: str = ""
@@ -67,7 +63,7 @@ class AIProviderEndpoint(CompatModel):
     temperature: float = 0.3
 
 
-class AIProviderSettings(CompatModel):
+class AIProviderSettings(SettingsBaseModel):
     primary: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
     fallback: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
     tertiary: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
@@ -78,7 +74,7 @@ class AIProviderSettings(CompatModel):
     total_timeout_seconds: int = 10
 
 
-class APISettings(CompatModel):
+class APISettings(SettingsBaseModel):
     request_timeout: int = 30
     version: str = "v1"
     cors_origins: list[str] = Field(
@@ -89,22 +85,23 @@ class APISettings(CompatModel):
     )
 
 
-class SchedulerSettings(CompatModel):
+class SchedulerSettings(SettingsBaseModel):
     quant_data_update_time: str = "18:00"
 
 
-class RedisSettings(CompatModel):
+class RedisSettings(SettingsBaseModel):
     """Redis 连接配置"""
+
     url: str = ""
     enabled: bool = False
 
 
-class LoggingSettings(CompatModel):
+class LoggingSettings(SettingsBaseModel):
     dir: str = "logs"
     level: str = "INFO"
 
 
-class QuantSettings(CompatModel):
+class QuantSettings(SettingsBaseModel):
     adjust: str = "qfq"
     benchmark: str = "SH000300"
     cost_buy: float = 0.0013
@@ -154,19 +151,19 @@ class QuantSettings(CompatModel):
     auto_retry_sync: bool = False
 
 
-class MiningSettings(CompatModel):
+class MiningSettings(SettingsBaseModel):
     automl: dict[str, Any] = Field(default_factory=lambda: {"combo_method": "lightgbm"})
     llm: dict[str, Any] = Field(
         default_factory=lambda: {
             "candidates_per_run": 10,
             "eval_timeout_seconds": 60,
             "ic_threshold": 0.03,
-            "eval_horizon": 5,  # 预测周期（标签前向收益天数）
-            "significance_alpha": 0.05,  # 统计显著性水平
-            "stability_threshold": 0.5,  # IC 稳定性阈值（IC/IC_std）
-            "positive_ratio_threshold": 0.55,  # IC > 0 占比阈值
-            "decay_threshold": -0.01,  # IC 衰减阈值
-            "diversity_threshold": 0.8,  # 因子多样性相关阈值
+            "eval_horizon": 5,
+            "significance_alpha": 0.05,
+            "stability_threshold": 0.5,
+            "positive_ratio_threshold": 0.55,
+            "decay_threshold": -0.01,
+            "diversity_threshold": 0.8,
             "allowed_ops": [
                 "Ref",
                 "Mean",
@@ -208,7 +205,7 @@ class MiningSettings(CompatModel):
     )
 
 
-class TaskSettings(CompatModel):
+class TaskSettings(SettingsBaseModel):
     cpu_workers: int = 4
     io_workers: int = 8
     max_concurrent: int = 2
@@ -225,7 +222,7 @@ class TaskSettings(CompatModel):
     )
 
 
-class SecuritySettings(CompatModel):
+class SecuritySettings(SettingsBaseModel):
     """安全相关配置：来自环境变量，不在 yaml 中。"""
 
     app_env: str = "development"
@@ -237,9 +234,6 @@ class SecuritySettings(CompatModel):
     access_token_expire_hours: int = 24
 
 
-# 默认 SECRET_KEY 用于检测"未配置"
-_DEFAULT_SECRET_KEY = "change_this_to_a_strong_random_string"
-_PLACEHOLDER_ADMIN_PWD = "admin123"
 _PLACEHOLDER_OPENCODEZEN = "your_opencodezen_api_key_here"
 _PLACEHOLDER_GLM = "your_glm_api_key_here"
 _PLACEHOLDER_SILICONFLOW = "your_siliconflow_api_key_here"
@@ -257,114 +251,104 @@ def _is_placeholder_key(value: str) -> bool:
     }
 
 
-class Settings:
-    """全局配置：单例模式，懒加载 .env + config.yaml。
+class Settings(BaseSettings):
+    """全局配置：基于 pydantic-settings BaseSettings，自动加载 .env + 手动加载 config.yaml。
 
-    使用 Pydantic 模型做字段类型校验与默认值兜底，
-    对外保留 `settings.<section>` 的字典式访问（`get(key, default)`）以维持向后兼容。
+    pydantic-settings 自动从 .env 和环境变量读取字段值。
+    子模型（app, quant, mining 等）从 config.yaml 加载。
+    安全配置（security）从环境变量加载。
 
     访问模式：
-        settings.app.name            # Pydantic 字段
-        settings.quant.get("universe", "csi300")  # 字典访问（向后兼容）
+        settings.app.name                 # 属性访问
+        settings.quant.get("universe", "csi300")  # dict 风格访问（向后兼容）
+        settings.security.auth_enabled    # 安全配置
     """
 
-    _instance: "Settings | None" = None
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        arbitrary_types_allowed=True,
+    )
 
-    def __new__(cls) -> "Settings":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
+    # -- 子模型（从 config.yaml 加载） --
+    app: AppSettings = AppSettings()
+    data: DataSettings = DataSettings()
+    ai_provider: AIProviderSettings = AIProviderSettings()
+    api: APISettings = APISettings()
+    scheduler: SchedulerSettings = SchedulerSettings()
+    redis: RedisSettings = RedisSettings()
+    logging: LoggingSettings = LoggingSettings()
+    quant: QuantSettings = QuantSettings()
+    mining: MiningSettings = MiningSettings()
+    task: TaskSettings = TaskSettings()
 
-    def __init__(self) -> None:
-        if getattr(self, "_initialized", False):
-            return
-        self._initialized = True
-        self._load()
+    # -- API keys（从 .env / 环境变量加载） --
+    glm_api_key: str = ""
+    siliconflow_api_key: str = ""
+    opencodezen_api_key: str = ""
 
-    # -- 加载 --
+    # -- 安全配置（从环境变量加载，不在 yaml 中） --
+    security: SecuritySettings = SecuritySettings()
 
-    def _load(self) -> None:
+    # -- 项目根目录 --
+    PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
+
+    def model_post_init(self, __context: Any) -> None:
+        """初始化后加载 yaml 和环境变量安全配置。"""
         # 显式从项目根目录加载 .env（避免 uvicorn reload / 不同 CWD 启动时找不到）
-        _project_root = Path(os.getenv("PROJECT_ROOT") or Path(__file__).resolve().parents[3])
+        _project_root = Path(os.getenv("PROJECT_ROOT") or self.PROJECT_ROOT)
         load_dotenv(_project_root / ".env", override=False)
         self.PROJECT_ROOT = _project_root
 
-        config_path = _project_root / "config.yaml"
-        cfg: dict[str, Any] = {}
-        if config_path.exists():
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
+        self._load_yaml()
+        self._load_security_from_env()
 
-        # 各 section 用 Pydantic 校验（缺失字段自动补默认，类型错误抛出清晰异常）
-        self.app = AppSettings(**(cfg.get("app") or {}))
-        self.data = DataSettings(**(cfg.get("data") or {}))
-        self.ai_provider = AIProviderSettings(**(cfg.get("ai_provider") or {}))
-        self.api = APISettings(**(cfg.get("api") or {}))
-        self.scheduler = SchedulerSettings(**(cfg.get("scheduler") or {}))
-        self.redis = RedisSettings(**(cfg.get("redis") or {}))
-        self.logging = LoggingSettings(**(cfg.get("logging") or {}))
-        self.quant = QuantSettings(**(cfg.get("quant") or {}))
-        self.mining = MiningSettings(**(cfg.get("mining") or {}))
-        self.task = TaskSettings(**(cfg.get("task") or {}))
+    def _load_yaml(self) -> None:
+        """从 config.yaml 加载子模型配置。"""
+        config_path = self.PROJECT_ROOT / "config.yaml"
+        if not config_path.exists():
+            return
+        with open(config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
 
-        # AI Provider API keys：环境变量覆盖 yaml
-        self.glm_api_key = os.getenv("GLM_API_KEY", "")
-        self.siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY", "")
-        self.opencodezen_api_key = os.getenv("OPENCODEZEN_API_KEY", "")
+        section_map = {
+            "app": "app",
+            "data": "data",
+            "ai_provider": "ai_provider",
+            "api": "api",
+            "scheduler": "scheduler",
+            "redis": "redis",
+            "logging": "logging",
+            "quant": "quant",
+            "mining": "mining",
+            "task": "task",
+        }
+        for section, field_name in section_map.items():
+            if section in cfg:
+                current = getattr(self, field_name)
+                updated = current.__class__(**(cfg[section]))
+                setattr(self, field_name, updated)
 
-        # 安全配置（仅环境变量，不写 yaml）
+    def _load_security_from_env(self) -> None:
+        """从环境变量加载安全配置。"""
         app_env = os.getenv("APP_ENV", "development").lower()
         auth_env = os.getenv("AUTH_ENABLED")
         if auth_env is not None:
             auth_enabled = auth_env.lower() in ("1", "true", "yes", "on")
         else:
             auth_enabled = app_env != "development"
-        secret_key_value = os.getenv("SECRET_KEY", "change_this_to_random_string")
-        admin_pwd_value = os.getenv("ADMIN_PASSWORD", _PLACEHOLDER_ADMIN_PWD)
-        admin_pwd_hash_value = os.getenv("ADMIN_PASSWORD_HASH", "")
         self.security = SecuritySettings(
             app_env=app_env,
             auth_enabled=auth_enabled,
-            secret_key=secret_key_value,
-            admin_password=admin_pwd_value,
-            admin_password_hash=admin_pwd_hash_value,
+            secret_key=os.getenv("SECRET_KEY", "change_this_to_random_string"),
+            admin_password=os.getenv("ADMIN_PASSWORD", "admin123"),
+            admin_password_hash=os.getenv("ADMIN_PASSWORD_HASH", ""),
             login_rate_limit=os.getenv("LOGIN_RATE_LIMIT", "5/minute"),
             access_token_expire_hours=int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", "24")),
         )
-        # 保留旧私有属性以兼容旧测试与反射访问（auth._auth_enabled 等）
-        self._auth_enabled = auth_enabled
-        self._secret_key = secret_key_value
-        self._admin_password = admin_pwd_value
-        self._admin_password_hash = admin_pwd_hash_value
-        self._app_env = app_env
 
-    # -- 向后兼容 property --
-
-    @property
-    def auth_enabled(self) -> bool:
-        # 兼容 monkeypatch.setattr(settings, "_auth_enabled", ...) 的旧测试
-        return getattr(self, "_auth_enabled", self.security.auth_enabled)
-
-    @property
-    def secret_key(self) -> str:
-        return getattr(self, "_secret_key", self.security.secret_key)
-
-    @property
-    def admin_password(self) -> str:
-        return getattr(self, "_admin_password", self.security.admin_password)
-
-    @property
-    def admin_password_hash(self) -> str:
-        return getattr(
-            self,
-            "_admin_password_hash",
-            self.security.admin_password_hash,
-        )
-
-    @property
-    def app_env(self) -> str:
-        return getattr(self, "_app_env", self.security.app_env)
+    # -- 便捷 property --
 
     @property
     def app_name(self) -> str:
@@ -397,40 +381,27 @@ class Settings:
     # -- 安全校验 --
 
     def validate_security(self) -> list[str]:
-        # 读取兼容层：monkeypatch 可改 _auth_enabled / _secret_key 等
-        auth_enabled = self.auth_enabled
-        secret_key = self.secret_key
-        admin_password = self.admin_password
-        admin_password_hash = self.admin_password_hash
-
         warnings: list[str] = []
-        if not auth_enabled:
+        if not self.security.auth_enabled:
             warnings.append("AUTH_ENABLED=false：业务接口无鉴权，仅限本地开发使用")
-        if secret_key == "change_this_to_random_string":
+        if self.security.secret_key == "change_this_to_random_string":
             warnings.append("SECRET_KEY 仍为默认值，token 可被伪造，请设置强随机值")
-        if not admin_password_hash and admin_password == _PLACEHOLDER_ADMIN_PWD:
+        if not self.security.admin_password_hash and self.security.admin_password == "admin123":
             warnings.append("ADMIN_PASSWORD 仍为默认值 admin123，请修改")
         return warnings
 
     def enforce_production_security(self) -> None:
-        # 读取兼容层
-        auth_enabled = self.auth_enabled
-        secret_key = self.secret_key
-        admin_password = self.admin_password
-        admin_password_hash = self.admin_password_hash
-        app_env = self.app_env
-
-        if app_env == "development":
+        if self.security.app_env == "development":
             return
         blockers: list[str] = []
-        if not auth_enabled:
+        if not self.security.auth_enabled:
             blockers.append("AUTH_ENABLED 必须为 true（生产环境）")
-        if secret_key in (
+        if self.security.secret_key in (
             "change_this_to_random_string",
-            _DEFAULT_SECRET_KEY,
+            "change_this_to_a_strong_random_string",
         ):
             blockers.append("SECRET_KEY 不能使用默认值，请设置强随机串")
-        if not admin_password_hash and admin_password == _PLACEHOLDER_ADMIN_PWD:
+        if not self.security.admin_password_hash and self.security.admin_password == "admin123":
             blockers.append("ADMIN_PASSWORD 不能为默认 admin123，请修改或改用 ADMIN_PASSWORD_HASH")
         if blockers:
             raise RuntimeError("生产环境安全配置不达标，拒绝启动:\n  - " + "\n  - ".join(blockers))

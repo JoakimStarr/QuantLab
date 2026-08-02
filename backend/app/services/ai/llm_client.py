@@ -1,5 +1,5 @@
 import json
-import re
+from json_repair import repair_json
 import asyncio
 import logging
 import httpx
@@ -12,32 +12,21 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_json(text: str):
-    """从 LLM 返回文本中提取 JSON，处理 markdown 代码块包裹等情况。"""
-    # 直接尝试解析
+    """从 LLM 返回文本中提取 JSON，使用 json-repair 处理常见格式问题。"""
+    repaired = repair_json(text, return_objects=True)
+    if repaired is not None:
+        return repaired
+    # 尝试原始解析作为兜底
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # 去掉 markdown 代码块: ```json\n...\n``` 或 ```\n...\n```
-    code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if code_block:
-        try:
-            return json.loads(code_block.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-    # 尝试提取第一个 JSON 数组或对象
-    for pattern in [r"\[.*\]", r"\{.*\}"]:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
     raise json.JSONDecodeError("无法从返回文本中提取 JSON", text, 0)
 
 
 class LLMClient:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 15, max_tokens: int = 512, temperature: float = 0.3):
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 15,
+                 max_tokens: int = 512, temperature: float = 0.3):
         if not api_key:
             raise AINotConfiguredError(f"API Key 未配置 for {model}")
         self.api_key = api_key

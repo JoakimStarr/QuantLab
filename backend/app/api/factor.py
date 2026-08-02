@@ -72,7 +72,7 @@ async def _eval_factor_task(factor_id: int, start: str, end: str):
     except QlibNotAvailableError as e:
         import logging
         logging.getLogger(__name__).error("qlib 不可用: %s", e)
-    except Exception as e:
+    except Exception:
         import logging
         logging.getLogger(__name__).exception("因子评价失败 factor_id=%s", factor_id)
 

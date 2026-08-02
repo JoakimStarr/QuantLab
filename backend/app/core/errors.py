@@ -56,7 +56,8 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     logging.getLogger(__name__).warning("校验失败 [req=%s]: %s", rid, exc.errors())
     return JSONResponse(
         status_code=422,
-        content={"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "参数校验失败", "status": 422, "details": exc.errors()}},
+        content={"ok": False, "error": {"code": "VALIDATION_ERROR",
+                                        "message": "参数校验失败", "status": 422, "details": exc.errors()}},
     )
 
 

@@ -53,7 +53,7 @@ async def _classify_sentiment(news_items: list[dict]) -> list[dict]:
         batch = news_items[i:i + batch_size]
         # 输入包含日期，LLM 需在响应中回传
         news_text = "\n".join(
-            f"{b.get('code','')} | {b.get('date','')} | {b.get('title','')}"
+            f"{b.get('code', '')} | {b.get('date', '')} | {b.get('title', '')}"
             for b in batch
         )
         messages = [{"role": "user", "content": _SENT_PROMPT.format(news=news_text)}]
@@ -182,7 +182,7 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
 
         ic = ic_metrics.get("ic")
         ic_threshold = settings.mining.get("text", {}).get("ic_threshold",
-                        settings.mining.get("llm", {}).get("ic_threshold", 0.03))
+                                                           settings.mining.get("llm", {}).get("ic_threshold", 0.03))
         passed = ic is not None and abs(ic) >= ic_threshold
 
         factor_id = None
@@ -213,4 +213,3 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
         await _update_task(task_id, status="failed", error=str(e)[:500],
                            finished_at=datetime.now())
         raise
-

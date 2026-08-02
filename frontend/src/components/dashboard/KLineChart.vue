@@ -2,6 +2,19 @@
   <SectionCard title="K线走势">
     <template #extra>
       <div class="chart-controls">
+        <div class="chart-stock-search">
+          <el-input
+            v-model="stockQuery"
+            size="small"
+            class="chart-stock-search__input"
+            placeholder="股票名称/首字母/代码"
+            clearable
+            @keyup.enter="runStockKline"
+          />
+          <el-button size="small" type="primary" :disabled="!stockQuery.trim()" @click="runStockKline">
+            个股K线
+          </el-button>
+        </div>
         <el-select
           :model-value="selectedIndex"
           size="small"
@@ -77,7 +90,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import VChart from 'vue-echarts'
 import SectionCard from '@/components/common/SectionCard.vue'
 
@@ -93,17 +106,32 @@ const props = defineProps({
   customRange: { type: Array, default: () => null },
 })
 
-defineEmits([
+const emit = defineEmits([
   'update:selected-index',
   'update:selected-period',
   'update:active-indicators',
   'update:time-range',
   'update:custom-range',
+  'run-stock-kline',
 ])
+
+const stockQuery = ref('')
+
+function runStockKline() {
+  const query = stockQuery.value.trim()
+  if (!query) return
+  emit('run-stock-kline', query)
+}
 
 const klineDates = computed(() => props.klineItems.map(k => k.date))
 const klineOhlc = computed(() => props.klineItems.map(k => [k.open, k.close, k.low, k.high]))
 const klineVolumes = computed(() => props.klineItems.map(k => k.volume))
+const klineVolumesInYiGu = computed(() => klineVolumes.value.map(v => (Number(v) || 0) / 100000000))
+
+function formatYiGu(value) {
+  const num = Number(value) || 0
+  return `${num.toFixed(num >= 100 ? 0 : 2)}亿股`
+}
 
 function calcMA(data, period) {
   const result = []
@@ -210,13 +238,13 @@ const klineOption = computed(() => {
     zoomIndices = [0, 1, 2, 3]; dataZoomTop = '93%'
   }
 
-  const legendData = ['日K', '成交量']
+  const legendData = ['日K', '成交量(亿股)']
   const series = [
     {
       name: '日K', type: 'candlestick', data: klineOhlc.value,
       itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' },
     },
-    { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: klineVolumes.value, itemStyle: { color: '#7fbbea' } },
+    { name: '成交量(亿股)', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: klineVolumesInYiGu.value, itemStyle: { color: '#7fbbea' } },
   ]
 
   if (showMA) {
@@ -262,11 +290,39 @@ const klineOption = computed(() => {
   return {
     animation: true,
     legend: { data: legendData, top: 0 },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      formatter(params) {
+        const items = Array.isArray(params) ? params : [params]
+        if (!items.length) return ''
+
+        const lines = [items[0].axisValueLabel || '']
+        for (const item of items) {
+          if (item.seriesName === '日K' && Array.isArray(item.data)) {
+            const [open, close, low, high] = item.data
+            lines.push(
+              `${item.marker}${item.seriesName}：开 ${open}，收 ${close}，低 ${low}，高 ${high}`,
+            )
+            continue
+          }
+          if (item.seriesName === '成交量(亿股)') {
+            lines.push(`${item.marker}${item.seriesName}：${formatYiGu(item.data)}`)
+            continue
+          }
+          lines.push(`${item.marker}${item.seriesName}：${item.data}`)
+        }
+        return lines.join('<br/>')
+      },
+    },
     axisPointer: { link: { xAxisIndex: 'all' } },
     grid: grids,
     xAxis: xAxes,
-    yAxis: yAxes,
+    yAxis: yAxes.map((axis, index) => (
+      index === 1
+        ? { ...axis, axisLabel: { formatter: (value) => `${value}亿股` } }
+        : axis
+    )),
     dataZoom: [
       { type: 'inside', xAxisIndex: zoomIndices, start: 60, end: 100 },
       { show: true, type: 'slider', xAxisIndex: zoomIndices, top: dataZoomTop, start: 60, end: 100 },
@@ -279,6 +335,14 @@ const klineOption = computed(() => {
 <style scoped lang="scss">
 .chart-controls {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.chart-stock-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chart-stock-search__input {
+  width: 210px;
 }
 .chart-index-select { width: 130px; }
 .chart-range { display: flex; gap: 4px; }

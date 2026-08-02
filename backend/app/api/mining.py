@@ -214,7 +214,7 @@ async def mine_llm_api(
         })
     background_tasks.add_task(_run_llm_task, task_id, n)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "llm", "status": "pending",
-                                       "message": "LLM 因子挖掘已提交（后台执行）"})
+                                      "message": "LLM 因子挖掘已提交（后台执行）"})
 
 
 async def _run_symbolic_task(task_id: int):
@@ -232,14 +232,15 @@ async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks)
     task_id = await _create_task("symbolic", settings.mining.get("symbolic", {}))
     background_tasks.add_task(_run_symbolic_task, task_id)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "symbolic", "status": "pending",
-                                       "message": "符号回归因子挖掘已提交（后台执行）"})
+                                      "message": "符号回归因子挖掘已提交（后台执行）"})
 
 
-async def _run_automl_task(task_id: int, factor_ids: list[int], method: str):
+async def _run_automl_task(task_id: int, factor_ids: list[int], method: str,
+                           walk_forward: bool = False):
     from app.services.mining.automl import mine_with_automl
     await _safe_run_task(
         task_id,
-        lambda: mine_with_automl(task_id, factor_ids, method),
+        lambda: mine_with_automl(task_id, factor_ids, method, walk_forward=walk_forward),
         "AutoML 组合", "automl",
     )
 
@@ -251,6 +252,7 @@ async def mine_automl_api(
     background_tasks: BackgroundTasks,
     factor_ids: list[int] = Query(..., description="参与组合的因子 id 列表"),
     method: str = Query(None, description="lightgbm/linear"),
+    walk_forward: int = Query(0, description="是否使用 Walk-Forward 滚动重训 0/1"),
 ):
     """启动 AutoML 因子组合（后台执行）。"""
     if not factor_ids:
@@ -258,10 +260,11 @@ async def mine_automl_api(
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，组合需要数据", 503)
-    task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method})
-    background_tasks.add_task(_run_automl_task, task_id, factor_ids, method)
+    task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method,
+                                            "walk_forward": bool(walk_forward)})
+    background_tasks.add_task(_run_automl_task, task_id, factor_ids, method, bool(walk_forward))
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "automl", "status": "pending",
-                                       "message": "AutoML 因子组合已提交（后台执行）"})
+                                      "message": f"AutoML 因子组合已提交（{('Walk-Forward ' if walk_forward else '')}后台执行）"})
 
 
 async def _run_text_task(task_id: int, codes: list[str]):
@@ -283,4 +286,4 @@ async def mine_text_api(
     task_id = await _create_task("text", {"codes": codes})
     background_tasks.add_task(_run_text_task, task_id, codes)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "text", "status": "pending",
-                                       "message": "文本因子挖掘已提交（后台执行）"})
+                                      "message": "文本因子挖掘已提交（后台执行）"})

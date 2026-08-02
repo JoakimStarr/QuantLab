@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import os
-import uuid
+
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -25,7 +26,7 @@ from app.core.errors import (
     http_exception_handler,
     validation_error_handler,
 )
-from app.core.logging_config import setup_logging, set_log_level
+from app.core.logging_config import setup_logging
 from app.core.metrics import setup_metrics
 from app.core.middleware import setup_middleware
 from app.core.ratelimit import limiter
@@ -48,6 +49,20 @@ async def lifespan(app: FastAPI):
 
     await rerun_pending_mining()
     await start_scheduler()
+
+    # 后台自动导入 Alpha158 基准因子集（未导入时触发；不阻塞启动）
+    async def _auto_seed_alpha158():
+        try:
+            from app.services.factor.alpha158 import seed_alpha158
+            result = await seed_alpha158()
+            if result.get("already_imported") or result.get("count", 0) == 0:
+                return
+            logger.info("后台自动导入 Alpha158 完成: %s", result.get("message"))
+        except Exception:
+            logger.exception("后台自动导入 Alpha158 失败")
+
+    asyncio.create_task(_auto_seed_alpha158())
+
     yield
     await stop_scheduler()
     from app.core.executor import shutdown_executors
@@ -61,7 +76,7 @@ _app_kwargs = {
     "description": settings.app_description or None,
     "lifespan": lifespan,
 }
-if settings.app_env != "development":
+if settings.security.app_env != "development":
     _app_kwargs["docs_url"] = None
     _app_kwargs["redoc_url"] = None
     _app_kwargs["openapi_url"] = None
@@ -74,18 +89,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 setup_middleware(app)
 app.add_middleware(SlowAPIMiddleware)
 
-
-@app.middleware("http")
-async def add_request_id_middleware(request: Request, call_next):
-    """为每个请求生成/提取 request_id，注入日志。"""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
-    # 设置到 ContextVar
-    from app.core.logging_config import request_id_var
-
-    request_id_var.set(request_id)
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
@@ -275,7 +278,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(None)):
     客户端应周期性发送 "ping" 文本帧以维持心跳；超时未 ping
     的连接会被后台 reaper 主动 close（close code 4408）。
     """
-    if settings.auth_enabled:
+    if settings.security.auth_enabled:
         if not token or verify_token(token) is None:
             await ws.close(code=4401, reason="unauthorized")
             return

@@ -57,6 +57,7 @@ atexit.register(_logout)
 async def _run_sync(func, *args, **kwargs):
     """在线程池中运行同步 baostock 函数。"""
     loop = asyncio.get_event_loop()
+
     def wrapper():
         _ensure_login()
         return func(*args, **kwargs)
@@ -75,6 +76,7 @@ async def fetch_daily_all_a_stock(date: str) -> pd.DataFrame:
         RuntimeError: baostock 调用失败
     """
     import baostock as bs
+
     def fetch():
         rs = bs.query_daily_history_k_AStock(date=date)
         if rs.error_code != '0':
@@ -98,10 +100,11 @@ async def fetch_stock_history(code: str, start_date: str, end_date: str,
         DataFrame, 列同 fetch_daily_all_a_stock
     """
     import baostock as bs
+
     def fetch():
         rs = bs.query_history_k_data_plus(
             code=code,
-            fields="date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",
+            fields="date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",  # noqa: E501
             start_date=start_date, end_date=end_date,
             frequency=frequency, adjustflag=adjustflag,
         )
@@ -149,7 +152,7 @@ def fetch_stock_history_sync(code: str, start_date: str, end_date: str,
     import baostock as bs
     rs = bs.query_history_k_data_plus(
         code=code,
-        fields="date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",
+        fields="date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",  # noqa: E501
         start_date=start_date, end_date=end_date,
         frequency=frequency, adjustflag=adjustflag,
     )

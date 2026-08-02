@@ -96,7 +96,8 @@ def analyze_portfolio(returns, benchmark_returns=None) -> dict:
         bench_ar = annual_return(benchmark_returns)
         result["benchmark_return"] = _round(bench_ar)
         result["excess_return"] = _round(
-            (annual_return(returns) - bench_ar) if (result["annual_return"] is not None and bench_ar is not None) else None
+            (annual_return(returns) - bench_ar) if (result["annual_return"]
+                                                    is not None and bench_ar is not None) else None
         )
     return result
 

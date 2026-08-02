@@ -34,6 +34,9 @@ class BacktestResult(Base):
     nav_curve = Column(Text, nullable=True)
     metrics = Column(Text, nullable=True)
 
+    # 逐笔成交明细（回测动作：BUY/SELL），JSON 字符串
+    trades = Column(Text, nullable=True)
+
     created_at = Column(TIMESTAMP, default=func.now())
     is_deleted = Column(Integer, default=0, nullable=False)  # 软删除标记：0=正常, 1=已删除
     deleted_at = Column(TIMESTAMP, nullable=True)

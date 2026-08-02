@@ -19,6 +19,8 @@ apscheduler>=3.10.4
 pyyaml>=6.0.2
 python-dotenv>=1.0.1
 pydantic>=2.8.0
+pydantic-settings>=2.0.0
+pypinyin>=0.51.0
 
 # 安全：口令哈希 + 登录限流 + 用户认证
 bcrypt>=4.0
@@ -31,7 +33,8 @@ zxcvbn-python>=4.4.0
 prometheus-fastapi-instrumentator>=0.1.0
 
 # 因子评价：alphalens-reloaded（替换自研因子评价，提供 IC/分层收益/换手率等）
-alphalens-reloaded>=0.5.0
+# 注意：PyPI 最新为 0.4.6（无 0.5.x），pandas 2.x 兼容问题由 factor_eval 本地兼容层处理
+alphalens-reloaded>=0.4.6
 
 # 量化回测与AI因子挖掘
 # pyqlib: 微软AI量化框架（因子评价/回测/组合分析），CPU密集型，worker进程调用
@@ -41,15 +44,26 @@ protobuf<4
 setuptools<81
 # gplearn: 符号回归/遗传规划自动搜索因子表达式
 gplearn>=0.4.2
-PyPortfolioOpt>=1.5.1
+# skfolio: sklearn 生态组合优化（mean-variance/risk-parity，唯一后端）
+skfolio>=0.20.0
+# vectorbt: 矢量化快速回测（backend="vbt"，快速扫描/A-B 测试时用）
+vectorbt>=1.0.0
+# purgedcv: de Prado purged/CPCV 交叉验证 + PBO/Deflated Sharpe 过拟合统计
+purgedcv>=0.1.3
+# exchange-calendars: 全球交易所交易日历（XSHG/XSHE 含 A 股法定节假日）
+exchange-calendars>=4.5.0
+# 绩效指标：empyrical 为核心（纯 numpy 快）；quantstats 仅用于 HTML tear-sheet（可选，缺失时降级跳过）
+empyrical-reloaded>=0.5.12
+quantstats>=0.0.64
+# tsfresh: 时序自动特征提取（候选特征池）
+tsfresh>=0.21.0
+# arch: GARCH/ARCH 波动率建模（条件波动率因子）
+arch>=7.0.0
 # 数据库迁移
 alembic>=1.13
 
 # baostock: A-share daily K-line / valuation / ST-flag data source (baostock_client dep)
 baostock>=0.8.9
-
-# 绩效指标计算（替代自研实现）— empyrical-reloaded 兼容 Python 3.12+
-empyrical-reloaded>=0.5.12
 
 # 缓存工具：LRU 缓存 IC 评价结果等
 cachetools>=5.3.0
@@ -57,9 +71,14 @@ cachetools>=5.3.0
 # 结构化日志（structlog + python-json-logger 替换自研 JSONFormatter）
 structlog>=24.4.0
 python-json-logger>=6.1.0
+# asgi-correlation-id: 自动注入 request_id 到日志上下文（替代自研 RequestContextMiddleware）
+asgi-correlation-id>=0.2.0
 
 # 重试：tenacity 替代手写重试循环
 tenacity>=8.5.0
 
 # Redis：异步 Pub/Sub 进度共享（多实例）
 redis>=5.0.0
+
+# json-repair：修复 LLM 返回的损坏 JSON（单引号、尾逗号、markdown 代码块等）
+json-repair>=0.31.0

@@ -137,6 +137,7 @@ def _download_stream(url: str, dest_path: str, total_size: int) -> None:
     logger.info("下载完成: %d MB", downloaded // 1024 // 1024)
     update_progress(pct=100.0, downloaded_mb=downloaded / 1024 / 1024, status="extracting", message="正在解压...")
 
+
 def _clear_dir(target_dir: str) -> None:
     """清空目标目录中的所有内容（保留目录本身）。
 

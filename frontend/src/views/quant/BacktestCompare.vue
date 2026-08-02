@@ -440,20 +440,40 @@ function numClass(val) {
 
 // 标准化净值数据
 function normalizeNavSeries(data) {
-  // 后端返回 nav_curves: [{ result_id, curve: [1.0, 1.01, ...] }]
-  // 转换为 { resultId: [{ date, nav }] }（用索引作为日期占位）
+  // 后端返回 nav_curves: [{ result_id, curve: { dates, portfolio, benchmark } }]
+  // 或旧格式 { result_id, curve: [1.0, 1.01, ...] }
+  // 统一转换为 { resultId: [{ date, nav }] }
   const curves = data?.nav_curves || data?.nav_series || data?.curve_series || data?.series
   if (Array.isArray(curves)) {
     const map = {}
     curves.forEach(item => {
       const rid = String(item.result_id)
       const arr = item.curve || item.nav || []
-      map[rid] = arr.map((v, i) => ({ date: `D${i + 1}`, nav: Number(v) }))
+      map[rid] = toNavPoints(arr)
     })
     return map
   }
   if (curves && typeof curves === 'object') return curves
   return {}
+}
+
+// 归一化单条净值数据为 [{ date, nav }]
+function toNavPoints(arr) {
+  // 已是指针点数组（date/nav 对象）
+  if (Array.isArray(arr) && arr.length > 0 && (arr[0]?.date != null || arr[0]?.nav != null || arr[0]?.value != null)) {
+    return arr.map(p => ({ date: String(p.date ?? p.name ?? p.ts ?? ''), nav: Number(p.nav ?? p.value ?? p.y) }))
+  }
+  // dict 格式 { dates, portfolio, benchmark }
+  if (!Array.isArray(arr) && arr && typeof arr === 'object') {
+    const dates = arr.dates || []
+    const vals = arr.portfolio || arr.nav || []
+    return (Array.isArray(vals) ? vals : []).map((v, i) => ({ date: String(dates[i] ?? `D${i + 1}`), nav: Number(v) }))
+  }
+  // 纯数值数组
+  if (Array.isArray(arr)) {
+    return arr.map((v, i) => ({ date: `D${i + 1}`, nav: Number(v) }))
+  }
+  return []
 }
 
 // 格式化回测结果选项标签（用于 el-select 已选 tag 展示）

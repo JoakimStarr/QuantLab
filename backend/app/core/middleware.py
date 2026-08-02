@@ -1,7 +1,8 @@
 import logging
 import time
-import uuid
 
+from asgi_correlation_id import correlation_id
+from asgi_correlation_id.middleware import CorrelationIdMiddleware
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -11,11 +12,11 @@ from app.core.logging_config import request_id_var
 perf_logger = logging.getLogger("perf")
 
 
-class RequestContextMiddleware(BaseHTTPMiddleware):
+class PerfLogMiddleware(BaseHTTPMiddleware):
+    """性能日志中间件（维持原有的 perf log 功能）"""
+
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID", uuid.uuid4().hex[:12])
-        request.state.request_id = request_id
-        # 设置 contextvar，使所有后续日志自动携带 request_id
+        request_id = correlation_id.get() or request.headers.get("X-Request-ID", "")
         token = request_id_var.set(request_id)
         start_time = time.time()
         try:
@@ -68,4 +69,7 @@ def setup_cors(app):
 
 def setup_middleware(app):
     setup_cors(app)
-    app.add_middleware(RequestContextMiddleware)
+    # PerfLogMiddleware 在内部，依赖 correlation_id.get() 获取 request_id
+    app.add_middleware(PerfLogMiddleware)
+    # CorrelationIdMiddleware 在最外层（后添加的先执行），自动读取/生成 X-Request-ID
+    app.add_middleware(CorrelationIdMiddleware)

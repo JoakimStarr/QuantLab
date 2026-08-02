@@ -47,7 +47,6 @@ def init_qlib():
 
 async def is_qlib_available() -> bool:
     """探测 qlib 是否可用（不抛异常）。在线程池中执行避免阻塞事件循环。"""
-    global _initialized
     if _initialized:
         return True
     try:

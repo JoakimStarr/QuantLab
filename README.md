@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-async-green) ![Vue](https://img.shields.io/badge/Vue-3-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue) ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> 当前版本：**v2.5.5** · 最后更新：2026-08-01
+> 当前版本：**v3.0.2** · 最后更新：2026-08-02
 
 ---
 
@@ -21,7 +21,7 @@
    - **想参与开发** → [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
    - **想知道最近的优化** → [docs/QuantLab_完整优化方案.md](docs/QuantLab_完整优化方案.md)
 
-> 所有 docs/ 下的 Markdown 文档都可以在 Web 端 `/docs` 页面查看，右侧带**可点击的浮动目录**，点哪跳哪。
+> 所有 docs/ 下的 Markdown 文档都可以在 Web 端 `/docs` 页面查看，右侧带**可点击的浮动目录**，点哪跳哪。目录会自动忽略代码块里的 `#` 注释，不会把 shell 说明误识别成章节。
 
 ---
 
@@ -49,7 +49,6 @@
 ### 2.1 本地开发（推荐先用这个跑通）
 
 ```bash
-# 1. 克隆代码
 git clone https://github.com/JoakimStarr/QuantLab.git
 cd QuantLab
 
@@ -291,6 +290,9 @@ CI 在每次 push 自动跑这些检查。
 
 | 版本 | 日期 | 主要变化 |
 |---|---|---|
+| **v3.0.2** | 2026-08-01 | 启动脚本修复；Docsify 替换为 markdown-it |
+| **v3.0.1** | 2026-08-01 | empyrical→empyrical-reloaded 兼容 Python 3.12+ |
+| **v3.0.0** | 2026-07-31 | 全面开源替代：用成熟框架替换自研实现 |
 | **v2.5.5** | 2026-08-01 | 因子库表格列宽压缩 + 描述列展示 |
 | **v2.5.4** | 2026-08-01 | 因子库新增"描述"列展示 |
 | **v2.5.3** | 2026-08-01 | Alpha158 评价修复：用 Queue 解耦评价与 DB 写入 |

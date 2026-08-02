@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_LABEL = "Ref($close, -1) / $close - 1"
 
 # AutoML 因子表达式：AutoML(method,task_id)，回测时加载 bundle 重建特征预测
-_AUTOML_EXPR_RE = re.compile(r"^AutoML\((lightgbm|linear),\s*([\d,\s]+)\)$", re.IGNORECASE)
+# method 支持 lightgbm/linear（单模型）与 walk_forward（滚动重训，直接读持久化打分）
+_AUTOML_EXPR_RE = re.compile(r"^AutoML\((lightgbm|linear|walk_forward),\s*([\d,\s]+)\)$", re.IGNORECASE)
 
 
 @lru_cache(maxsize=8)
@@ -109,6 +110,16 @@ def _load_automl_factor(method: str, ids: list, start: str, end: str,
 
     feature_names = bundle.get("feature_names") or []
     factor_exprs = bundle.get("factor_expressions") or {}
+
+    # Walk-Forward bundle：直接读持久化的 OOS 打分序列（回测免重训）
+    if bundle.get("method") == "walk_forward":
+        score_df = bundle.get("score_df")
+        if score_df is None or score_df.empty:
+            raise ValueError(f"AutoML walk_forward bundle {task_id} 缺少打分序列")
+        sub = score_df[(score_df.index.get_level_values("datetime") >= pd.Timestamp(start)) &
+                       (score_df.index.get_level_values("datetime") <= pd.Timestamp(end))]
+        return pd.DataFrame({"factor": sub["factor"]}, index=sub.index)
+
     if not feature_names:
         raise ValueError(f"AutoML bundle {task_id} 缺少 feature_names")
 
@@ -159,6 +170,7 @@ def load_factor_values(
         ids = [int(x.strip()) for x in automl_match.group(2).split(",") if x.strip()]
         logger.info("加载 AutoML 因子: method=%s ids=%s", method, ids)
         df = _load_automl_factor(method, ids, start, end, universe=universe)
+        return df
     else:
         # 文本因子等需要外部数据的算子 qlib 未注册，提前给出明确错误而非 AttributeError
         _unsupported = ("TextSentiment", "NewsSentiment")
@@ -206,7 +218,7 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
 
 
 def _to_alphalens_factor_data(factor_df: pd.DataFrame, label_df: pd.DataFrame,
-                               period_name: str = "1D") -> pd.DataFrame | None:
+                              period_name: str = "1D") -> pd.DataFrame | None:
     """将 (factor_df, label_df) 转换为 alphalens 兼容格式。
 
     factor_df: MultiIndex (datetime, instrument), 列 "factor"
@@ -218,7 +230,20 @@ def _to_alphalens_factor_data(factor_df: pd.DataFrame, label_df: pd.DataFrame,
     if merged.empty:
         return None
     factor_data = merged.rename(columns={"label": period_name})
+    # qlib D.features 返回 (instrument, datetime)，alphalens 要求 (date, asset)，
+    # 必须换序而非仅改名，否则 date/asset 语义错位（level 0 实际是股票代码）。
+    # 按 level 0 类型自适应：已是 DatetimeIndex（如测试数据）则保持原序。
+    if not isinstance(factor_data.index.levels[0], pd.DatetimeIndex):
+        factor_data = factor_data.swaplevel(0, 1).sort_index()
     factor_data.index = factor_data.index.set_names(["date", "asset"])
+    # alphalens 需要 date level 的 .freq（pandas 2.x 的 MultiIndex 不再保留 freq）
+    # 直接写底层 _freq 绕过频率一致性校验（节假日跳空时严格校验会失败）
+    date_level = pd.DatetimeIndex(factor_data.index.levels[0])
+    try:
+        date_level._data._freq = pd.offsets.BDay()
+    except Exception:
+        pass
+    factor_data.index = factor_data.index.set_levels([date_level, factor_data.index.levels[1]])
     return factor_data
 
 
@@ -261,22 +286,31 @@ def compute_ic(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> dict:
     }
 
 
+def _topk_holdings_mask(wide: pd.DataFrame, k: int) -> pd.DataFrame:
+    """宽表（date × instrument）每日取 topk 的持仓布尔掩码。
+
+    rank(method="first") 与旧实现 set(nlargest(k)) 的并列股选择口径一致：
+    并列时按首次出现顺序截取前 k 只。
+    """
+    ranks = wide.rank(axis=1, method="first", ascending=False)
+    return ranks <= k
+
+
 def compute_turnover(factor_df: pd.DataFrame) -> float:
     """计算因子换手率：每日持仓变动均值（按 topk 截面排名近似）。"""
     topk = settings.quant.get("topk", 50)
-    # 每日取 topk，计算与前一日的持仓重合度
-    daily_topk = factor_df.groupby(level="datetime")["factor"].apply(
-        lambda s: set(s.nlargest(topk).index.get_level_values("instrument"))
-    )
-    turnovers = []
-    prev = None
-    for date, stocks in daily_topk.items():
-        if prev is not None and len(prev) > 0:
-            overlap = len(stocks & prev)
-            turnover = 1 - overlap / len(prev)
-            turnovers.append(turnover)
-        prev = stocks
-    return round(float(np.mean(turnovers)), 4) if turnovers else None
+    # 宽表（date × instrument）→ 布尔 nlargest 掩码，逐日向量化取 topk 与重合度
+    wide = factor_df["factor"].unstack(level="instrument").sort_index()
+    if wide.empty:
+        return None
+    holdings = _topk_holdings_mask(wide, topk)
+
+    prev = holdings.shift(1)
+    overlap = (holdings & prev.fillna(False)).sum(axis=1)
+    prev_cnt = prev.sum(axis=1)
+    safe_cnt = prev_cnt.replace(0, np.nan)
+    turnovers = (1 - overlap / safe_cnt).dropna()
+    return round(float(turnovers.mean()), 4) if len(turnovers) else None
 
 
 def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int = 10,
@@ -379,7 +413,6 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
         "factor_expr": factor_expr,
         "horizon": horizon,
     }
-
 
 
 def compute_quantile_returns(
@@ -575,21 +608,23 @@ def compute_ic_timeseries(factor_df: pd.DataFrame, label_df: pd.DataFrame, windo
     }
 
 
-def compute_ic_significance(ic_series: pd.Series) -> dict:
-    """IC 统计显著性：t-stat / p-value（双尾 t 检验）。
+def compute_ic_significance(ic_series: pd.Series, lags: int = None) -> dict:
+    """IC 统计显著性：Newey-West 校正 t 检验（处理重叠标签的自相关）。
 
     Returns: {t_stat, p_value, significant, n_days, note}
     """
-    from scipy import stats
+    from app.services.quant.factor_validator import newey_west_t
 
     s = pd.Series(ic_series).dropna()
     n = int(len(s))
-    note = "标准 t 检验，未经 Newey-West 自相关调整"
+    note = "Newey-West 校正 t 检验（lags=%s），处理重叠标签自相关" % (
+        lags if lags is not None else "auto"
+    )
     if n < 2:
         return {"t_stat": None, "p_value": None, "significant": False, "n_days": n, "note": note}
 
-    t_stat, p_value = stats.ttest_1samp(s.values, 0)
-    if np.isnan(t_stat) or np.isnan(p_value):
+    t_stat, p_value = newey_west_t(s, lags=lags)
+    if t_stat is None or np.isnan(t_stat) or np.isnan(p_value):
         return {"t_stat": None, "p_value": None, "significant": False, "n_days": n, "note": note}
     return {
         "t_stat": float(t_stat),
@@ -606,11 +641,14 @@ def compute_quantile_nav_by_horizon(
     n_groups: int = 5,
     horizon: int = 5,
 ) -> dict:
-    """按 horizon 周期调仓的分层累计净值。
+    """按 horizon 周期调仓的分层累计净值（矩阵化实现）。
 
     - 每 horizon 个交易日调仓一次
     - 调仓日按因子值分 n_groups 组，等权持仓
     - 持有 horizon 天后重新调仓
+
+    向量化策略：构造 (日期 × 股票) 分组矩阵 G，单次广播计算各组日收益，
+    消除逐日 × 逐组的 Python 循环（O(days×stocks) 落到 numpy）。
 
     Returns: {dates, quantile_nav, long_short_nav, annualized_returns, long_short_annual_return, monotonicity}
     """
@@ -627,79 +665,88 @@ def compute_quantile_nav_by_horizon(
         return empty
 
     dates = sorted(factor_df.index.get_level_values("datetime").unique())
-    if not dates:
+    dates = pd.DatetimeIndex(dates)
+    if len(dates) == 0:
         return empty
+    n_days = len(dates)
 
-    rebalance_dates = dates[::horizon]
+    # 宽表对齐：日期 × 股票，因子值与收益矩阵（NaN 表示缺失）
+    factor_wide = factor_df["factor"].unstack(level="instrument")
+    factor_wide = factor_wide.reindex(dates)
+    insts = factor_wide.columns
+    F = factor_wide.to_numpy(dtype=float)
+
     ret_wide = prices_df.pct_change()
+    ret_date_in = dates.isin(ret_wide.index)
+    R = ret_wide.reindex(dates).reindex(columns=insts).to_numpy(dtype=float)
 
-    group_nav = {g: [1.0] for g in range(1, n_groups + 1)}
-    group_daily_returns = {g: [] for g in range(1, n_groups + 1)}
-    long_short_nav = [1.0]
-    long_short_returns = []
-    nav_dates = []
+    rb_positions = list(range(0, n_days, horizon))
 
-    for i, rb in enumerate(rebalance_dates):
-        next_rb = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else None
+    def _group_vec(day_factor: np.ndarray, idx_valid: np.ndarray) -> np.ndarray | None:
+        """调仓日分组向量：长度 n 的数组，值 1..n_groups，无效位置填 NaN。"""
+        if idx_valid.sum() < n_groups:
+            return None
+        vals = pd.Series(day_factor[idx_valid]).astype(float)
         try:
-            day_factor = factor_df.xs(rb, level="datetime")["factor"].dropna()
-        except KeyError:
-            continue
-        if len(day_factor) < n_groups:
-            continue
-        # 按因子值分位分组：qcut 可能因重复值失败，降级用 rank（与 compute_quantile_returns 一致）
-        try:
-            groups = pd.qcut(day_factor, n_groups, labels=False, duplicates="drop")
+            groups = pd.qcut(vals, n_groups, labels=False, duplicates="drop")
         except Exception:
-            ranks = day_factor.rank(method="first")
+            ranks = vals.rank(method="first")
             groups = pd.cut(ranks, n_groups, labels=False)
         groups = (groups + 1).dropna()
         if groups.nunique() < 2:
+            return None
+        vec = np.full(len(insts), np.nan)
+        vec[idx_valid] = groups.reindex(vals.index).to_numpy(dtype=float)
+        return vec
+
+    # 构造 (日期 × 股票) 分组矩阵：行 p 为持仓期，值 1..n_groups，无效行为 0
+    G = np.zeros((n_days, len(insts)), dtype=np.int16)
+    for q in rb_positions:
+        day_f = F[q]
+        day_na = np.isnan(day_f)
+        gv = _group_vec(day_f.copy(), ~day_na)
+        if gv is None:
             continue
-        group_stocks = {g: groups[groups == g].index.tolist() for g in range(1, n_groups + 1)}
+        nxt = min(q + horizon, n_days)
+        G[q + 1:nxt + 1] = np.nan_to_num(gv, nan=0).astype(np.int16)
 
-        # 持有期：调仓日次日 ~ 下一个调仓日（含），调仓日按当日收盘建仓
-        if next_rb is not None:
-            period_dates = [d for d in dates if rb < d <= next_rb]
-        else:
-            period_dates = [d for d in dates if d > rb]
+    valid_ret = ~np.isnan(R)
+    group_daily = {}
+    for g in range(1, n_groups + 1):
+        mask = (G == g) & valid_ret
+        num = np.where(mask, R, 0.0).sum(axis=1)
+        den = mask.sum(axis=1)
+        safe_den = np.where(den > 0, den, 1)
+        group_daily[g] = np.where(den > 0, num / safe_den, 0.0)
 
-        for d in period_dates:
-            if d not in ret_wide.index:
-                continue
-            day_ret = ret_wide.loc[d]
-            g_rets = {}
-            for g in range(1, n_groups + 1):
-                valid = day_ret.reindex(group_stocks[g]).dropna()
-                g_ret = float(valid.mean()) if len(valid) else 0.0
-                g_rets[g] = g_ret
-                group_daily_returns[g].append(g_ret)
-                group_nav[g].append(group_nav[g][-1] * (1.0 + g_ret))
-            ls_ret = g_rets[n_groups] - g_rets[1]
-            long_short_returns.append(ls_ret)
-            long_short_nav.append(long_short_nav[-1] * (1.0 + ls_ret))
-            nav_dates.append(d)
+    # 有效持仓日：属于某分组且当天确实有行情
+    active = G.any(axis=1) & ret_date_in
+    active_pos = np.where(active)[0]
+    nav_dates = [dates[p] for p in active_pos]
 
+    quantile_nav = {}
     annualized_returns = {}
     mean_returns = []
     for g in range(1, n_groups + 1):
-        rs = group_daily_returns[g]
-        mr = float(np.mean(rs)) if rs else 0.0
+        seq = group_daily[g][active_pos]
+        nav = np.cumprod(1.0 + seq) if len(seq) else np.array([], dtype=float)
+        quantile_nav[f"Q{g}"] = nav.tolist()
+        mr = float(np.mean(seq)) if len(seq) else 0.0
         annualized_returns[f"Q{g}"] = float(mr * 252)
         mean_returns.append(mr)
 
-    ls_mean = float(np.mean(long_short_returns)) if long_short_returns else 0.0
-    ls_annual = float(ls_mean * 252)
+    ls_seq = group_daily[n_groups][active_pos] - group_daily[1][active_pos]
+    long_short_nav = (np.cumprod(1.0 + ls_seq) if len(ls_seq) else np.array([], dtype=float)).tolist()
+    ls_annual = float(np.mean(ls_seq) * 252) if len(ls_seq) else 0.0
 
-    # 单调性：组号与组均收益的 Spearman 相关（pandas 实现，无需 scipy）
     mono = float(pd.Series(mean_returns).corr(pd.Series(range(1, n_groups + 1)), method="spearman"))
     if np.isnan(mono):
         mono = 0.0
 
     return {
         "dates": [str(d.date()) for d in nav_dates],
-        "quantile_nav": {f"Q{g}": [float(v) for v in group_nav[g][1:]] for g in range(1, n_groups + 1)},
-        "long_short_nav": [float(v) for v in long_short_nav[1:]],
+        "quantile_nav": {f"Q{g}": [float(v) for v in quantile_nav[f"Q{g}"]] for g in range(1, n_groups + 1)},
+        "long_short_nav": [float(v) for v in long_short_nav],
         "annualized_returns": annualized_returns,
         "long_short_annual_return": ls_annual,
         "monotonicity": mono,
@@ -707,10 +754,13 @@ def compute_quantile_nav_by_horizon(
 
 
 def compute_turnover_curve(factor_df: pd.DataFrame, n_groups: int = 5, horizon: int = 5) -> dict:
-    """分组换手率时序（多头组：因子值最高组）。
+    """分组换手率时序（多头组：因子值最高组，矩阵化实现）。
 
     - 每 horizon 日调仓
     - turnover = 1 - |新∩旧| / |旧|
+
+    向量化：只在调仓日子表上一次性 rank 选股，逐对广播计算重合度，
+    消除逐 T 的 nlargest 循环。
 
     Returns: {dates, turnover_series, avg_turnover, annual_turnover}
     """
@@ -719,30 +769,35 @@ def compute_turnover_curve(factor_df: pd.DataFrame, n_groups: int = 5, horizon: 
         return empty
 
     dates = sorted(factor_df.index.get_level_values("datetime").unique())
-    if not dates:
+    dates = pd.DatetimeIndex(dates)
+    if len(dates) == 0:
         return empty
 
     rebalance_dates = dates[::horizon]
-    prev_holdings = None
+    # 调仓日子表：宽表（date × instrument）→ rank 掩码（并列选前 top_n）
+    wide = factor_df["factor"].unstack(level="instrument")
+    rb_wide = wide.reindex(rebalance_dates)
+    valid_cnt = rb_wide.notna().sum(axis=1)
+    masks = {}
+    for rb in rebalance_dates:
+        if valid_cnt.get(rb, 0) < n_groups:
+            continue
+        top_n = max(1, int(valid_cnt[rb]) // n_groups)
+        row = rb_wide.loc[rb].dropna()
+        masks[rb] = set(row.nlargest(top_n).index.tolist())
+
     turnover_series = []
     turnover_dates = []
-
+    prev = None
     for rb in rebalance_dates:
-        try:
-            day_factor = factor_df.xs(rb, level="datetime")["factor"].dropna()
-        except KeyError:
+        holdings = masks.get(rb)
+        if holdings is None:
             continue
-        if len(day_factor) < n_groups:
-            continue
-        # 多头组：因子值最高的 1/n_groups 只（与 compute_turnover 口径一致）
-        top_n = max(1, len(day_factor) // n_groups)
-        holdings = set(day_factor.nlargest(top_n).index.tolist())
-        if prev_holdings is not None and len(prev_holdings) > 0:
-            overlap = len(holdings & prev_holdings)
-            turnover = 1.0 - overlap / len(prev_holdings)
-            turnover_series.append(float(turnover))
+        if prev is not None and len(prev) > 0:
+            overlap = len(holdings & prev)
+            turnover_series.append(float(1.0 - overlap / len(prev)))
             turnover_dates.append(rb)
-        prev_holdings = holdings
+        prev = holdings
 
     avg_turnover = float(np.mean(turnover_series)) if turnover_series else None
     annual_turnover = float(avg_turnover * (252.0 / horizon)) if avg_turnover is not None else None
@@ -785,7 +840,9 @@ def deep_analyze_factor(
 
     ic_distribution = compute_ic_distribution(factor_df, label_df)
     ic_timeseries = compute_ic_timeseries(factor_df, label_df, ic_window)
-    ic_significance = compute_ic_significance(pd.Series(ic_timeseries["ic_series"]))
+    ic_significance = compute_ic_significance(
+        pd.Series(ic_timeseries["ic_series"]), lags=horizon
+    )
     quantile_nav = compute_quantile_nav_by_horizon(
         factor_df, prices_df, n_groups=n_groups, horizon=horizon
     )
@@ -821,5 +878,5 @@ def deep_analyze_factor(
         "ic_timeseries": ic_timeseries,
         "quantile_returns": quantile_nav,
         "turnover_curve": turnover_curve,
-        "decay": {"lags": decay_lags, "ic_by_lag": [decay[l] for l in decay_lags]},
+        "decay": {"lags": decay_lags, "ic_by_lag": [decay[lag] for lag in decay_lags]},
     }

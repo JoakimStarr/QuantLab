@@ -186,7 +186,7 @@ async def get_factor_decay(factor_id: int, max_lag: int = 20) -> dict:
                 effective_period = int(lag) - 1
                 break
         if effective_period is None:
-            effective_period = max(int(l) for l in decay.keys()) if decay else 0
+            effective_period = max(int(lag) for lag in decay.keys()) if decay else 0
 
     return {
         "factor_id": factor_id,

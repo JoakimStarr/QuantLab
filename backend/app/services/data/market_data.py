@@ -3,13 +3,13 @@ import logging
 import time
 import numpy as np
 import pandas as pd
+from cachetools import TTLCache
 
 from app.services.data.code_utils import to_qlib_code
 
 logger = logging.getLogger(__name__)
 
-_market_cap_cache = None
-_market_cap_cache_time = None
+_market_cap_cache: TTLCache = TTLCache(maxsize=1, ttl=3600)
 
 _MAX_RETRIES = 3
 _RETRY_DELAY = 2  # seconds
@@ -39,20 +39,15 @@ def fetch_market_cap_data() -> pd.DataFrame:
     Returns:
         DataFrame: index=股票代码(sh600000格式), columns=['total_mv', 'circ_mv']
     """
-    global _market_cap_cache, _market_cap_cache_time
-
-    if _market_cap_cache is not None and _market_cap_cache_time:
-        age = time.time() - _market_cap_cache_time
-        if age < 3600:  # 1 hour cache
-            return _market_cap_cache
+    if "data" in _market_cap_cache:
+        return _market_cap_cache["data"]
 
     last_error = None
     for attempt in range(_MAX_RETRIES):
         try:
             df = _fetch_via_spot_em()
             if not df.empty:
-                _market_cap_cache = df
-                _market_cap_cache_time = time.time()
+                _market_cap_cache["data"] = df
                 logger.info("市值数据获取成功(第%d次): %d 只股票", attempt + 1, len(df))
                 return df
             else:

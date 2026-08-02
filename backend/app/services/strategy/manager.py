@@ -81,7 +81,8 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     factor_values = {}
     for name, expr in factor_exprs.items():
         factor_values[name] = load_factor_values(expr, start, end)
-    score_df = combine_factors(factor_values, weights=weights, method=combination_method, orthogonalize=bool(orthogonalize))
+    score_df = combine_factors(factor_values, weights=weights, method=combination_method,
+                               orthogonalize=bool(orthogonalize))
     # 默认过滤北交所股票（防御性，factor_eval 已过滤）
     include_bj = settings.quant.get("include_bj", False)
     if not include_bj and score_df is not None and not score_df.empty:
@@ -97,6 +98,7 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     bench = bt.get("benchmark")
     metrics = analyze_portfolio(returns, bench)
     nav_curve = build_nav_curve(returns, bench)
+    trades = bt.get("trades") or []
 
     # 换手率标量化
     turnover_val = None
@@ -107,7 +109,8 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     except (TypeError, ValueError):
         turnover_val = None
 
-    return {"metrics": metrics, "nav_curve": nav_curve, "turnover": turnover_val}
+    return {"metrics": metrics, "nav_curve": nav_curve, "turnover": turnover_val,
+            "trades": trades}
 
 
 async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = None,
@@ -169,6 +172,13 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     )
     metrics = computed["metrics"]
     nav_curve = computed["nav_curve"]
+    trades = computed.get("trades") or []
+
+    # trades 过大时截断落库（保留前 2000 条，足够前端展示与导出），避免 Text 列膨胀
+    TRADES_CAP = int(settings.quant.get("trades_cap", 2000))
+    if len(trades) > TRADES_CAP:
+        logger.info("trades 共 %d 条，落库截断到前 %d 条", len(trades), TRADES_CAP)
+        trades = trades[:TRADES_CAP]
 
     # async: 落库
     async with async_session() as session:
@@ -188,6 +198,7 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             excess_return=metrics.get("excess_return"),
             nav_curve=json.dumps(nav_curve),
             metrics=json.dumps({**metrics, "topk": strategy["topk"], "n_drop": strategy["n_drop"]}),
+            trades=json.dumps(trades, ensure_ascii=False),
         )
         session.add(result)
         await session.commit()
@@ -235,5 +246,6 @@ def _result_dict(r: BacktestResult) -> dict:
         "benchmark_return": r.benchmark_return, "excess_return": r.excess_return,
         "nav_curve": json.loads(r.nav_curve) if r.nav_curve else None,
         "metrics": json.loads(r.metrics) if r.metrics else None,
+        "trades": json.loads(r.trades) if r.trades else [],
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }

@@ -13,7 +13,8 @@ BUILTIN_FACTORS = [
     ("turnover_20d", "Mean($volume / Ref($close, 1) / 10000, 20)", "20日平均换手(近似)"),
     ("volume_ratio_5_20", "Mean($volume, 5) / Mean($volume, 20)", "量比5/20"),
     ("amplitude_20d", "Mean(($high - $low) / $close, 20)", "20日平均振幅"),
-    ("rsi_like_20d", "Mean(Greater($close / Ref($close, 1) - 1, 0), 20) / Std($close / Ref($close, 1) - 1, 20)", "类RSI强弱"),
+    ("rsi_like_20d", "Mean(Greater($close / Ref($close, 1) - 1, 0), 20) / Std($close / Ref($close, 1) - 1, 20)", "类RSI强弱"),  # noqa: E501
+
     ("price_ma_div_20", "$close / Mean($close, 20) - 1", "价格偏离20日均线"),
     ("price_ma_div_60", "$close / Mean($close, 60) - 1", "价格偏离60日均线"),
     ("max_drawback_20", "$close / Max($close, 20) - 1", "相对20日高点的回撤"),

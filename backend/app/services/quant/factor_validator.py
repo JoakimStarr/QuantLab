@@ -9,7 +9,7 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy import stats
-from collections import OrderedDict
+from cachetools import LRUCache
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -44,11 +44,30 @@ class SampleSplitter:
             "test": dates[valid_end:],
         }
 
+    def split_by_dates(self, actual_dates: list) -> dict[str, list]:
+        """按实际交易日分割（替代按自然日），保持截面完整。
+
+        actual_dates: 因子数据真实存在的交易日序列（升序）。
+        """
+        if not actual_dates:
+            return {"train": [], "valid": [], "test": []}
+        return self.split(list(actual_dates))
+
     def split_dates(self, start: str, end: str) -> dict[str, tuple[str, str]]:
-        """按起止日期分割，返回 {train, valid, test} 的 (start, end) 元组。"""
-        all_dates = pd.date_range(start=start, end=end, freq="D").strftime("%Y-%m-%d").tolist()
-        # 过滤掉非交易日，使用实际存在的日期
-        # 由于不知道具体哪些是交易日，用分割后的起止日期即可
+        """按起止日期分割，返回 {train, valid, test} 的 (start, end) 元组。
+
+        基于真实交易日（exchange_calendars XSHG 日历，含法定节假日），
+        替代自然日近似，保证样本分割比例与真实交易天数一致。
+
+        注意：仍仅用于无真实交易日数据的场景；
+        因子评价请使用 split_by_dates（实际交易日）。
+        """
+        from app.services.quant.calendar_utils import get_trading_days
+        try:
+            trading_dates = get_trading_days(start, end)
+        except Exception:
+            trading_dates = pd.date_range(start=start, end=end, freq="B")
+        all_dates = trading_dates.strftime("%Y-%m-%d").tolist()
         split_result = self.split(all_dates)
         result = {}
         for key, dates in split_result.items():
@@ -127,12 +146,55 @@ class RollingICEvaluator:
 
 # ==================== 统计显著性 ====================
 
+def newey_west_t(series, lags: int = None) -> tuple:
+    """Newey-West 异方差自相关一致（HAC）t 统计量。
+
+    对重叠前向收益标签产生的自相关 IC 序列做 Bartlett 核校正，
+    避免 t 检验虚高（独立样本假设不成立时 p 值系统性偏低）。
+
+    Args:
+        series: IC 序列
+        lags: 自相关滞后阶数（默认取 horizon 即标签周期）
+
+    Returns:
+        (t_stat, p_value)，样本不足时返回 (None, None)
+    """
+    s = np.asarray(pd.Series(series).dropna(), dtype=float)
+    n = len(s)
+    if n < 3:
+        return None, None
+    if lags is None:
+        lags = max(1, int(np.ceil(n ** (1.0 / 3.0))))
+    lags = max(0, min(lags, n - 2))
+
+    mu = float(s.mean())
+    if abs(mu) < 1e-15:
+        return 0.0, 1.0
+
+    gamma = {}
+    gamma[0] = float(np.mean((s - mu) ** 2))
+    for lag in range(1, lags + 1):
+        gamma[lag] = float(np.mean((s[:-lag] - mu) * (s[lag:] - mu)))
+
+    # Bartlett 核加权
+    var = gamma[0]
+    for lag in range(1, lags + 1):
+        w = 1.0 - lag / (lags + 1.0)
+        var += 2.0 * w * gamma[lag]
+    var = max(var, 1e-12)
+
+    se = np.sqrt(var / n)
+    t = mu / se
+    p = 2.0 * stats.t.sf(abs(t), df=max(n - 1, 1))
+    return float(t), float(p)
+
+
 class StatisticalSignificance:
-    """统计显著性检验：对 IC 序列做 t-test。"""
+    """统计显著性检验：对 IC 序列做 t-test（Newey-West 校正）。"""
 
     @staticmethod
-    def test(ic_series: pd.Series, alpha: float = 0.05) -> dict:
-        """对 IC 序列做双尾 t 检验。
+    def test(ic_series: pd.Series, alpha: float = 0.05, lags: int = None) -> dict:
+        """对 IC 序列做 Newey-West 校正 t 检验。
 
         H0: mean IC = 0
         H1: mean IC != 0
@@ -140,6 +202,7 @@ class StatisticalSignificance:
         Args:
             ic_series: IC 序列
             alpha: 显著性水平（默认 0.05）
+            lags: 自相关滞后阶数（None 自动，传入 horizon 更准确）
 
         Returns:
             {"t_stat": float, "p_value": float, "significant": bool, "n_days": int}
@@ -149,15 +212,17 @@ class StatisticalSignificance:
         if n < 3:
             return {"t_stat": None, "p_value": None, "significant": False, "n_days": n}
 
-        t_stat, p_value = stats.ttest_1samp(s.values, 0, alternative="two-sided")
-        if np.isnan(t_stat) or np.isnan(p_value):
+        t_stat, p_value = newey_west_t(s, lags=lags)
+        if t_stat is None or np.isnan(t_stat) or np.isnan(p_value):
             return {"t_stat": None, "p_value": None, "significant": False, "n_days": n}
 
         return {
-            "t_stat": float(round(t_stat, 4)),
-            "p_value": float(round(p_value, 4)),
+            "t_stat": round(t_stat, 4),
+            "p_value": round(p_value, 4),
             "significant": bool(p_value < alpha),
             "n_days": n,
+            "method": "newey-west",
+            "lags": lags if lags is not None else max(1, int(np.ceil(n ** (1.0 / 3.0)))),
         }
 
 
@@ -219,26 +284,55 @@ class DiversityChecker:
         return False
 
 
+def bh_corrected_pvalues(p_values: list) -> list:
+    """Benjamini-Hochberg 多重检验校正（FDR 控制）。
+
+    挖掘管线对一批候选因子做显著性筛选时，多次检验会放大假阳性率，
+    用 BH 校正后的 q 值替代原始 p 值判断是否显著。
+
+    Args:
+        p_values: 原始 p 值列表（None 视为缺失，不参与校正，保持 None）
+
+    Returns:
+        与输入等长的校正后 q 值列表
+    """
+    valid_idx = [i for i, p in enumerate(p_values) if p is not None]
+    if not valid_idx:
+        return [None] * len(p_values)
+    m = len(valid_idx)
+    raw = np.asarray([p_values[i] for i in valid_idx], dtype=float)
+    # 防御：p 值必须在 [0,1]
+    raw = np.clip(raw, 0.0, 1.0)
+    order = np.argsort(raw)
+    ranks = np.arange(1, m + 1, dtype=float)
+    q_sorted = raw[order] * m / ranks
+    # 单调性约束：从后往前累积取 min
+    q_sorted = np.minimum.accumulate(q_sorted[::-1])[::-1]
+    q = np.empty(m)
+    q[order] = q_sorted
+    q = np.clip(q, 0.0, 1.0)
+    out = [None] * len(p_values)
+    for i, val in zip(valid_idx, q.tolist()):
+        out[i] = float(val)
+    return out
+
+
 # ==================== 主验证器 ====================
 
 # IC 缓存：key=md5(expr|start|end|horizon)，value=全量评价结果
-_IC_CACHE: OrderedDict[str, dict] = OrderedDict()
-_IC_CACHE_MAX = 1024
+_IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
 
-def _ic_cache_key(expr: str, start: str, end: str, horizon: int) -> str:
-    """生成 IC 缓存 key。"""
+def _ic_cache_key(expr: str, start: str, end: str, horizon: int, diversity: bool = False) -> str:
+    """生成 IC 缓存 key（diversity 是否启用会影响结果，必须纳入 key）。"""
     import hashlib
-    raw = f"{expr}|{start}|{end}|{horizon}"
+    raw = f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
 def _ic_cache_put(key: str, value: dict) -> None:
-    """写入 IC 缓存，超上限时淘汰最早条目。"""
+    """写入 IC 缓存（LRUCache 自动淘汰最久未使用的条目）。"""
     _IC_CACHE[key] = value
-    _IC_CACHE.move_to_end(key)
-    if len(_IC_CACHE) > _IC_CACHE_MAX:
-        _IC_CACHE.popitem(last=False)
 
 
 def _ic_cache_get(key: str) -> dict | None:
@@ -257,19 +351,34 @@ def clear_ic_cache() -> None:
 
 
 def compute_daily_ic_series(factor_expr: str, start: str, end: str,
-                            universe: str = None, horizon: int = 5) -> pd.Series:
+                            universe: str = None, horizon: int = 5,
+                            factor_df: pd.DataFrame = None,
+                            label_df: pd.DataFrame = None) -> pd.Series:
     """计算每日截面 Spearman IC 序列。
 
     使用 horizon 周期前向收益作为标签。
     复用 factor_eval 中的数据加载逻辑。
+
+    Args:
+        factor_df/label_df: 已加载的因子/标签数据（避免重复加载，
+            批量评价或分段计算时传入，start/end 将作为日期过滤范围）。
 
     Returns:
         pd.Series(index=datetime, values=daily_rank_ic)
     """
     from app.services.quant.factor_eval import load_factor_values, load_label
     label_expr = f"Ref($close, -{horizon}) / $close - 1"
-    factor_df = load_factor_values(factor_expr, start, end, universe)
-    label_df = load_label(start, end, label_expr=label_expr, universe=universe)
+    if factor_df is None:
+        factor_df = load_factor_values(factor_expr, start, end, universe)
+    if label_df is None:
+        label_df = load_label(start, end, label_expr=label_expr, universe=universe)
+    # 日期过滤（传入已加载数据且要求分段时生效）
+    if factor_df is not None and start:
+        dts = factor_df.index.get_level_values("datetime")
+        factor_df = factor_df[(dts >= pd.Timestamp(start)) & (dts <= pd.Timestamp(end))]
+    if label_df is not None and start:
+        dts = label_df.index.get_level_values("datetime")
+        label_df = label_df[(dts >= pd.Timestamp(start)) & (dts <= pd.Timestamp(end))]
     merged = factor_df.join(label_df, how="inner").dropna()
     if merged.empty:
         return pd.Series(dtype=float)
@@ -280,6 +389,40 @@ def compute_daily_ic_series(factor_expr: str, start: str, end: str,
         include_groups=False,
     ).dropna()
     return daily_ic
+
+
+# 已有因子 IC 序列缓存（多样性检测用）：key=md5(expr|start|end|horizon)
+_EXISTING_IC_CACHE: LRUCache = LRUCache(maxsize=256)
+
+
+def _existing_ic_cache_key(expr: str, start: str, end: str, horizon: int) -> str:
+    import hashlib
+    raw = f"{expr}|{start}|{end}|{horizon}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def compute_existing_ic_series(exprs: list, start: str, end: str,
+                               universe: str = None, horizon: int = 5) -> list[pd.Series]:
+    """批量计算已有因子的 IC 序列（带缓存），供多样性检测使用。
+
+    单个因子失败不影响整体（记录日志跳过），缓存命中时直接复用，
+    避免每次挖掘任务重复加载已有因子的全量数据。
+    """
+    series_list = []
+    for expr in exprs:
+        key = _existing_ic_cache_key(expr, start, end, horizon)
+        cached = _EXISTING_IC_CACHE.get(key)
+        if cached is not None:
+            series_list.append(cached)
+            continue
+        try:
+            s = compute_daily_ic_series(expr, start, end, universe, horizon)
+        except Exception as e:
+            logger.debug("已有因子 IC 序列计算失败 expr=%s: %s", expr, e)
+            continue
+        _EXISTING_IC_CACHE[key] = s
+        series_list.append(s)
+    return series_list
 
 
 def evaluate_factor_with_validation(
@@ -351,38 +494,39 @@ def evaluate_factor_with_validation(
     if ic_threshold is None:
         ic_threshold = mining_cfg.get("ic_threshold", 0.03)
 
-    # 检查缓存
-    cache_key = _ic_cache_key(factor_expr, start, end, horizon)
+    # 检查缓存（diversity 状态纳入 key，避免缓存污染多样性检测结果）
+    cache_key = _ic_cache_key(factor_expr, start, end, horizon,
+                              diversity=bool(existing_ic_series))
     cached = _ic_cache_get(cache_key)
     if cached is not None:
         return cached
 
-    # 1. 样本分割
-    splitter = SampleSplitter()
-    all_dates = pd.date_range(start=start, end=end, freq="D").strftime("%Y-%m-%d").tolist()
-    splits = splitter.split(all_dates)
-
-    # 2. 全样本 IC 序列（用于向后兼容 compute_ic 的全部指标）
+    # 1. 样本分割：基于实际交易日（因子数据真实存在的日期），而非自然日
     from app.services.quant.factor_eval import (
         load_factor_values, load_label, compute_ic, compute_turnover
     )
     label_expr = f"Ref($close, -{horizon}) / $close - 1"
     factor_df = load_factor_values(factor_expr, start, end, universe)
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
+    actual_dates = sorted(factor_df.index.get_level_values("datetime").unique())
+    splits = SampleSplitter().split_by_dates(actual_dates)
 
-    # 全样本指标（向后兼容）
+    # 2. 全样本 IC 序列（用于向后兼容 compute_ic 的全部指标）
     ic_metrics = compute_ic(factor_df, label_df)
     turnover = compute_turnover(factor_df)
 
-    # 3. 分段计算 IC 序列
+    # 3. 分段计算 IC 序列（复用已加载数据，不再重复 IO）
     segment_ics = {}
     for seg_name, seg_dates in splits.items():
         if not seg_dates:
             continue
-        seg_start = seg_dates[0]
-        seg_end = seg_dates[-1]
+        seg_start = str(seg_dates[0].date())
+        seg_end = str(seg_dates[-1].date())
         try:
-            seg_ic = compute_daily_ic_series(factor_expr, seg_start, seg_end, universe, horizon)
+            seg_ic = compute_daily_ic_series(
+                factor_expr, seg_start, seg_end, universe, horizon,
+                factor_df=factor_df, label_df=label_df,
+            )
             segment_ics[seg_name] = seg_ic
         except Exception as e:
             logger.debug("分段 %s IC 计算失败: %s", seg_name, e)
@@ -401,8 +545,8 @@ def evaluate_factor_with_validation(
     # 6. 滚动 IC 统计
     rolling_eval = RollingICEvaluator.evaluate(valid_ic)
 
-    # 7. 统计显著性
-    significance = StatisticalSignificance.test(valid_ic, alpha=significance_alpha)
+    # 7. 统计显著性（Newey-West 校正，lags=horizon 对齐标签重叠周期）
+    significance = StatisticalSignificance.test(valid_ic, alpha=significance_alpha, lags=horizon)
 
     # 8. 多样性检测
     is_duplicate = False

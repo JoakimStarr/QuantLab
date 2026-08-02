@@ -5,6 +5,7 @@
   - baostock：一次拉取全市场某日K线（增量主源, 含ST标记+估值字段, 不限频）
   - akshare ：逐只爬取 AKShare 行情后转储 qlib bin（仅个股/指数兜底, 易被反爬）
 """
+from app.services.data.smart_sync import run_smart_sync_task as _run_sync_task
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
@@ -40,7 +41,7 @@ async def qlib_status_api():
         from pathlib import Path
         day_txt = Path(provider_uri) / "calendars" / "day.txt"
         if day_txt.exists():
-            lines = [l.strip() for l in day_txt.read_text(encoding="utf-8").splitlines() if l.strip()]
+            lines = [line.strip() for line in day_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
             if lines:
                 earliest_date = lines[0]
                 calendar_count = len(lines)
@@ -76,9 +77,6 @@ async def data_status_api(db=Depends(get_db)):
         "qlib_dir": r.qlib_dir,
     } for r in rows]
     return ApiResponse(ok=True, data={"items": items, "total": total})
-
-
-from app.services.data.smart_sync import run_smart_sync_task as _run_sync_task
 
 
 async def _detect_stale_sync(db) -> int:

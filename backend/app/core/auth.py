@@ -38,7 +38,7 @@ bearer_transport = BearerTransport(tokenUrl="api/v1/auth/login")
 def get_jwt_strategy() -> JWTStrategy:
     """JWT 策略工厂：使用 settings.secret_key 签名，有效期从配置读取。"""
     return JWTStrategy(
-        secret=settings.secret_key,
+        secret=settings.security.secret_key,
         lifetime_seconds=settings.security.access_token_expire_hours * 3600,
     )
 
@@ -93,7 +93,7 @@ async def require_user(
     AUTH_ENABLED=False（本地开发）时直接放行，返回模拟用户信息；
     AUTH_ENABLED=True 时强制校验 Bearer token，返回 User 模型实例。
     """
-    if not settings.auth_enabled:
+    if not settings.security.auth_enabled:
         return {"role": "admin", "sub": "local-dev"}
     if user is None:
         raise HTTPException(status_code=401, detail="未登录或 token 已过期")
@@ -118,7 +118,7 @@ def verify_token(token: str) -> Optional[dict]:
 
         payload = decode_jwt(
             token,
-            settings.secret_key,
+            settings.security.secret_key,
             audience=["fastapi-users:auth"],
         )
         return {

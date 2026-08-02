@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import logging
+import pandas as pd
 from fastapi import APIRouter, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -85,7 +86,7 @@ async def param_sweep_api(
 
     background_tasks.add_task(_sweep_task)
     return ApiResponse(ok=True, data={
-        "message": f"参数扫描已提交（{len(topk_list)} x {len(rebalance_list)} = {len(topk_list)*len(rebalance_list)} 组合）",
+        "message": f"参数扫描已提交（{len(topk_list)} x {len(rebalance_list)} = {len(topk_list) * len(rebalance_list)} 组合）",
         "strategy_id": strategy_id,
         "topk_list": topk_list,
         "rebalance_list": rebalance_list,
@@ -151,16 +152,18 @@ async def export_trades_api(result_id: int):
     if r is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
 
-    # 从 nav_curve 或 metrics 中提取交易记录
-    metrics = r.get("metrics") or {}
-    trades = metrics.get("trades") or []
+    # 逐笔成交明细（新列）；旧结果回退从 metrics 读取
+    trades = r.get("trades") or []
+    if not trades:
+        metrics = r.get("metrics") or {}
+        trades = metrics.get("trades") or []
 
     if not trades:
         # 如果没有交易明细，从净值曲线生成持仓变动记录
         nav_curve = r.get("nav_curve") or []
         trades = []
         for i in range(1, len(nav_curve)):
-            prev = nav_curve[i-1]
+            prev = nav_curve[i - 1]
             curr = nav_curve[i]
             daily_ret = (curr.get("nav", 1) / prev.get("nav", 1) - 1) if prev.get("nav") else 0
             trades.append({
@@ -168,7 +171,9 @@ async def export_trades_api(result_id: int):
                 "nav": round(curr.get("nav", 0), 4),
                 "daily_return": round(daily_ret, 4),
                 "benchmark_nav": round(curr.get("benchmark", 0), 4),
-                "excess": round(daily_ret - ((curr.get("benchmark",1)/prev.get("benchmark",1)-1) if prev.get("benchmark") else 0), 4),
+                "excess": round(daily_ret - (
+                    (curr.get("benchmark", 1) / prev.get("benchmark", 1) - 1) if prev.get("benchmark") else 0
+                ), 4),
             })
 
     # 生成 CSV
@@ -186,6 +191,65 @@ async def export_trades_api(result_id: int):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=backtest_{result_id}_trades.csv"},
     )
+
+
+# ---------------- 组合绩效报告（quantstats） ----------------
+
+@router.post("/{strategy_id}/portfolio-report")
+async def portfolio_report_api(
+    strategy_id: int,
+    result_id: int = Query(None, description="指定回测结果 ID（默认最新）"),
+    generate_html: bool = Query(True, description="是否生成 HTML tear-sheet"),
+):
+    """组合绩效报告：quantstats 全量指标 + HTML tear-sheet。"""
+    from app.services.quant.portfolio_report import generate_portfolio_report
+
+    if result_id is None:
+        from app.services.strategy.manager import list_backtest_results
+        results = await list_backtest_results(strategy_id, limit=1)
+        if not results:
+            return ApiResponse(ok=False, error={"code": "NOT_FOUND",
+                                                "message": "该策略暂无回测结果", "status": 404})
+        r = results[0]
+    else:
+        r = await get_backtest_result(result_id)
+        if r is None:
+            return ApiResponse(ok=False, error={"code": "NOT_FOUND",
+                                                "message": "回测结果不存在", "status": 404})
+
+    nav_curve = r.get("nav_curve") or {}
+    dates, portfolio = None, None
+    if isinstance(nav_curve, dict):
+        dates = nav_curve.get("dates") or []
+        portfolio = nav_curve.get("portfolio") or []
+    elif isinstance(nav_curve, list):
+        dates = [p.get("date") for p in nav_curve]
+        portfolio = [p.get("nav") for p in nav_curve]
+    if not dates or not portfolio or len(dates) != len(portfolio):
+        return ApiResponse(ok=False, error={"code": "NO_NAV",
+                                            "message": "回测结果缺少净值曲线数据", "status": 422})
+
+    nav = pd.Series(portfolio, index=pd.to_datetime(dates)).astype(float)
+    returns = nav.pct_change().dropna()
+    if returns.empty:
+        return ApiResponse(ok=False, error={"code": "NO_RETURNS",
+                                            "message": "净值曲线过短，无法生成报告", "status": 422})
+
+    # 重建基准收益（若存储了 benchmark 序列）
+    benchmark = None
+    if isinstance(nav_curve, dict) and nav_curve.get("benchmark"):
+        b_nav = pd.Series(nav_curve["benchmark"], index=pd.to_datetime(dates)).astype(float)
+        benchmark = b_nav.pct_change().dropna()
+
+    report = generate_portfolio_report(
+        returns, benchmark=benchmark,
+        title=f"策略 {strategy_id} 组合绩效报告（回测 {r.get('start_date')}~{r.get('end_date')}）",
+        generate_html=generate_html,
+    )
+    report["strategy_id"] = strategy_id
+    report["result_id"] = r.get("id")
+    report["period"] = {"start": r.get("start_date"), "end": r.get("end_date")}
+    return ApiResponse(ok=True, data=report)
 
 
 # ---------------- Walk-forward 滚动回测（添加14） ----------------

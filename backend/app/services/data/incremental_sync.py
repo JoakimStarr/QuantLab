@@ -64,7 +64,6 @@ def download_and_merge_incremental(target_dir: str) -> dict:
         try:
             with requests.get(info["download_url"], stream=True, timeout=(30, 120)) as r:
                 r.raise_for_status()
-                total = int(r.headers.get("content-length", 0))
                 downloaded = 0
                 with open(tmp_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=65536):
@@ -88,7 +87,7 @@ def download_and_merge_incremental(target_dir: str) -> dict:
             latest_date = None
             if os.path.exists(day_txt):
                 with open(day_txt) as f:
-                    lines = [l.strip() for l in f if l.strip()]
+                    lines = [line.strip() for line in f if line.strip()]
                     if lines:
                         latest_date = lines[-1]
 

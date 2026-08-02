@@ -15,13 +15,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
-try:
-    import frontmatter
-    HAS_FRONTMATTER = True
-except ImportError:
-    HAS_FRONTMATTER = False
-
-# backend/app/services/docs/loader.py -> backend/app/services/docs/ -> backend/app/services/ -> backend/app/ -> backend/ -> 4 上一层到 backend, 再上一层到 QuantLab
+# backend/app/services/docs/loader.py -> backend/app/services/docs/ -> backend/app/services/
+# -> backend/app/ -> backend/ -> 4 上一层到 backend, 再上一层到 QuantLab
 # loader.py 位于 backend/app/services/docs/loader.py，docs/ 在 backend/ 的上一级
 # __file__ = .../backend/app/services/docs/loader.py
 # parents[0] = docs/  [1] = services/  [2] = app/  [3] = backend/  [4] = 项目根

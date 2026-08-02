@@ -10,7 +10,6 @@ import contextvars
 import logging
 import logging.config
 import sys
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import structlog

@@ -9,7 +9,7 @@
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
-        <el-button :icon="MagicStick" :loading="backfillingMetrics" @click="onBackfillAlpha158" title="为已存在但缺指标的 Alpha158 因子补算 IC/RankIC/ICIR/换手">补算指标</el-button>
+        <el-button :icon="MagicStick" :loading="backfillingMetrics" @click="onBackfillAlpha158" title="勾选因子后点击，仅重算所选因子的 IC/RankIC/ICIR/换手">补算指标</el-button>
         <el-button type="primary" :icon="Plus" @click="onAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
@@ -213,6 +213,7 @@ async function onSeedAlpha158() {
     } else {
       ElMessage.success(`Alpha158 导入成功：${data?.count ?? 0} 个因子`)
     }
+    factorStore.invalidate()
     await loadFactors()
   } catch {
     /* 拦截器已提示 */
@@ -222,12 +223,18 @@ async function onSeedAlpha158() {
 }
 
 async function onBackfillAlpha158() {
+  const ids = selectedKeys.value
+  if (ids.length === 0) {
+    ElMessage.warning('请先勾选要重算指标的因子')
+    return
+  }
   backfillingMetrics.value = true
   try {
-    const data = await backfillAlpha158Metrics()
+    const data = await backfillAlpha158Metrics(ids)
     ElMessage.success(
-      data?.message || `补算完成 ${data?.evaluated || 0}/${data?.total || 0}`
+      data?.message || `重算完成 ${data?.evaluated || 0}/${data?.total || 0}`
     )
+    factorStore.invalidate()
     await loadFactors()
   } catch {
     /* 拦截器已提示 */
@@ -343,6 +350,19 @@ const sortedData = computed(() => {
   return list
 })
 
+// === 表达式展开（点击省略的表达式 → 列扩宽显示全文，再点收起）===
+const expandedExprIds = ref(new Set())  // 已展开的因子 id 集合
+
+function toggleExprExpand(rowId) {
+  const next = new Set(expandedExprIds.value)
+  if (next.has(rowId)) {
+    next.delete(rowId)
+  } else {
+    next.add(rowId)
+  }
+  expandedExprIds.value = next
+}
+
 // === 行选择（el-table-v2 无内置 selection，用自定义 checkbox 列）===
 const selectedKeys = ref([])  // 选中行的 id 列表
 
@@ -453,10 +473,17 @@ const columns = computed(() => [
   },
   {
     key: 'expression',
-    title: '表达式',
+    title: '表达式（点击展开）',
     dataKey: 'expression',
-    width: 220,
-    cellRenderer: ({ cellData }) => h('span', { class: 'cell-expr' }, cellData),
+    width: expandedExprIds.value.size > 0 ? 560 : 220,
+    cellRenderer: ({ cellData, rowData }) => {
+      const expanded = expandedExprIds.value.has(rowData.id)
+      return h('span', {
+        class: ['cell-expr', expanded ? 'cell-expr--expanded' : 'cell-expr--collapsed'].join(' '),
+        title: cellData,
+        onClick: () => toggleExprExpand(rowData.id),
+      }, cellData)
+    },
   },
   {
     key: 'ic',
@@ -703,6 +730,19 @@ onMounted(loadFactors)
   display: inline-block;
   max-width: 100%;
   word-break: break-all;
+  cursor: pointer;
+  transition: color 0.15s;
+  &:hover {
+    color: var(--text-primary);
+  }
+}
+.cell-expr--collapsed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-expr--expanded {
+  white-space: normal;
 }
 .cell-desc {
   font-size: var(--font-size-sm);

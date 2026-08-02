@@ -15,7 +15,7 @@ _ALLOWED_AST_NODES = {
     ast.Load, ast.Store,
 }
 _MAX_EXPR_DEPTH = 20
-_MAX_EXPR_NODES = 100
+_MAX_EXPR_NODES = 1000  # gplearn 树形翻译会展开 max/min/if（子树复制），100 不够
 
 # qlib 内置算子（常用的，可按需扩展）
 _QLIB_OPS = {
@@ -25,13 +25,15 @@ _QLIB_OPS = {
     "Abs", "Log", "Power", "Sign", "If", "IdxMax", "IdxMin",
     "Product", "Count", "Mad", "Clip", "Range", "Floor", "Ceil",
     "All", "Any", "Pair", "Bias", "Div", "Sub", "Add", "Mul",
+    "Skew", "Kurt",
 }
 
 # 允许的字段（$开头）
 _QLIB_FIELDS = {"$open", "$close", "$high", "$low", "$volume", "$amount", "$factor", "$change"}
 
 # 严格禁止的标识符（词边界匹配，避免 "os" 误伤 "close"）
-_FORBIDDEN_WORDS = {"import", "exec", "eval", "lambda", "os", "sys", "subprocess", "globals", "locals", "getattr", "setattr"}
+_FORBIDDEN_WORDS = {"import", "exec", "eval", "lambda", "os",
+                    "sys", "subprocess", "globals", "locals", "getattr", "setattr"}
 # "open" removed from word ban; detected via open() call pattern below to avoid blocking $open field
 _FORBIDDEN_SUBSTR = {"__", "compile", "builtins", "automl", "autogluon"}
 
@@ -111,7 +113,9 @@ def validate_expression(expr: str, max_length: int = 2000) -> str:
         raise ExpressionValidationError("expression contains forbidden open() call")
 
     # 函数名/标识符（不含 $field）：先剔除 $field 再提取，避免误取字段名片段
+    # 同时剔除科学计数法数字（如 1e-6 的 'e'），避免误判为标识符
     expr_no_fields = re.sub(r"\$[a-zA-Z_]+", " ", expr)
+    expr_no_fields = re.sub(r"\d+(\.\d+)?[eE][+-]?\d+", " ", expr_no_fields)
     identifiers = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr_no_fields))
 
     # look-ahead bias 防护见下方 AST 阶段（正则无法处理嵌套 Ref 参数）

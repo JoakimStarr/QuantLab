@@ -19,7 +19,7 @@ from app.core.database import async_session
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.quant import SyncDataRequest
 from app.services.data.sync_progress import (
-    init_progress, update_progress, finish_progress, clear_progress,
+    init_progress, update_progress, finish_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def _get_latest_date(provider_uri: str):
     day_txt = Path(provider_uri) / "calendars" / "day.txt"
     if not day_txt.exists():
         return None
-    lines = [l.strip() for l in day_txt.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [line.strip() for line in day_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not lines:
         return None
     try:
@@ -96,7 +96,6 @@ async def smart_sync(universe: str = "csi300", include_intraday: bool = True) ->
 
     provider_uri = settings.qlib_provider_path
     smart_cfg = settings.quant.get("smart_sync", {}) or {}
-    threshold = smart_cfg.get("full_sync_threshold_days", 7)
     # config.quant.smart_sync.include_intraday 可覆盖默认 True
     include_intraday = smart_cfg.get("include_intraday", include_intraday)
 

@@ -1,6 +1,6 @@
 # QuantLab 技术文档 - 架构总览
 
-> 版本：v2.5.5 · 最后更新：2026-08-01
+> 版本：v3.0.2 · 最后更新：2026-08-02
 > 配套仓库：[JoakimStarr/QuantLab](https://github.com/JoakimStarr/QuantLab)
 
 本文档是 QuantLab 的**架构总览**：回答"整个系统由哪些模块组成、各模块怎么协作、数据从哪来到哪去"。读完后你应该能在脑海里画出系统的完整地图。
@@ -378,7 +378,7 @@ frontend/src/
 - 顶部文档切换器（按分组排序）
 - 字号控制（A-/A+，localStorage 持久化）
 - 目录位置切换（左/右）
-- 自动提取 h2/h3 目录
+- 自动提取 h2/h3 目录，并忽略 fenced code block 内的 `#` 注释
 - 点击目录平滑滚动 + 锚点定位
 - 滚动时 IntersectionObserver 高亮当前章节
 - 全部 API 见 `/docs` 页面

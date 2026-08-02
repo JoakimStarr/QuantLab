@@ -23,5 +23,3 @@ _scripts_dir = os.path.abspath(_scripts_dir)
 
 if os.path.isdir(_scripts_dir) and _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
-
-from dump_bin import DumpDataAll as DumpAll

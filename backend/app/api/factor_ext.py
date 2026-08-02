@@ -164,16 +164,20 @@ async def seed_alpha158_api():
         pass
 
     if not result.get("ok"):
-        return ApiResponse(ok=False, error={"code": "ALPHA158_SEEDED", "message": result.get("error", "已导入"), "status": 400})
+        return ApiResponse(ok=False, error={
+            "code": "ALPHA158_SEEDED", "message": result.get("error", "已导入"), "status": 400,
+        })
     return ApiResponse(ok=True, data=result)
 
 
 @router.post("/backfill-alpha158-metrics")
-async def backfill_alpha158_metrics_api():
-    """为已导入但缺指标的 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
+async def backfill_alpha158_metrics_api(
+    factor_ids: list[int] = Query(None, description="指定重算的因子 ID 列表；不传则只补算缺指标的 Alpha158 因子"),
+):
+    """为 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
 
-    用于修复历史遗留：导入时未触发评价导致指标为 NULL 的因子。
-    线程池并发 + 预加载共用 label/close，158 个因子通常显著快于原版（取决于 IO）。
+    传 factor_ids：仅重算所选因子的指标（覆盖已有值）。
+    不传：只补算历史遗留中指标为 NULL 的因子。
     进度通过 WebSocket `alpha158_progress` 事件推送。
     """
     from app.services.factor.alpha158 import backfill_alpha158_metrics
@@ -184,7 +188,9 @@ async def backfill_alpha158_metrics_api():
             "done": done, "total": total, "message": msg,
         })
 
-    result = await backfill_alpha158_metrics(progress_callback=progress_cb)
+    result = await backfill_alpha158_metrics(
+        progress_callback=progress_cb, factor_ids=factor_ids,
+    )
     try:
         await ws_manager.broadcast("alpha158_progress", {
             "done": result.get("evaluated", 0),

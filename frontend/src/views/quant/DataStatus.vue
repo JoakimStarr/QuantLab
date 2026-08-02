@@ -362,13 +362,15 @@
 
 <script setup>
 defineOptions({ name: 'QuantData' })
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, eodSync, syncIndices, integrityCheck, syncIndustry, getSyncPathPrediction, getSyncProgress } from '@/api/quant'
 
 const statusList = ref([])
+const route = useRoute()
 const loading = ref(false)
 const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0 })
@@ -700,6 +702,14 @@ async function retrySync() {
 }
 
 onMounted(() => { loadAll(); fetchPathPrediction() })
+
+watch(
+  () => route.query.preview,
+  (code) => {
+    if (code) loadPreview(String(code))
+  },
+  { immediate: true },
+)
 onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
 </script>
 

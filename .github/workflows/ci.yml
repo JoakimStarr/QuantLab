@@ -32,8 +32,12 @@ jobs:
       - name: Lint frontend
         run: |
           cd frontend
-          npx vue-tsc --noEmit 2>/dev/null || true
-          npx eslint src/ --ext .vue,.js,.ts --max-warnings=50 || true
+          npm run lint
+          npm run check:vue
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
 
   test:
     name: Test

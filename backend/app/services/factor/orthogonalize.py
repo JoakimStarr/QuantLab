@@ -37,18 +37,21 @@ def gram_schmidt_orthogonalize(
 
     series_list = [factor_values[n][factor_col].rename(n) for n in ordered]
     wide = pd.concat(series_list, axis=1)
+    # 保持与输入一致的 MultiIndex（instrument, datetime），避免重建索引顺序错位
+    wide_names = list(wide.index.names)
 
     ortho_parts = []
     for dt in wide.index.get_level_values("datetime").unique():
-        block = wide.xs(dt, level="datetime").dropna()
+        mask = wide.index.get_level_values("datetime") == dt
+        block = wide.loc[mask].dropna()
         if len(block) < 2:
             continue
         M = block.values.astype(float)
         M = M - M.mean(axis=0, keepdims=True)
         pca = PCA(n_components=M.shape[1])
         ortho = pca.fit_transform(M)
+        # 直接用原 MultiIndex 子集（名称与顺序不变），pandas 赋值时可正确对齐
         part = pd.DataFrame(ortho, index=block.index, columns=ordered)
-        part = pd.concat([part], keys=[dt], names=["datetime"])
         ortho_parts.append(part)
 
     if not ortho_parts:
@@ -56,6 +59,7 @@ def gram_schmidt_orthogonalize(
         return factor_values
 
     ortho_wide = pd.concat(ortho_parts).sort_index()
+    ortho_wide.index = ortho_wide.index.set_names(wide_names)
 
     result = {}
     for name in ordered:

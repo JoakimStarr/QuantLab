@@ -1,7 +1,6 @@
 """回测引擎测试。
 
-测试 combine_factors / _is_price_limited / _calc_holding_return 纯函数，
-以及 run_backtest 的 mock 集成测试。
+测试 combine_factors 纯函数，以及 run_backtest 的 mock 集成测试。
 """
 import pytest
 import numpy as np
@@ -10,8 +9,6 @@ from unittest.mock import patch
 
 from app.services.quant.backtest_engine import (
     combine_factors,
-    _is_price_limited,
-    _calc_holding_return,
     run_backtest,
 )
 
@@ -82,110 +79,46 @@ class TestCombineFactors:
         result = combine_factors({"f1": f1})
         assert not result["score"].isna().any()
 
+    def test_ic_weight_negative_keeps_sign(self):
+        """ic_weight 负权重保留符号：负 IC 因子做反向贡献而非方向反转。"""
+        f1 = self._make_factor_df([[1.0, 2.0, 3.0]])
+        f2 = self._make_factor_df([[3.0, 2.0, 1.0]])
+        weights = {"f1": 0.5, "f2": -0.5}
+        result = combine_factors({"f1": f1, "f2": f2}, weights=weights, method="ic_weight")
+        day1 = result.xs(pd.Timestamp("2024-01-01"), level="datetime")["score"]
+        # z1=[-1.2247,0,1.2247], z2=[1.2247,0,-1.2247]
+        # score = 0.5*z1 + (-0.5)*z2 = [-1.2247, 0, 1.2247]
+        np.testing.assert_allclose(day1.values, [-1.224745, 0.0, 1.224745], atol=1e-4)
 
-class TestIsPriceLimited:
-    """涨跌停判断测试。"""
+    def test_ic_weight_negative_equals_flipped_positive(self):
+        """负权重因子 = 正权重 + 因子取值取反，方向语义一致。"""
+        f1 = self._make_factor_df([[1.0, 2.0, 3.0]])
+        f2 = self._make_factor_df([[3.0, 2.0, 1.0]])
+        r_neg = combine_factors({"f1": f1, "f2": f2}, weights={"f1": 0.5, "f2": -0.5}, method="ic_weight")
+        r_flip = combine_factors({"f1": f1, "f2": -f2}, weights={"f1": 0.5, "f2": 0.5}, method="ic_weight")
+        s_neg = r_neg.xs(pd.Timestamp("2024-01-01"), level="datetime")["score"]
+        s_flip = r_flip.xs(pd.Timestamp("2024-01-01"), level="datetime")["score"]
+        # 负权重组合 == 因子取反后的正权重组合
+        np.testing.assert_allclose(s_neg.values, s_flip.values, atol=1e-6)
 
-    @pytest.mark.parametrize("code,ret,expected", [
-        # 主板 ±10% (阈值 0.095)
-        ("sh600000", 0.05, False),
-        ("sh600000", 0.094, False),
-        ("sh600000", 0.095, True),
-        ("sh600000", 0.10, True),
-        ("sh600000", -0.05, False),
-        ("sh600000", -0.094, False),
-        ("sh600000", -0.095, True),
-        ("sh600000", -0.10, True),
-        # 创业板 ±20% (阈值 0.195)
-        ("sz300001", 0.15, False),
-        ("sz300001", 0.194, False),
-        ("sz300001", 0.195, True),
-        ("sz300001", 0.20, True),
-        ("sz300001", -0.195, True),
-        # 科创板 ±20% (sh68 开头)
-        ("sh688001", 0.15, False),
-        ("sh688001", 0.195, True),
-        ("sh688001", -0.20, True),
-    ])
-    def test_price_limit_thresholds(self, code, ret, expected):
-        """涨跌停阈值正确。"""
-        assert _is_price_limited(code, ret) is expected
+    def test_equal_weight_negative_weight_flips_direction(self):
+        """equal_weight 负权重翻转因子方向（反向因子）。"""
+        f1 = self._make_factor_df([[1.0, 2.0, 3.0]])
+        f2 = self._make_factor_df([[3.0, 2.0, 1.0]])
+        weights = {"f1": -0.8, "f2": 0.2}
+        result = combine_factors({"f1": f1, "f2": f2}, weights=weights, method="equal_weight")
+        day1 = result.xs(pd.Timestamp("2024-01-01"), level="datetime")["score"]
+        # 方向翻转后 f1 与 f2 同向：score = -z1*0.5 + z2*0.5 = [1.2247, 0, -1.2247]
+        np.testing.assert_allclose(day1.values, [1.224745, 0.0, -1.224745], atol=1e-4)
 
-    def test_nan_returns_true(self):
-        """NaN 收益视为不可交易。"""
-        assert _is_price_limited("sh600000", float("nan")) is True
+    def test_equal_weight_zero_weight_positive(self):
+        """equal_weight 权重为 0 的因子按正向处理。"""
+        f1 = self._make_factor_df([[1.0, 2.0, 3.0]])
+        f2 = self._make_factor_df([[3.0, 2.0, 1.0]])
+        result = combine_factors({"f1": f1, "f2": f2}, weights={"f1": 1.0, "f2": 0.0}, method="equal_weight")
+        day1 = result.xs(pd.Timestamp("2024-01-01"), level="datetime")["score"]
+        np.testing.assert_allclose(day1.values, [0.0, 0.0, 0.0], atol=1e-6)
 
-    def test_none_returns_true(self):
-        """None 收益视为不可交易。"""
-        assert _is_price_limited("sh600000", None) is True
-
-    def test_case_insensitive(self):
-        """代码大小写不敏感。"""
-        assert _is_price_limited("SH600000", 0.10) is True
-        assert _is_price_limited("SZ300001", 0.10) is False
-
-
-class TestCalcHoldingReturn:
-    """持仓收益计算测试。"""
-
-    def _make_dfs(self):
-        dates = pd.date_range("2024-01-01", periods=3, freq="B")
-        stocks = ["s1", "s2", "s3"]
-        returns_df = pd.DataFrame(
-            {"s1": [0.01, 0.02, 0.03], "s2": [0.02, 0.03, 0.01], "s3": [0.03, 0.01, 0.02]},
-            index=dates,
-        )
-        vol_df = pd.DataFrame(
-            {"s1": [100, 200, 300], "s2": [200, 300, 100], "s3": [300, 100, 200]},
-            index=dates,
-        )
-        return returns_df, vol_df, dates
-
-    def test_normal_holding_return(self):
-        """正常持仓收益 = 等权均值。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        holdings = {"s1", "s2", "s3"}
-        result = _calc_holding_return(returns_df, returns_df.copy(), vol_df, dates[0], holdings)
-        expected = (0.01 + 0.02 + 0.03) / 3
-        assert result == pytest.approx(expected)
-
-    def test_nan_returns_excluded(self):
-        """NaN 收益股票被排除。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        returns_df.loc[dates[0], "s2"] = np.nan
-        holdings = {"s1", "s2", "s3"}
-        result = _calc_holding_return(returns_df, returns_df.copy(), vol_df, dates[0], holdings)
-        expected = (0.01 + 0.03) / 2
-        assert result == pytest.approx(expected)
-
-    def test_empty_holdings(self):
-        """空持仓返回 None。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        result = _calc_holding_return(returns_df, returns_df.copy(), vol_df, dates[0], set())
-        assert result is None
-
-    def test_date_not_in_index(self):
-        """日期不在 returns_df 索引中返回 None。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        result = _calc_holding_return(
-            returns_df, returns_df.copy(), vol_df, pd.Timestamp("2025-01-01"), {"s1"}
-        )
-        assert result is None
-
-    def test_all_nan_returns(self):
-        """全部 NaN 返回 None。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        returns_df.loc[dates[0]] = np.nan
-        holdings = {"s1", "s2", "s3"}
-        result = _calc_holding_return(returns_df, returns_df.copy(), vol_df, dates[0], holdings)
-        assert result is None
-
-    def test_partial_holdings(self):
-        """部分持仓（不在 columns 的股票被跳过）。"""
-        returns_df, vol_df, dates = self._make_dfs()
-        holdings = {"s1", "s4"}  # s4 不在 columns
-        result = _calc_holding_return(returns_df, returns_df.copy(), vol_df, dates[0], holdings)
-        assert result == pytest.approx(0.01)
 
 
 class TestRunBacktest:
@@ -344,3 +277,4 @@ class TestRunBacktest:
         )
         # 回测应成功执行（涨停日 sh600000 被过滤，选其他股票或保持空仓）
         assert isinstance(result["returns"], pd.Series)
+

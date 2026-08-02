@@ -38,6 +38,11 @@ export function getDataPreview(code, limit) {
   return request.get('/quant/data/preview', { params: { code, limit } })
 }
 
+// 搜索个股：支持中文名称、首字母、代码
+export function searchStocks(q, limit = 20) {
+  return request.get('/quant/data/stocks/search', { params: { q, limit } })
+}
+
 // 获取同步历史记录
 export function getSyncHistory(limit) {
   return request.get('/quant/data/sync-history', { params: { limit } })

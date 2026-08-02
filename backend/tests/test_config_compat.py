@@ -34,10 +34,10 @@ class TestCompatLayer:
             _ = settings.quant["nonexistent"]
 
     def test_backward_compat_properties(self):
-        # settings.auth_enabled / secret_key / admin_password 等老属性仍可用
-        assert isinstance(settings.auth_enabled, bool)
-        assert isinstance(settings.secret_key, str)
-        assert isinstance(settings.app_env, str)
+        # settings.security.auth_enabled / secret_key / app_env 等安全属性
+        assert isinstance(settings.security.auth_enabled, bool)
+        assert isinstance(settings.security.secret_key, str)
+        assert isinstance(settings.security.app_env, str)
 
 
 class TestPlaceholderDetection:
