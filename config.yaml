@@ -77,12 +77,25 @@ mining:
     - Resi
     - WMA
     - EMA
-    - $close
+    - Log
+    - Abs
+    - Sign
+    - If
     - $open
     - $high
     - $low
+    - $close
+    - $preclose
     - $volume
-    - $factor
+    - $amount
+    - $turn
+    - $pct_chg
+    - $change
+    - $tradable
+    - $pe_ttm
+    - $pb_mrq
+    - $ps_ttm
+    - $pcf_ncf_ttm
     candidates_per_run: 10
     diversity_max_factors: 20
     eval_timeout_seconds: 60

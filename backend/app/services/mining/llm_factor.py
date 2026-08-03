@@ -30,6 +30,15 @@ _HAS_GPU = is_gpu_available()
 # 本地 IC 缓存（LRU，上限保护）
 _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
+# 可用的基础字段（与 qlib bin 实际写入一致，含估值/换手）
+_AVAILABLE_FIELDS = [
+    "$open", "$high", "$low", "$close", "$preclose",
+    "$volume", "$amount", "$turn",
+    "$tradestatus", "$pct_chg", "$is_st",
+    "$pe_ttm", "$pb_mrq", "$ps_ttm", "$pcf_ncf_ttm",
+    "$adjustflag", "$change", "$tradable",
+]
+
 _SYSTEM_PROMPT = """你是一位资深量化研究员，擅长构造A股截面选股因子。
 请基于 qlib 表达式语法生成有预测力的因子。"""
 
@@ -121,7 +130,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
     ic_threshold = mining_cfg.get("ic_threshold", 0.03)
     significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     allowed_ops = mining_cfg.get("allowed_ops", [])
-    fields = ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"]
+    fields = _AVAILABLE_FIELDS
 
     # 标记运行中
     await _update_task(task_id, status="running", started_at=datetime.now())
@@ -253,7 +262,7 @@ def _build_generation_prompt(template: dict, n_candidates: int) -> str:
     """
     mining_cfg = settings.mining.get("llm", {})
     allowed_ops = template.get("allowed_ops") or mining_cfg.get("allowed_ops", [])
-    fields = template.get("base_features") or ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"]
+    fields = template.get("base_features") or _AVAILABLE_FIELDS
     base_prompt = template.get("prompt") or template.get("llm_prompt") or _USER_PROMPT_TEMPLATE
     # 若模板自带 prompt，则在其后追加数量/约束说明
     if template.get("prompt") or template.get("llm_prompt"):
@@ -516,7 +525,7 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
     template = {
         "prompt": "",
         "llm_prompt": _USER_PROMPT_TEMPLATE,
-        "base_features": ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"],
+        "base_features": _AVAILABLE_FIELDS,
         "allowed_ops": mining_cfg.get("allowed_ops", []),
         "ic_threshold": mining_cfg.get("ic_threshold", 0.03),
     }
