@@ -385,13 +385,15 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
 
 def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None,
                     horizon: int = None, preloaded_label_df: pd.DataFrame = None,
-                    preloaded_close_df: pd.DataFrame = None) -> dict:
-    """完整因子评价：IC/RankIC/ICIR/换手/衰减。
+                    preloaded_close_df: pd.DataFrame = None,
+                    horizons: list = None) -> dict:
+    """完整因子评价：IC/RankIC/ICIR/换手/衰减 + 多周期 IC。
 
     Args:
-        horizon: 预测周期（标签前向收益天数）。默认从 config 读取。
+        horizon: 主预测周期（标签前向收益天数）。默认从 config 读取。
         preloaded_label_df: 预加载的标签 DataFrame，避免批量场景下重复 IO。
         preloaded_close_df: 预加载的 $close DataFrame，传入 compute_decay 避免重复 IO。
+        horizons: 额外评价的周期列表（如 [1, 10, 20]），计算 ic_by_horizon。
     """
     if horizon is None:
         horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
@@ -404,7 +406,8 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
     ic_metrics = compute_ic(factor_df, label_df)
     turnover = compute_turnover(factor_df)
     decay = compute_decay(factor_df, label_df, preloaded_close_df=preloaded_close_df)
-    return {
+
+    result = {
         **ic_metrics,
         "turnover": turnover,
         "decay": decay,
@@ -413,6 +416,30 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
         "factor_expr": factor_expr,
         "horizon": horizon,
     }
+
+    # 多周期评价：对额外 horizon 计算 IC，输出 ic_by_horizon + 稳定性
+    if horizons:
+        ic_by_horizon = {}
+        signs = []
+        for h in horizons:
+            if h == horizon:
+                ic_by_horizon[str(h)] = ic_metrics.get("ic")
+                if ic_metrics.get("ic") is not None:
+                    signs.append(1 if ic_metrics["ic"] > 0 else -1)
+                continue
+            h_label = f"Ref($close, -{h}) / $close - 1"
+            h_df = load_label(start, end, label_expr=h_label, universe=universe)
+            h_ic = compute_ic(factor_df, h_df).get("ic")
+            ic_by_horizon[str(h)] = h_ic
+            if h_ic is not None:
+                signs.append(1 if h_ic > 0 else -1)
+        # 稳定性：各周期 IC 同号比例
+        stability = abs(sum(signs)) / len(signs) if signs else None
+        ic_by_horizon[str(horizon)] = ic_by_horizon.get(str(horizon), ic_metrics.get("ic"))
+        result["ic_by_horizon"] = ic_by_horizon
+        result["multi_horizon_stability"] = round(stability, 4) if stability is not None else None
+
+    return result
 
 
 def compute_quantile_returns(
@@ -879,4 +906,79 @@ def deep_analyze_factor(
         "quantile_returns": quantile_nav,
         "turnover_curve": turnover_curve,
         "decay": {"lags": decay_lags, "ic_by_lag": [decay[lag] for lag in decay_lags]},
+    }
+
+
+def compute_orthogonal_ic(
+    factor_df: pd.DataFrame,
+    baseline_dfs: list,
+    label_df: pd.DataFrame,
+    factor_col: str = "factor",
+    label_col: str = "label",
+) -> dict:
+    """正交后 IC：候选因子对基准因子做截面回归取残差，再算残差与收益的 IC。
+
+    用于"正交后挖掘"：候选因子若与已有高 IC 因子高度相关，残差 IC 会很低，
+    从而筛选出真正有增量 alpha 的因子。
+
+    Args:
+        factor_df: 候选因子 MultiIndex(datetime, instrument) DataFrame
+        baseline_dfs: 基准因子 DataFrame 列表（已有高 IC 因子）
+        label_df: 收益标签 DataFrame
+        factor_col / label_col: 列名
+
+    Returns:
+        {
+            "orthogonal_ic": 残差 IC,
+            "orthogonal_rank_ic": 残差 RankIC,
+            "r2": 候选因子被基准解释的 R²（高 = 与基准重复）
+        }
+    """
+    if not baseline_dfs:
+        return {"orthogonal_ic": None, "orthogonal_rank_ic": None, "r2": None}
+
+    # 合并候选 + 基准到宽表
+    wide = factor_df[[factor_col]].rename(columns={factor_col: "candidate"})
+    for i, bdf in enumerate(baseline_dfs):
+        wide[f"base_{i}"] = bdf[factor_col]
+    wide = wide.join(label_df[[label_col]].rename(columns={label_col: "label"}), how="inner").dropna()
+
+    if len(wide) < 10:
+        return {"orthogonal_ic": None, "orthogonal_rank_ic": None, "r2": None}
+
+    residuals = []
+    dates = wide.index.get_level_values("datetime").unique()
+    for dt in dates:
+        block = wide.loc[wide.index.get_level_values("datetime") == dt]
+        if len(block) < 3:
+            continue
+        X = block[[c for c in wide.columns if c.startswith("base_")]].values.astype(float)
+        y = block["candidate"].values.astype(float)
+        # 最小二乘残差（含截距）
+        Xc = np.column_stack([np.ones(len(X)), X])
+        beta, *_ = np.linalg.lstsq(Xc, y, rcond=None)
+        resid = y - Xc @ beta
+        tmp = block[["label", "candidate"]].copy()
+        tmp["resid"] = resid
+        residuals.append(tmp)
+
+    if not residuals:
+        return {"orthogonal_ic": None, "orthogonal_rank_ic": None, "r2": None}
+
+    resid_df = pd.concat(residuals)
+    # 残差 IC
+    ic = float(resid_df["resid"].corr(resid_df["label"])) if len(resid_df) >= 5 else None
+    rank_ic = float(resid_df["resid"].corr(resid_df["label"], method="spearman")) if len(resid_df) >= 5 else None
+    # R²：候选因子方差中被基准解释的比例（整体，非逐日）
+    r2 = None
+    if "candidate" in resid_df.columns and len(resid_df) >= 5:
+        c = resid_df["candidate"].values.astype(float)
+        resid_var = float(np.var(resid_df["resid"].values))
+        cand_var = float(np.var(c))
+        if cand_var > 1e-12:
+            r2 = 1.0 - resid_var / cand_var
+    return {
+        "orthogonal_ic": round(ic, 4) if ic is not None else None,
+        "orthogonal_rank_ic": round(rank_ic, 4) if rank_ic is not None else None,
+        "r2": r2,
     }

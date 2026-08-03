@@ -22,6 +22,10 @@ class Factor(Base):
     ir = Column(Float, nullable=True)            # 信息比率
     turnover = Column(Float, nullable=True)
     decay = Column(Text, nullable=True)          # IC 衰减曲线 JSON {lag: ic}
+    # 多周期评价：{horizon: ic} JSON
+    ic_by_horizon = Column(Text, nullable=True)
+    # 正交后残差 IC（对已有基准因子正交后的增量 alpha）
+    orthogonal_ic = Column(Float, nullable=True)
 
     # 评价区间
     eval_start = Column(String, nullable=True)

@@ -112,6 +112,10 @@ async def update_factor_metrics(factor_id: int, metrics: dict) -> None:
         r.ir = metrics.get("ir")
         r.turnover = metrics.get("turnover")
         r.decay = json.dumps(metrics.get("decay")) if metrics.get("decay") else None
+        if metrics.get("ic_by_horizon") is not None:
+            r.ic_by_horizon = json.dumps(metrics["ic_by_horizon"])
+        if metrics.get("orthogonal_ic") is not None:
+            r.orthogonal_ic = metrics["orthogonal_ic"]
         r.eval_start = metrics.get("eval_start")
         r.eval_end = metrics.get("eval_end")
         r.evaluated_at = datetime.now()
@@ -131,7 +135,10 @@ async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = No
     # CPU 密集的因子评价走进程池，避免阻塞事件循环
     from app.core.executor import run_cpu
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
-    metrics = await run_cpu(_eval, factor["expression"], start, end, horizon=horizon)
+    # 多周期评价：额外评价 1/10/20 天（主 horizon 由 config 决定）
+    horizons = [1, 5, 10, 20]
+    metrics = await run_cpu(_eval, factor["expression"], start, end,
+                            horizon=horizon, horizons=horizons)
     await update_factor_metrics(factor_id, metrics)
     return metrics
 
@@ -149,6 +156,8 @@ def _to_dict(r: Factor) -> dict:
         "ir": r.ir,
         "turnover": r.turnover,
         "decay": json.loads(r.decay) if r.decay else None,
+        "ic_by_horizon": json.loads(r.ic_by_horizon) if r.ic_by_horizon else None,
+        "orthogonal_ic": r.orthogonal_ic,
         "eval_start": r.eval_start,
         "eval_end": r.eval_end,
         "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,

@@ -300,14 +300,30 @@ def _build_feedback_prompt(template: dict, n_candidates: int,
     return base + "\n\n" + "\n".join(feedback_lines)
 
 
-def _is_duplicate(expr: str, existing_exprs: list, threshold: float = 0.9) -> bool:
-    """简单的表达式去重（字符串相似度，difflib.SequenceMatcher）。"""
+def _normalize_expr(expr: str) -> str:
+    """归一化表达式：去空白、统一大小写（qlib 算子名不区分大小写时）。"""
+    import re
+    return re.sub(r"\s+", "", expr).lower()
+
+
+def _is_duplicate(expr: str, existing_exprs: list, threshold: float = 0.9):
+    """表达式去重（字符串相似度），返回原因或 None。
+
+    Args:
+        expr: 候选表达式
+        existing_exprs: 已有表达式列表
+        threshold: 相似度阈值
+
+    Returns:
+        None 表示不重复；否则返回原因字符串（如 "与已有表达式相似度 0.95"）。
+    """
     from difflib import SequenceMatcher
+    norm = _normalize_expr(expr)
     for existing in existing_exprs:
-        ratio = SequenceMatcher(None, expr, existing).ratio()
+        ratio = SequenceMatcher(None, norm, _normalize_expr(existing)).ratio()
         if ratio > threshold:
-            return True
-    return False
+            return f"与已有表达式相似度 {ratio:.2f}（阈值 {threshold}）"
+    return None
 
 
 async def iterative_mine_factors(
@@ -535,13 +551,15 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
     )
 
 
-async def _evaluate_with_validation(expr: str, existing_ic_series: list = None) -> dict:
+async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
+                                    baseline_exprs: list = None) -> dict:
     """在进程池中运行多维因子验证，带超时保护。
 
     使用 evaluate_factor_with_validation 替代旧的 evaluate_factor：
     - 样本分割：train/valid/test
     - 滚动 IC + 统计显著性
     - 多样性检测（existing_ic_series）
+    - 正交后 IC（baseline_exprs：已有高 IC 因子表达式）
     - 使用 valid_ic 作为主筛选指标
     """
     from app.services.quant.factor_validator import evaluate_factor_with_validation
@@ -553,7 +571,8 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None) 
     from app.core.executor import run_cpu
     return await asyncio.wait_for(
         run_cpu(evaluate_factor_with_validation, expr, start, end,
-                horizon=horizon, existing_ic_series=existing_ic_series),
+                horizon=horizon, existing_ic_series=existing_ic_series,
+                baseline_exprs=baseline_exprs),
         timeout=timeout,
     )
 

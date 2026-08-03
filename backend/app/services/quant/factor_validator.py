@@ -438,6 +438,7 @@ def evaluate_factor_with_validation(
     decay_threshold: float = -0.01,
     existing_ic_series: list[pd.Series] = None,
     diversity_threshold: float = 0.8,
+    baseline_exprs: list = None,
 ) -> dict:
     """完整因子多维验证。
 
@@ -510,6 +511,16 @@ def evaluate_factor_with_validation(
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
     actual_dates = sorted(factor_df.index.get_level_values("datetime").unique())
     splits = SampleSplitter().split_by_dates(actual_dates)
+
+    # 加载基准因子值（正交后挖掘用）：候选因子对基准残差化
+    baseline_factor_dfs = None
+    if baseline_exprs:
+        try:
+            baseline_factor_dfs = [
+                load_factor_values(e, start, end, universe) for e in baseline_exprs
+            ]
+        except Exception as e:
+            logger.debug("基准因子加载失败: %s", e)
 
     # 2. 全样本 IC 序列（用于向后兼容 compute_ic 的全部指标）
     ic_metrics = compute_ic(factor_df, label_df)
@@ -634,6 +645,17 @@ def evaluate_factor_with_validation(
         "factor_expr": factor_expr,
         "horizon": horizon,
     }
+
+    # 正交后 IC：候选因子对基准因子残差化后的增量 alpha
+    if baseline_factor_dfs:
+        try:
+            from app.services.quant.factor_eval import compute_orthogonal_ic
+            ortho = compute_orthogonal_ic(factor_df, baseline_factor_dfs, label_df)
+            result["orthogonal_ic"] = ortho.get("orthogonal_ic")
+            result["orthogonal_rank_ic"] = ortho.get("orthogonal_rank_ic")
+            result["orthogonal_r2"] = ortho.get("r2")
+        except Exception as e:
+            logger.debug("正交 IC 计算失败: %s", e)
 
     # 写入缓存
     _ic_cache_put(cache_key, result)
