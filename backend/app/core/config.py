@@ -99,7 +99,7 @@ class QuantSettings(SettingsBaseModel):
     benchmark: str = "SH000300"
     cost_buy: float = 0.0013
     cost_sell: float = 0.0023
-    data_source: str = "chenditc"
+    data_source: str = "baostock"
     default_backtest_period: dict[str, str] = Field(
         default_factory=lambda: {
             "start": "2020-01-01",
@@ -110,15 +110,6 @@ class QuantSettings(SettingsBaseModel):
     fetch_max_workers: int = 3
     include_bj: bool = False
     n_drop: int = 5
-    portfolio_optimizer: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "enabled": False,
-            "max_industry_exposure": 0.2,
-            "max_weight": 0.05,
-            "method": "mean_variance",
-            "risk_aversion": 0.5,
-        }
-    )
     qlib_provider_uri: str = "data/qlib_bin/cn_data"
     slippage_bps: int = 5
     sync_indices: list[str] = Field(

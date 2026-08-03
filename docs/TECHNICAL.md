@@ -187,9 +187,7 @@ est.fit(X, y)  # 在 run_cpu 内运行
 
 ### 2.4 数据库（`backend/app/core/database.py`）
 
-**支持两种 DB**：
-- **生产**：PostgreSQL 16（asyncpg 驱动）
-- **开发降级**：SQLite + aiosqlite（当 PostgreSQL 不可用时自动降级）
+**仅支持 PostgreSQL 16**（asyncpg 驱动），无 SQLite 回退。连接串由 `DATABASE_URL` 或 `POSTGRES_USER/PASSWORD/DB/HOST/PORT` 环境变量解析（`app/core/config.py` 的 `model_post_init` 加载 `.env`）。
 
 **连接池**：
 ```python
@@ -282,11 +280,10 @@ async def init_db():
 详见 [docs/DATA_LAYER.md](DATA_LAYER.md)。
 
 要点：
-- **baostock** 是主源（一次拉全市场，含 ST 标记和估值字段）
-- **AKShare** 兜底
-- **chenditc qlib bin** 提供基础数据
-- **增量同步**：智能检测本地最新交易日，只下载增量
-- **令牌桶限速**：避免触发反爬
+- **baostock** 是主源（一次拉全市场日K，含 ST 标记和估值字段）
+- **akshare** 作补充（新闻/市值/行业/EOD 增量兜底）
+- **全量回填**：`POST /api/v1/quant/data/sync?years=N`，从最新向旧逐交易日拉取
+- **幂等写入**：PG 使用 `ON CONFLICT DO NOTHING`，重复执行只补缺口
 
 ### 2.10 GPU 检测（`backend/app/core/gpu_utils.py`）
 
@@ -466,7 +463,7 @@ CORS_ORIGINS=https://app.your-domain.com,https://your-domain.com
 | **任务持久化** | 进程崩溃后会自动重跑近 3 天的挖掘任务，无需手动干预 |
 | **数据库迁移** | 新增字段时写 Alembic revision，启动自动 upgrade |
 | **日志** | `logs/` 下 `app.log`（轮转 100MB×5）、`api.jsonl`、`audit.jsonl`、`perf.jsonl` |
-| **数据库备份** | PostgreSQL 用 `pg_dump`，SQLite 用 `sqlite3 .backup` |
+| **数据库备份** | PostgreSQL 用 `pg_dump` |
 | **监控** | Prometheus 抓 `/metrics`，Grafana 可视化 |
 | **告警** | 关注 `factor_eval_duration_seconds`（评价耗时）、`db_pool_available`（连接池） |
 
@@ -482,7 +479,7 @@ CORS_ORIGINS=https://app.your-domain.com,https://your-domain.com
 | LLM 路由 | 顺序 fallback 单例 | 免费模型超时长，并发竞速浪费预算 |
 | 表达式安全 | AST 白名单 | 防 look-ahead bias + 代码注入，比正则更严格 |
 | 多维验证 | 样本分割 + 滚动 IC + t-test + 多样性 | 单一 IC 指标易过拟合 |
-| 数据库 | PostgreSQL 优先，SQLite 兜底 | 生产用 PG 的强约束 + JSONB，开发用 SQLite 零配置 |
+| 数据库 | PostgreSQL 16 | 强约束 + JSONB，asyncpg 驱动，无 SQLite 回退 |
 
 ---
 

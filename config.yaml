@@ -35,7 +35,6 @@ app:
   timezone: Asia/Shanghai
   version: 3.0.2
 data:
-  db_path: data/quantlab.db
   models_dir: models
   processed_dir: data/processed
   raw_dir: data/raw
@@ -116,12 +115,6 @@ quant:
   fetch_max_workers: 3
   include_bj: false
   n_drop: 5
-  portfolio_optimizer:
-    enabled: false
-    max_industry_exposure: 0.2
-    max_weight: 0.05
-    method: mean_variance
-    risk_aversion: 0.5
   qlib_provider_uri: data/qlib_bin/cn_data
   slippage_bps: 5
   sync_indices:

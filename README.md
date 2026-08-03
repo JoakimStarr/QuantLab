@@ -30,11 +30,11 @@
 | 层 | 用到的技术 | 解决什么问题 |
 |---|---|---|
 | **后端框架** | FastAPI（asyncio）+ SQLAlchemy 2.0 + Pydantic | 高性能异步 API、自动 OpenAPI 文档 |
-| **数据库** | PostgreSQL 16（asyncpg 驱动）+ Alembic 迁移 | 存因子、策略、回测结果、任务；生产可换 PG，开发可降级 SQLite |
+| **数据库** | PostgreSQL 16（asyncpg 驱动）+ Alembic 迁移 | 存因子、策略、回测结果、任务 |
 | **量化引擎** | pyqlib（微软开源 AI 量化框架） | 因子计算、回测引擎、数据适配 |
 | **因子挖掘** | gplearn（符号回归）+ LLM（多 Provider 自动 fallback） | 自动生成新因子 |
 | **AI 因子验证** | 样本分割（60/20/20）+ 滚动 IC + t-test + 多样性检测 | 筛选真正有效的因子，防止过拟合 |
-| **数据源** | AKShare + baostock + chenditc qlib bin | A 股日频 OHLCV + 涨跌停 + 财务 + 资金流 |
+| **数据源** | baostock（主）+ akshare（新闻/市值/行业等补充） | A 股日频 OHLCV + 涨跌停 + 财务 + 新闻 |
 | **前端** | Vue 3 + Element Plus + ECharts + Pinia | 交互式可视化分析 |
 | **任务执行** | IO 线程池 + CPU 进程池 + `run_mixed` 自动选择器 | 不让 CPU 密集任务拖垮事件循环 |
 | **GPU 加速** | 自动检测（torch / nvidia-smi） | LightGBM 训练、符号回归 |
@@ -182,13 +182,12 @@ QuantLab/
 
 **数据源**：
 - **baostock**（主源，一次拉全市场日K，含 ST 标记和估值字段）
-- **AKShare**（兜底，逐只爬）
-- **chenditc/investment_data**（qlib bin 静态数据）
+- **akshare**（补充，新闻/市值/行业/EOD 增量兜底）
 
 **同步策略**（v2.5.0+）：
-- 智能检测本地最新交易日，**只下载增量**
-- 令牌桶限速（默认 1.2s/请求），避免触发反爬
-- 同步进度通过 WebSocket 实时推送
+- baostock 全量回填（`POST /quant/data/sync?years=N`，手动触发，从最新向旧逐交易日拉取）
+- 幂等写入 PG（`ON CONFLICT DO NOTHING`），重复执行只补缺口
+- 同步进度可通过接口查询
 
 ### 4.5 安全
 

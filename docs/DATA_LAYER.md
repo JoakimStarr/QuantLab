@@ -13,6 +13,13 @@ summary: 数据采集、QLib bin 双轨存储、涨跌停mask、基本面PIT、�
 > 文档目的：记录数据层架构、每个文件/函数/参数说明、数据源调度、部署注意事项
 > 维护原则：每次数据层代码变更须同步更新本文档对应小节；所有签名以代码为准
 
+> ⚠️ **过时声明（2026-08-03）**：本文档大篇幅描述的是**已被移除的历史架构**。当前数据层以 baostock 为唯一行情源：
+> - 主同步入口为 `backend/app/services/data/baostock_backfill.py`（`POST /api/v1/quant/data/sync?years=N`，手动触发，从最新向旧逐交易日拉全市场）
+> - 已删除：`sync_runner.py`、`chenditc_client.py`、`incremental_sync.py`、`smart_sync.py`、`fundamental_sync.py`、`capital_flow_sync.py`
+> - 关系存储为 **PostgreSQL**（非 SQLite）；qlib bin + PG `stock_daily` 双轨
+> - akshare 仅作补充源（`akshare_client.py`：新闻/市值/行业/EOD 增量兜底）
+> **本文档下述架构图、采集器矩阵、调度表、SQLite 章节均为历史记录，请以代码为准。**
+
 ---
 
 ## 这是什么文档

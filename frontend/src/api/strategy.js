@@ -9,14 +9,6 @@ export function createStrategy(params) {
   return request.post('/strategies', null, { params })
 }
 
-export function getStrategy(id) {
-  return request.get('/strategies/' + id)
-}
-
-export function archiveStrategy(id) {
-  return request.delete('/strategies/' + id)
-}
-
 export function runBacktest(id, params) {
   return request.post('/strategies/' + id + '/backtest', null, { params })
 }
@@ -31,10 +23,6 @@ export function listAllBacktestResults(params) {
 
 export function getBacktestResult(resultId) {
   return request.get('/strategies/backtest-results/' + resultId)
-}
-
-export function getBacktestStatus(strategyId) {
-  return request.get('/strategies/' + strategyId + '/backtest-status')
 }
 
 export function getAllBacktestStatuses() {
@@ -55,14 +43,4 @@ export function getWalkForwardResults(id) {
 // AI 生成策略：参考因子库评价自动推荐因子组合与参数
 export function aiGenerateStrategy(params) {
   return request.post('/strategies/ai/generate', null, { params })
-}
-
-// AI 参数建议：基于因子组合（+历史回测）推荐参数范围
-export function aiSuggestParams(strategyId) {
-  return request.post('/strategies/' + strategyId + '/ai/params')
-}
-
-// AI 策略复盘：解读回测结果生成文字报告
-export function aiReviewBacktest(strategyId, resultId) {
-  return request.post('/strategies/' + strategyId + '/ai/review', null, { params: { result_id: resultId } })
 }

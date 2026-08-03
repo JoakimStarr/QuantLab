@@ -5,10 +5,6 @@ export function listFactors(params) {
   return request.get('/factors', { params })
 }
 
-export function getFactor(id) {
-  return request.get('/factors/' + id)
-}
-
 export function addFactor(params) {
   return request.post('/factors', null, { params })
 }
@@ -20,11 +16,6 @@ export function disableFactor(id) {
 export function evaluateFactor(id, params) {
   return request.post('/factors/' + id + '/evaluate', null, { params })
 }
-
-export function seedBuiltinFactors() {
-  return request.post('/factors/seed-builtin')
-}
-
 
 export function seedAlpha158() {
   return request.post('/factors/seed-alpha158')
@@ -50,11 +41,6 @@ export function decayCheck() {
 // 因子中性化（对比中性化前后 IC）
 export function neutralizeFactor(id, params) {
   return request.post('/factors/' + id + '/neutralize', null, { params })
-}
-
-// AI 因子解释：为因子生成金融逻辑描述并写回 description
-export function aiExplainFactor(factorId) {
-  return request.post('/factors/' + factorId + '/ai-explain')
 }
 
 // 批量 AI 因子解释

@@ -85,34 +85,7 @@ export function getFactorDecay(factor_id, max_lag) {
   return request.get(`/factors/${factor_id}/decay`, { params: { max_lag } })
 }
 
-// 导出因子（返回 blob，完整 response）
-export function exportFactors(category, status, format) {
-  return blobRequest.get('/factors/export', {
-    params: { category, status, format },
-    responseType: 'blob'
-  })
-}
-
-// 自动导入因子
-export function autoImportFactors(task_id, ic_threshold) {
-  return request.post('/factors/auto-import', null, {
-    params: { task_id, ic_threshold }
-  })
-}
-
 // === 策略相关 ===
-
-// 参数扫描（topk_list / rebalance_list 以 Query 参数方式传递）
-export function paramSweep(strategy_id, topk_list, rebalance_list, start_date, end_date) {
-  return request.post(`/strategies/${strategy_id}/param-sweep`, null, {
-    params: { topk_list, rebalance_list, start_date, end_date }
-  })
-}
-
-// 获取参数扫描结果
-export function getParamSweepResults(strategy_id) {
-  return request.get(`/strategies/${strategy_id}/param-sweep-results`)
-}
 
 // 回测对比（result_ids 以 Query 参数方式传递）
 export function compareBacktests(result_ids) {
@@ -129,24 +102,6 @@ export function exportTrades(result_id) {
 }
 
 // === 因子挖掘 ===
-
-// 列出挖掘模板
-export function listMiningTemplates() {
-  return request.get('/mining/templates')
-}
-
-// 获取挖掘模板详情
-export function getMiningTemplate(key) {
-  return request.get(`/mining/templates/${key}`)
-}
-
-// 运行挖掘模板
-export function runMiningTemplate(key, n_candidates) {
-  return request.post(`/mining/templates/${key}/run`, null, {
-    params: { n_candidates }
-  })
-}
-
 
 // 因子深度分析
 export function deepAnalysis(factorId, params = {}) {

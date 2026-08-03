@@ -27,15 +27,6 @@ request.interceptors.request.use(config => {
   return config
 })
 
-// 请求取消：返回 { request, cancel } 用于组件卸载或切换时取消
-export function cancellable(config) {
-  const controller = new AbortController()
-  return {
-    request: request({ ...config, signal: controller.signal }),
-    cancel: () => controller.abort(),
-  }
-}
-
 // 判断是否为网络/连接错误
 function isNetworkError(error) {
   return !error.response && error.code !== 'ERR_CANCELED'

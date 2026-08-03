@@ -92,10 +92,10 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 
 ### Service layers (`backend/app/services/`)
 
-- `quant/` — qlib integration: `factor_eval.py` (IC/RankIC/ICIR/turnover evaluation, handles `AutoML(...)` expressions via trained bundles), `backtest_engine.py` / `qlib_backtest.py` / `vbt_backtest.py` (backtest backends), `portfolio*.py`, `walk_forward.py`, `purged_cv.py`, `qlib_init.py` (provider_uri init).
+- `quant/` — qlib integration: `factor_eval.py` (IC/RankIC/ICIR/turnover evaluation, handles `AutoML(...)` expressions via trained bundles), `backtest_engine.py` / `qlib_backtest.py` / `vbt_backtest.py` (backtest backends), `portfolio*.py`, `walk_forward.py`, `qlib_init.py` (provider_uri init).
 - `factor/` — factor library: `library.py` (CRUD), `expression.py` (AST sandbox, rejects exec/eval/import and negative `Ref`), `alpha158.py` (seed/import + batch evaluate + backfill metrics; batch uses an asyncio.Queue + single DB writer to avoid connection-pool contention), `neutralize.py`, `orthogonalize.py`, `factor_compare.py`.
 - `mining/` — factor mining: LLM (`llm_factor.py`), symbolic regression (`symbolic.py`), AutoML (`automl.py`), text factors (`text_factor.py`).
-- `data/` — data acquisition (baostock-only): **`baostock_backfill.py` is the primary sync** (`POST /quant/data/sync?years=N`, manual only) — pulls the whole A-share market per trading day from newest to oldest, writes qlib bin (`open/high/low/close/volume/amount/change/tradable`) **and** PG `stock_daily` (all baostock daily fields) + `stock_basic`/`stock_industry`/`trade_calendar`, and builds `instruments/*.txt`. `baostock_client.py` (login singleton + `query_daily_history_k_AStock`, one request = one trading day for all stocks; constraint: ≤50k requests/day, no concurrent connections). `eod_incremental.py` provides the bin read/write/merge helpers (`_sync_stock_bin`, `_write_calendar`, `_compute_tradable`). Legacy: `sync_runner.py`/`smart_sync.py`/`chenditc_client.py` still exist but are **no longer the sync entry**; `fundamental_sync.py` writes `fundamental_pit` (superseded by `stock_daily`). `capital_flow_sync.py` (north/margin/dragon/big-order fields) was **removed** — docs referencing it are stale.
+- `data/` — data acquisition (baostock-only): **`baostock_backfill.py` is the primary sync** (`POST /quant/data/sync?years=N`, manual only) — pulls the whole A-share market per trading day from newest to oldest, writes qlib bin (`open/high/low/close/volume/amount/change/tradable`) **and** PG `stock_daily` (all baostock daily fields) + `stock_basic`/`stock_industry`/`trade_calendar`, and builds `instruments/*.txt`. `baostock_client.py` (login singleton + `query_daily_history_k_AStock`, one request = one trading day for all stocks; constraint: ≤50k requests/day, no concurrent connections). `eod_incremental.py` provides the bin read/write/merge helpers (`_sync_stock_bin`, `_write_calendar`, `_compute_tradable`). `akshare_client.py` (news / market-cap / industry / EOD fallback via akshare) still exists as a supplementary source; `fundamental_sync.py`/`sync_runner.py`/`smart_sync.py`/`chenditc_client.py` were **removed** — docs referencing them are stale.
 - `ai/` — LLM clients + multi-provider failover.
 - `task/` — scheduled job implementations.
 
@@ -108,7 +108,7 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 ### Frontend (`frontend/src`)
 
 - `views/quant/` — business pages: `Dashboard.vue`, `FactorLibrary.vue` (expression cells truncate single-line with ellipsis; "补算指标" button in the filter toolbar applies to any selected factor, not just alpha158), `Strategy.vue`, `Mining.vue`, `DataStatus.vue` (manual baostock sync with a years selector; 同步监控/系统监控 pages were removed), `FactorCompare.vue`, `BacktestCompare.vue`, etc.
-- `stores/` (Pinia) — `factor.js` holds a 5-min-cached factor list; invalidate after mutations. `api/` — axios wrappers per domain. `composables/` — `useChartTheme`, `usePolling`.
+- `stores/` (Pinia) — `factor.js` holds a 5-min-cached factor list; invalidate after mutations. `api/` — axios wrappers per domain. `composables/` — `useWebSocket`.
 - Vite dev server proxies `/api` and `/ws` to `http://localhost:8000`.
 
 ## Conventions and gotchas

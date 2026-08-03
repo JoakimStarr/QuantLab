@@ -42,8 +42,7 @@ summary: 环境准备、项目结构、配置、启动流程、代码规范、�
 ```bash
 sudo apt update
 sudo apt install -y python3.11 python3.11-venv python3-pip build-essential nodejs npm
-# 可选：git、make、tar（chenditc 解压用）
-sudo apt install -y git tar
+sudo apt install -y git
 ```
 
 ### 1.3 后端依赖安装
@@ -56,10 +55,10 @@ python3.11 -m venv .venv
 ```
 
 **关键依赖约束**（见 `requirements.txt`）：
-- `akshare==1.18.63`：版本锁定，接口变动频繁，升级需测试
+- `akshare==1.18.63`：补充数据源（新闻/市值/行业/EOD 增量兜底），版本锁定，接口变动频繁，升级需测试
 - `pyqlib>=0.9.6` + `protobuf<4` + `setuptools<81`：qlib 依赖 mlflow，需约束 protobuf（5.x 移除 service 模块）与 setuptools（83 移除 pkg_resources）
 - `gplearn>=0.4.2`：符号回归
-- `cvxpy>=1.5`：组合优化
+- `baostock>=0.8.9`：主数据源（A 股日 K 全市场回填）
 - `bcrypt>=4.0` + `slowapi>=0.1.9`：口令哈希与限流
 
 ### 1.4 前端依赖安装
@@ -125,7 +124,7 @@ QuantLab/
 │   ├── vite.config.js
 │   ├── nginx.conf               生产反向代理配置（参考 docs/DEPLOY.md）
 ├── docs/                        技术文档（本文件所在）
-├── data/                        QLib bin / SQLite / processed / models / industry_map.json
+├── data/                        QLib bin / processed / models / industry_map.json
 ├── models/                      模型产物
 ├── logs/                        日志输出
 ├── config.yaml                  主配置
@@ -165,9 +164,8 @@ QuantLab/
 | `api` | `version` | v1 | API 版本前缀 |
 | `api` | `request_timeout` | 30 | 请求超时（秒） |
 | `api` | `cors_origins` | localhost:3000 等 | CORS 来源（可被环境变量覆盖） |
-| `data` | `db_path` | data/quantlab.db | SQLite 路径 |
 | `data` | `qlib_provider_uri`（在 quant 段） | data/qlib_bin/cn_data | QLib bin 目录 |
-| `quant` | `data_source` | akshare | 数据源（chenditc / akshare） |
+| `quant` | `data_source` | baostock | 数据源（主 baostock，补充 akshare） |
 | `quant` | `universe` | csi300 | 股票池 |
 | `quant` | `benchmark` | SH000300 | 基准指数 |
 | `quant` | `adjust` | qfq | 复权方式 |
@@ -179,7 +177,6 @@ QuantLab/
 | `quant` | `fetch_interval_seconds` | 1.2 | akshare 请求间隔 |
 | `quant` | `fetch_max_workers` | 3 | akshare 并发 |
 | `quant` | `default_backtest_period` | 2020-01-01 ~ 2024-12-31 | 默认回测区间 |
-| `quant.portfolio_optimizer` | `enabled` / `method` / `max_weight` / `max_industry_exposure` / `risk_aversion` | false / mean_variance / 0.05 / 0.2 / 0.5 | 组合优化配置 |
 | `mining.llm` | `allowed_ops` | Ref/Mean/Std/.../EMA + 字段 | LLM 因子表达式算子白名单 |
 | `mining.llm` | `candidates_per_run` | 10 | 每轮生成候选数 |
 | `mining.llm` | `ic_threshold` | 0.03 | IC 达标阈值 |
@@ -217,7 +214,7 @@ QuantLab/
 
 - 配置项：`config.quant.qlib_provider_uri`（默认 `data/qlib_bin/cn_data`）
 - 绝对路径：`settings.qlib_provider_path = PROJECT_ROOT / qlib_provider_uri`
-- 数据同步通过 `PUT /api/v1/quant/data/data-source` 切换 chenditc/akshare
+- 数据同步通过 `POST /api/v1/quant/data/sync?years=N`（baostock 全量回填，手动触发）
 - 健康检查 `GET /health` 会检测 qlib 可用性与 `calendars/day.txt` 时间范围
 
 ---
@@ -271,8 +268,8 @@ npm run format   # Prettier 格式化
 
 `init_db()` 流程（`core/database.py`）：
 1. `Base.metadata.create_all` 创建不存在的表
-2. 子线程执行 `alembic upgrade head`（失败仅告警不阻断）
-3. 每个连接设置 SQLite PRAGMA（WAL/busy_timeout/foreign_keys）
+2. 子进程执行 `alembic upgrade head`（失败仅告警不阻断）
+3. 数据库仅支持 PostgreSQL（asyncpg 驱动，无 SQLite 回退）
 
 手动迁移：
 ```bash
@@ -418,12 +415,12 @@ LOGIN_RATE_LIMIT=5/minute
 
 ### 7.3 akshare 接口超时/限流
 
-- **现象**：同步失败，日志 `数据同步失败 (attempt x/3)`
+- **现象**：补充数据源（新闻/市值/行业）拉取失败，日志 `数据同步失败 (attempt x/3)`
 - **原因**：akshare 上游改版或高频访问被限流
 - **解决**：
   1. 调大 `config.quant.fetch_interval_seconds`（默认 1.2s）
   2. 调小 `fetch_max_workers`（默认 3）
-  3. 切换到 chenditc：`PUT /api/v1/quant/data/data-source?source=chenditc`
+  3. 主行情走 baostock（`POST /api/v1/quant/data/sync?years=N`），akshare 仅作补充
   4. 定时任务自带 3 次重试，间隔 10 分钟
 
 ### 7.4 数据同步失败排查
@@ -441,11 +438,6 @@ LOGIN_RATE_LIMIT=5/minute
 - 每 10 分钟 `reap_stale_mining` 自动回收
 - 手动查 `GET /api/v1/mining/tasks?status=running`
 - LLM 挖掘不限时（依赖内部原子超时 + `llm_hard_limit_seconds` 硬上限，默认 7200s）
-
-### 7.6 SQLite locked
-
-- 已设 `busy_timeout=5000` + WAL 模式
-- 若仍频繁 locked，检查是否有外部进程访问 `data/quantlab.db`，或降低并发
 
 ---
 

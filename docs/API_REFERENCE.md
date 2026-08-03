@@ -275,15 +275,11 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 ```
 
 ### 5.3 `POST /quant/data/sync`
-- **说明**：触发股票数据同步到 qlib bin（**后台执行**，数据源由 `config.quant.data_source` 决定）。
-- **请求体**（`SyncDataRequest`）：
+- **说明**：触发 baostock 全量回填（**后台执行**）。按 `years` 从最新交易日向旧逐日拉取全市场日K，写 qlib bin + PG `stock_daily`。幂等（`ON CONFLICT DO NOTHING`），重复执行只补缺口。
+- **请求体**：
 ```json
 {
-  "start_date": "2020-01-01",
-  "end_date": "2026-07-30",
-  "codes": null,
-  "universe": "csi300",
-  "days": 30
+  "years": 5
 }
 ```
 - **响应**：
@@ -291,11 +287,9 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 {
   "ok": true,
   "data": {
-    "message": "已触发 universe=csi300 数据同步（后台执行，数据源=chenditc）",
+    "message": "已触发 baostock 数据同步（后台执行，数据源=baostock）",
     "universe": "csi300",
-    "data_source": "chenditc",
-    "start_date": "2020-01-01",
-    "end_date": "2026-07-30"
+    "data_source": "baostock"
   }
 }
 ```
@@ -314,7 +308,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
     "universe": "csi300",
     "stage": "downloading",
     "percent": 42.7,
-    "message": "downloading chenditc/investment_data ...",
+    "message": "baostock 全量回填进行中 ...",
     "updated_at": "2026-07-30T18:42:11+08:00"
   }
 }
@@ -349,7 +343,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
   "ok": true,
   "data": {
     "items": [{
-      "id": 12, "universe": "csi300", "data_source": "chenditc",
+      "id": 12, "universe": "csi300", "data_source": "baostock",
       "status": "done",
       "started_at": "2026-07-30T18:30:00+08:00",
       "finished_at": "2026-07-30T18:42:11+08:00",
@@ -364,32 +358,19 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 }
 ```
 
-### 5.7 `PUT /quant/data/data-source`
-- **Query**：`source` —— 必填，`chenditc` 或 `akshare`
-- **说明**：动态切换数据源，写回 `config.yaml` 并同步更新 `settings.quant.data_source`。
-- **响应**：
-```json
-{"ok": true, "data": {"data_source": "akshare", "message": "数据源已切换为 akshare"}}
-```
-- **错误**：`422 VALIDATION_ERROR`
+### 5.7 ~~`PUT /quant/data/data-source`~~（已移除）
+- 数据源切换端点已随 chenditc 移除；当前数据源固定为 baostock（主）+ akshare（补充），由 `config.yaml` 的 `quant.data_source` 控制。
 
-### 5.8 `GET /quant/data/data-source`
-- **说明**：查询当前数据源。
-- **响应**：
-```json
-{"ok": true, "data": {"source": "chenditc"}}
-```
+### 5.8 ~~`GET /quant/data/data-source`~~（已移除）
 
-### 5.9 `POST /quant/data/incremental-sync`
-- **说明**：在已有数据基础上做一次增量同步（**后台执行**）。
-- **响应**：`{"ok": true, "data": {"message": "增量同步已提交"}}`
+### 5.9 ~~`POST /quant/data/incremental-sync`~~（已移除）
 
 ### 5.10 `POST /quant/data/eod-sync`
 - **Query**：
   - `universe`（默认 `csi300`）—— `csi300` / `csi500` / `all`
   - `days`（默认 5，1–30）
   - `overwrite`（默认 false）
-- **说明**：通过 akshare 国内源拉取最近 N 个交易日的 OHLCV，与 chenditc 全量同步互补。
+- **说明**：通过 akshare 国内源拉取最近 N 个交易日的 OHLCV（补充源，主源走 baostock 全量回填）。
 - **响应**：
 ```json
 {
@@ -856,7 +837,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 | `Strategy.status` | `active` / `archived` / `backtest_failed` |
 | `MiningTask.status` | `pending` / `running` / `done` / `failed` |
 | `MiningTask.type` | `llm` / `symbolic` / `automl` / `text` |
-| `data_source` | `chenditc` / `akshare` |
+| `data_source` | `baostock`（主）/ `akshare`（补充） |
 | `period`（K 线） | `1d` / `1w` / `1M` |
 | `backend`（回测） | `qlib` / `self` |
 | `combination_method` | `equal_weight` / `ic_weight` / `auto` / `lightgbm` / `linear` |
@@ -877,7 +858,6 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 | 422 | `VALIDATION_ERROR` | 业务参数校验失败（参数列表为空、数据源非法等） | 多个 |
 | 422 | `EXPR_INVALID` | qlib 因子表达式非法 | `POST /factors` |
 | 429 | — | 触发速率限制（登录 5/min，挖掘 3/min） | 登录/挖掘 |
-| 500 | `CONFIG_ERROR` | 配置写入失败（数据源切换） | `PUT /quant/data/data-source` |
 | 500 | `KLINE_ERROR` / `OVERVIEW_ERROR` / `NEUTRALIZE_ERROR` / `DATA_LOAD_ERROR` | 计算阶段异常 | 市场/因子分析端点 |
 | 503 | `QLIB_NOT_AVAILABLE` | qlib 未安装/未初始化 | 评价/回测/挖掘/同步类 |
 
@@ -886,7 +866,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 | 路径 | 默认 | 说明 |
 |------|------|------|
 | `quant.universe` | `csi300` | 股票池 |
-| `quant.data_source` | `chenditc` | 数据源 |
+| `quant.data_source` | `baostock` | 数据源（主 baostock，补充 akshare） |
 | `quant.default_backtest_period.start` | `2020-01-01` | 默认回测起点 |
 | `quant.default_backtest_period.end` | `2024-12-31` | 默认回测终点 |
 | `mining.llm.candidates_per_run` | `10` | LLM 单轮生成候选数 |

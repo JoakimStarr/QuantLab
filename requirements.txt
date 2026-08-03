@@ -44,21 +44,12 @@ protobuf<4
 setuptools<81
 # gplearn: 符号回归/遗传规划自动搜索因子表达式
 gplearn>=0.4.2
-# skfolio: sklearn 生态组合优化（mean-variance/risk-parity，唯一后端）
-skfolio>=0.20.0
 # vectorbt: 矢量化快速回测（backend="vbt"，快速扫描/A-B 测试时用）
 vectorbt>=1.0.0
-# purgedcv: de Prado purged/CPCV 交叉验证 + PBO/Deflated Sharpe 过拟合统计
-purgedcv>=0.1.3
 # exchange-calendars: 全球交易所交易日历（XSHG/XSHE 含 A 股法定节假日）
 exchange-calendars>=4.5.0
-# 绩效指标：empyrical 为核心（纯 numpy 快）；quantstats 仅用于 HTML tear-sheet（可选，缺失时降级跳过）
+# 绩效指标：empyrical 为核心（纯 numpy 快）；quantstats 已移除（仅 HTML tear-sheet，缺失时降级跳过）
 empyrical-reloaded>=0.5.12
-quantstats>=0.0.64
-# tsfresh: 时序自动特征提取（候选特征池）
-tsfresh>=0.21.0
-# arch: GARCH/ARCH 波动率建模（条件波动率因子）
-arch>=7.0.0
 # 数据库迁移
 alembic>=1.13
 

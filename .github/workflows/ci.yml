@@ -74,12 +74,3 @@ jobs:
         run: |
           cd backend
           python -m pytest tests/ -v --timeout=60 -x 2>&1 | tail -50
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Docker
-        run: |
-          docker compose build
