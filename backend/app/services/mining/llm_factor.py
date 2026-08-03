@@ -121,7 +121,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
     ic_threshold = mining_cfg.get("ic_threshold", 0.03)
     significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     allowed_ops = mining_cfg.get("allowed_ops", [])
-    fields = ["$open", "$close", "$high", "$low", "$volume", "$amount", "$factor"]
+    fields = ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"]
 
     # 标记运行中
     await _update_task(task_id, status="running", started_at=datetime.now())
@@ -246,10 +246,14 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
 # ---------------- 迭代因子挖掘 ----------------
 
 def _build_generation_prompt(template: dict, n_candidates: int) -> str:
-    """构建首轮生成 prompt（结合模板与默认模板）。"""
+    """构建首轮生成 prompt（结合模板与默认模板）。
+
+    多样性增强：要求候选因子覆盖不同风格（时序/截面/量价/波动/估值），
+    避免全部生成同一类型的动量变体。
+    """
     mining_cfg = settings.mining.get("llm", {})
     allowed_ops = template.get("allowed_ops") or mining_cfg.get("allowed_ops", [])
-    fields = template.get("base_features") or ["$open", "$close", "$high", "$low", "$volume", "$amount", "$factor"]
+    fields = template.get("base_features") or ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"]
     base_prompt = template.get("prompt") or template.get("llm_prompt") or _USER_PROMPT_TEMPLATE
     # 若模板自带 prompt，则在其后追加数量/约束说明
     if template.get("prompt") or template.get("llm_prompt"):
@@ -258,6 +262,9 @@ def _build_generation_prompt(template: dict, n_candidates: int) -> str:
             + f"\n\n请生成 {n_candidates} 个 qlib 因子表达式。\n"
             + f"【可用算子】{', '.join(allowed_ops)}\n"
             + f"【可用字段】{', '.join(fields)}\n"
+            + "【多样性要求】生成的因子应尽量覆盖不同风格："
+            + "动量趋势、均值反转、波动率、量价关系、估值（$pe_ttm/$pb_mrq/$ps_ttm/$pcf_ncf_ttm 可用）、"
+            + "换手（$turn 可用）。避免全部因子都是同一类型的变体。\n"
             + "严禁使用负数 Ref（未来数据）。返回 JSON: {\"factors\":[{\"name\",\"expression\",\"description\"}]}"
         )
     return base_prompt.format(n=n_candidates, ops=", ".join(allowed_ops), fields=", ".join(fields))
@@ -509,7 +516,7 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
     template = {
         "prompt": "",
         "llm_prompt": _USER_PROMPT_TEMPLATE,
-        "base_features": ["$open", "$close", "$high", "$low", "$volume", "$amount", "$factor"],
+        "base_features": ["$open", "$close", "$high", "$low", "$volume", "$amount", "$change"],
         "allowed_ops": mining_cfg.get("allowed_ops", []),
         "ic_threshold": mining_cfg.get("ic_threshold", 0.03),
     }

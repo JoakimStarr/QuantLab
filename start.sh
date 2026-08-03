@@ -1,6 +1,6 @@
 #!/bin/bash
 # QuantLab 启动脚本：同时启动前后端
-# Usage: ./start.sh [dev|docker]   默认 dev
+# Usage: ./start.sh [dev]   默认 dev
 #
 # Python 环境优先级：
 #   1. conda env `quant`  （推荐，pyqlib/gplearn/LightGBM 等原生依赖齐备）
@@ -19,16 +19,13 @@ FRONTEND_PORT=3000
 
 # ============ Python 解释器检测 ============
 PYTHON_BIN=""
-# 1. 优先：miniconda 的 quant 环境（项目主用环境）
-if [ -x "/home/joakim/miniconda3/envs/quant/bin/python" ]; then
-    PYTHON_BIN="/home/joakim/miniconda3/envs/quant/bin/python"
+# 1. 优先：项目 .venv（setup.sh 创建）
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 # 2. 兜底：当前 conda 激活的环境
 elif [ -n "${CONDA_PREFIX:-}" ] && [ -x "$CONDA_PREFIX/bin/python" ]; then
     PYTHON_BIN="$CONDA_PREFIX/bin/python"
-# 3. 兜底：项目 .venv
-elif [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
-# 4. 兜底：系统 python3
+# 3. 兜底：系统 python3
 else
     PYTHON_BIN="$(command -v python3)"
 fi
@@ -106,7 +103,7 @@ cleanup() {
     green "已停止"
     exit "$exit_code"
 }
-trap 'cleanup' SIGINT SIGTERM EXIT
+trap 'cleanup' SIGINT SIGTERM SIGHUP EXIT
 
 # ============ 模式分发 ============
 if [ "$MODE" = "dev" ]; then
@@ -133,7 +130,7 @@ if [ "$MODE" = "dev" ]; then
         exit 1
     fi
     # 关键第三方库检查（避免运行时才发现缺失）
-    if ! "$PYTHON_BIN" -c "import fastapi_users_db_sqlalchemy, empyrical, alphalens, pypfopt, tenacity, structlog, prometheus_fastapi_instrumentator, cachetools, zxcvbn" >/dev/null 2>&1; then
+    if ! "$PYTHON_BIN" -c "import fastapi_users_db_sqlalchemy, empyrical, alphalens, skfolio, tenacity, structlog, prometheus_fastapi_instrumentator, cachetools, zxcvbn" >/dev/null 2>&1; then
         red "后端依赖缺失，请先安装:"
         echo "  $PYTHON_BIN -m pip install -r requirements.txt"
         exit 1
@@ -145,14 +142,15 @@ if [ "$MODE" = "dev" ]; then
         (cd "$SCRIPT_DIR/frontend" && npm install) || { red "npm install 失败"; exit 1; }
     fi
 
-    # 启动后端（带日志重定向，set -m 创建进程组使 kill -- -PID 能工作）
+    # 启动后端（tee 同时输出到终端和日志文件，dev 模式可见实时日志；
+    # set -m 创建进程组使 kill -- -PID 能工作）
     blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
     mkdir -p "$SCRIPT_DIR/logs"
     set -m
     (
         cd "$SCRIPT_DIR/backend"
-        exec "$PYTHON_BIN" -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT"
-    ) > "$SCRIPT_DIR/logs/backend.log" 2>&1 &
+        "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 | tee "$SCRIPT_DIR/logs/backend.log"
+    ) &
     BACKEND_PID=$!
     set +m
 
@@ -161,8 +159,8 @@ if [ "$MODE" = "dev" ]; then
     set -m
     (
         cd "$SCRIPT_DIR/frontend"
-        exec npm run dev -- --port "$FRONTEND_PORT"
-    ) > "$SCRIPT_DIR/logs/frontend.log" 2>&1 &
+        npm run dev -- --port "$FRONTEND_PORT" 2>&1 | tee "$SCRIPT_DIR/logs/frontend.log"
+    ) &
     FRONTEND_PID=$!
     set +m
 
@@ -192,16 +190,8 @@ if [ "$MODE" = "dev" ]; then
 
     wait
 
-elif [ "$MODE" = "docker" ]; then
-    echo "以 docker 模式启动..."
-    if ! command -v docker-compose >/dev/null 2>&1; then
-        red "未找到 docker-compose，请先安装"
-        exit 1
-    fi
-    docker-compose up --build
 else
-    echo "Usage: ./start.sh [dev|docker]"
+    echo "Usage: ./start.sh [dev]"
     echo "  dev    - 本地开发模式（默认）"
-    echo "  docker - Docker 容器模式"
     exit 1
 fi

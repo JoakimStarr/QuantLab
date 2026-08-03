@@ -18,14 +18,6 @@
         <div class="kpi-sub">{{ daysSinceUpdate }} 天前更新</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">同步路径</div>
-        <div class="kpi-value">
-          <el-tag v-if="pathPrediction" :type="pathTagType" size="small">{{ pathLabel }}</el-tag>
-          <span v-else>--</span>
-        </div>
-        <div class="kpi-sub">{{ pathPrediction ? pathPrediction.days_behind + ' 天前' : '预判中' }}</div>
-      </div>
-      <div class="kpi-card">
         <div class="kpi-label">同步状态</div>
         <div class="kpi-value">
           <span class="status-badge" :class="statusClass">{{ statusLabel }}</span>
@@ -90,7 +82,7 @@
             </span>
             <span class="meta-item">
               <span class="meta-label">数据源:</span>
-              <span class="badge badge-info">{{ currentSource }}</span>
+              <span class="badge badge-info">baostock</span>
             </span>
             <span class="meta-item">
               <span class="meta-label">最后更新:</span>
@@ -111,16 +103,17 @@
             </div>
           </div>
         </div>
-        <div v-if="pathPrediction" class="path-prediction">
-          <el-tag :type="pathTagType" size="small">{{ pathLabel }}</el-tag>
-          <span class="path-reason">{{ pathPrediction.reason }}</span>
-        </div>
         <div class="source-actions">
           <el-button @click="loadPreview()" size="small">预览数据</el-button>
           <el-button @click="loadAll" :loading="loading" size="small">刷新</el-button>
-          <el-button type="primary" @click="smartSync" :loading="syncing" :disabled="!qlib.available || syncing">
-            {{ syncing ? '同步中...' : '智能同步' }}
-          </el-button>
+          <div class="sync-years-group">
+            <span class="sync-years-label">同步</span>
+            <el-input-number v-model="syncYears" :min="1" :max="30" size="small" style="width: 88px" />
+            <span class="sync-years-label">年</span>
+            <el-button type="primary" @click="smartSync" :loading="syncing" :disabled="!qlib.available || syncing">
+              {{ syncing ? '同步中...' : '开始同步' }}
+            </el-button>
+          </div>
           <el-button type="success" @click="showEodDialog = true" :loading="eodSyncing" :disabled="!qlib.available || eodSyncing">
             {{ eodSyncing ? '增量同步中...' : '增量同步' }}
           </el-button>
@@ -201,6 +194,51 @@
           </template>
         </el-table-column>
       </el-table>
+    </SectionCard>
+
+    <!-- 同步统计（成功率/耗时/路径分布/失败原因） -->
+    <SectionCard v-if="syncStats" title="同步统计" class="mt-6">
+      <div class="sync-stats-grid">
+        <div class="stat-cell">
+          <div class="stat-label">最近 30 天成功率</div>
+          <div class="stat-value">
+            <span :class="syncStats.success_rate?.rate >= 0.8 ? 'text-success' : syncStats.success_rate?.rate >= 0.5 ? 'text-warning' : 'text-danger'">
+              {{ ((syncStats.success_rate?.rate || 0) * 100).toFixed(1) }}%
+            </span>
+            <span class="stat-sub">成功 {{ syncStats.success_rate?.ok || 0 }} / 失败 {{ syncStats.success_rate?.failed || 0 }} / 共 {{ syncStats.success_rate?.total || 0 }}</span>
+          </div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-label">平均耗时</div>
+          <div class="stat-value">
+            {{ formatDuration(syncStats.duration_stats?.avg) }}
+            <span class="stat-sub">p50 {{ formatDuration(syncStats.duration_stats?.p50) }} / p95 {{ formatDuration(syncStats.duration_stats?.p95) }}</span>
+          </div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-label">路径分布</div>
+          <div class="stat-value">
+            <span v-if="Object.keys(syncStats.path_distribution || {}).length" class="path-chips">
+              <el-tag v-for="(cnt, path) in syncStats.path_distribution" :key="path" size="small" class="mr-1">
+                {{ path }} ×{{ cnt }}
+              </el-tag>
+            </span>
+            <span v-else class="text-muted">--</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="syncStats.failure_reasons?.length" class="failure-reasons mt-3">
+        <div class="stat-label mb-1">失败原因</div>
+        <div class="reason-chips">
+          <el-tag
+            v-for="r in syncStats.failure_reasons"
+            :key="r.reason"
+            size="small"
+            type="danger"
+            class="mr-1"
+          >{{ r.reason }} ×{{ r.count }}</el-tag>
+        </div>
+      </div>
     </SectionCard>
 
     <!-- 同步历史 -->
@@ -367,7 +405,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, eodSync, syncIndices, integrityCheck, syncIndustry, getSyncPathPrediction, getSyncProgress } from '@/api/quant'
+import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, getSyncStats, eodSync, syncIndices, integrityCheck, syncIndustry, getSyncProgress } from '@/api/quant'
 
 const statusList = ref([])
 const route = useRoute()
@@ -382,20 +420,21 @@ const previewLoading = ref(false)
 const previewCode = ref('')
 const previewCodeInput = ref('')
 const syncHistory = ref([])
+const syncStats = ref(null)
 const showEodDialog = ref(false)
 const eodSyncing = ref(false)
 const eodResult = ref(null)
 const eodForm = reactive({ universe: 'csi300', days: 5, overwrite: false })
+const syncYears = ref(5)
 const indexSyncing = ref(false)
 const industrySyncing = ref(false)
-const pathPrediction = ref(null)
   const integrityChecking = ref(false)
   const showIntegrityDialog = ref(false)
   const integrityResult = ref(null)
 const currentStatus = computed(() => statusList.value[0] || {})
 
 // 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
-// 后端 _invalidate_latest_date 在数据损坏场景写入此状态，触发全量重建告警横幅
+// （兼容旧版 smart_sync 路径写入的状态；baostock 回填失败时 status=failed + last_error 由 sync_runner 标记）
 const isDataCorrupt = computed(() => {
   return currentStatus.value.latest_date === null
     && !!currentStatus.value.last_error
@@ -425,33 +464,7 @@ const daysSinceUpdate = computed(() => {
 })
 
 const syncProgressText = computed(() => {
-  const path = pathPrediction.value?.path
-  if (path === 'chenditc_full') {
-    return `正在从 chenditc/investment_data 下载 qlib_bin.tar.gz（约 533MB），请耐心等待...`
-  }
-  if (path === 'baostock_incremental') {
-    return `正在通过 baostock 增量同步近期缺失数据（一次拉全市场），请耐心等待...`
-  }
-  if (path === 'baostock_today') {
-    return `正在通过 baostock 同步当日数据（含盘中），请耐心等待...`
-  }
-  return `正在同步数据，请耐心等待...`
-})
-
-const pathLabel = computed(() => {
-  const path = pathPrediction.value?.path
-  if (path === 'chenditc_full') return '预计：chenditc 全量'
-  if (path === 'baostock_incremental') return '预计：baostock 增量'
-  if (path === 'baostock_today') return '预计：同步当日'
-  return '预计：智能同步'
-})
-
-const pathTagType = computed(() => {
-  const path = pathPrediction.value?.path
-  if (path === 'chenditc_full') return 'danger'
-  if (path === 'baostock_incremental') return 'warning'
-  if (path === 'baostock_today') return 'success'
-  return 'info'
+  return `正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...`
 })
 
 const previewColumns = computed(() => {
@@ -551,9 +564,18 @@ async function loadQlib() {
   }
 }
 
+async function loadSyncStats() {
+  try {
+    const data = await getSyncStats(30)
+    syncStats.value = data
+  } catch (e) {
+    if (e !== 'cancel') syncStats.value = null
+  }
+}
+
 async function loadAll() {
   loading.value = true
-  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), fetchPathPrediction()])
+  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadSyncStats()])
   loading.value = false
 }
 
@@ -561,11 +583,8 @@ async function smartSync() {
   syncing.value = true
   syncProgress.value = null
   try {
-    await syncQuantData({})
-    const pathName = pathPrediction.value?.path === 'chenditc_full' ? 'chenditc全量'
-      : pathPrediction.value?.path === 'baostock_incremental' ? 'baostock增量'
-      : pathPrediction.value?.path === 'baostock_today' ? '同步当日' : '智能'
-    ElMessage.success(`智能同步已提交（${pathName}，后台执行）`)
+    await syncQuantData({ years: syncYears.value })
+    ElMessage.success(`数据同步已提交（baostock 回填 ${syncYears.value} 年，后台执行）`)
     startProgressPolling()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('数据同步提交失败')
@@ -595,15 +614,6 @@ async function pollSyncProgress() {
     }
   } catch (e) {
     // 静默失败，继续轮询
-  }
-}
-
-async function fetchPathPrediction() {
-  try {
-    const data = await getSyncPathPrediction()
-    pathPrediction.value = data
-  } catch (e) {
-    pathPrediction.value = null
   }
 }
 
@@ -701,7 +711,7 @@ async function retrySync() {
   }
 }
 
-onMounted(() => { loadAll(); fetchPathPrediction() })
+onMounted(() => { loadAll() })
 
 watch(
   () => route.query.preview,
@@ -916,6 +926,21 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
 .eod-dates-label { font-size: 13px; color: var(--text-secondary); }
 .eod-date-tag { font-family: var(--font-mono, monospace); }
 .eod-warn-hint { margin-left: 12px; font-size: 12px; color: var(--text-tertiary); }
+.sync-years-group { display: inline-flex; align-items: center; gap: 6px; }
+.sync-years-label { font-size: 13px; color: var(--text-secondary); }
+
+.sync-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.sync-stats-grid .stat-cell { display: flex; flex-direction: column; gap: 4px; }
+.sync-stats-grid .stat-label { font-size: 12px; color: var(--text-tertiary); }
+.sync-stats-grid .stat-value { font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sync-stats-grid .stat-sub { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.path-chips, .reason-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.text-success { color: var(--success, #67c23a); }
+.text-warning { color: var(--warning, #e6a23c); }
+.text-danger { color: var(--danger, #f56c6c); }
+.mr-1 { margin-right: 4px; }
+.mt-3 { margin-top: 12px; }
+.mb-1 { margin-bottom: 4px; }
 
 .integrity-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .integrity-stats .stat-item { display: flex; flex-direction: column; align-items: center; padding: 12px; background: var(--bg-tertiary, #f5f7fa); border-radius: 6px; }

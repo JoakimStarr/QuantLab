@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 
@@ -49,19 +48,6 @@ async def lifespan(app: FastAPI):
 
     await rerun_pending_mining()
     await start_scheduler()
-
-    # 后台自动导入 Alpha158 基准因子集（未导入时触发；不阻塞启动）
-    async def _auto_seed_alpha158():
-        try:
-            from app.services.factor.alpha158 import seed_alpha158
-            result = await seed_alpha158()
-            if result.get("already_imported") or result.get("count", 0) == 0:
-                return
-            logger.info("后台自动导入 Alpha158 完成: %s", result.get("message"))
-        except Exception:
-            logger.exception("后台自动导入 Alpha158 失败")
-
-    asyncio.create_task(_auto_seed_alpha158())
 
     yield
     await stop_scheduler()

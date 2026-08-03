@@ -299,10 +299,12 @@ async def batch_evaluate_alpha158(
 
     # 2. 查询所有 alpha158 因子（可指定 factor_ids 只评价部分）
     async with async_session() as session:
-        q = select(Factor.id, Factor.name, Factor.expression).where(
-            Factor.category == "alpha158"
-        )
-        if factor_ids:
+        q = select(Factor.id, Factor.name, Factor.expression)
+        if not factor_ids:
+            # 未指定因子时（自动导入/缺指标自愈），只评价 Alpha158 类别
+            q = q.where(Factor.category == "alpha158")
+        else:
+            # 手动勾选补算：支持任意类别因子
             q = q.where(Factor.id.in_(factor_ids))
         rows = await session.execute(q)
         targets = rows.all()
@@ -317,14 +319,21 @@ async def batch_evaluate_alpha158(
     # 3. 预加载共用数据（关键优化！避免 N 次重复 IO）
     logger.info("Alpha158 批量评价: 预加载共用数据 (label + close), 待评价 %d 因子", total)
     label_expr = f"Ref($close, -{horizon}) / $close - 1"
-    preloaded_label_df = load_label(eval_start, eval_end, label_expr=label_expr, universe=universe)
+    # qlib 数据读取为同步 CPU/IO 重操作，放线程池执行，避免阻塞事件循环
+    # 导致启动期 /health 等请求长时间无响应
+    preloaded_label_df = await run_io_cpu(
+        load_label, eval_start, eval_end,
+        label_expr=label_expr, universe=universe,
+    )
 
     # 预加载 $close 用于 decay 计算
-    init_qlib()
+    await run_io_cpu(init_qlib)
     from qlib.data import D
-    instruments = D.list_instruments(D.instruments(market=universe), freq="day")
-    preloaded_close_df = D.features(
-        list(instruments.keys()), ["$close"],
+    instruments = await run_io_cpu(
+        D.list_instruments, D.instruments(market=universe), freq="day"
+    )
+    preloaded_close_df = await run_io_cpu(
+        D.features, list(instruments.keys()), ["$close"],
         start_time=eval_start, end_time=eval_end, freq="day"
     )
     logger.info(
@@ -515,10 +524,10 @@ async def backfill_alpha158_metrics(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     factor_ids: Optional[List[int]] = None,
 ) -> dict:
-    """为 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
+    """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
     - 不传 factor_ids：只对 category='alpha158' 且 ic IS NULL 的因子补算（历史遗留修复）
-    - 传 factor_ids：只对指定的因子重算（不管指标是否已存在），用于前端勾选后手动重算
+    - 传 factor_ids：对指定的任意类别因子重算（不管指标是否已存在），用于前端勾选后手动重算
     """
     from sqlalchemy import select
     from app.core.config import settings
@@ -530,24 +539,24 @@ async def backfill_alpha158_metrics(
     eval_end = period.get("end", "2024-12-31")
 
     async with async_session() as session:
-        q = select(Factor.id, Factor.expression).where(
-            Factor.category == "alpha158"
-        )
+        q = select(Factor.id, Factor.expression)
         if factor_ids:
+            # 手动勾选补算：支持任意类别因子
             q = q.where(Factor.id.in_(factor_ids))
         else:
-            q = q.where(Factor.ic.is_(None))
+            # 未指定时只补算 Alpha158 缺失指标的（历史遗留修复）
+            q = q.where(Factor.category == "alpha158", Factor.ic.is_(None))
         rows = await session.execute(q)
         targets = rows.all()
 
     if not targets:
         if factor_ids:
             return {"ok": True, "evaluated": 0, "total": 0,
-                    "message": "所选因子不在 Alpha158 类别或不存在"}
+                    "message": "所选因子不存在"}
         return {"ok": True, "evaluated": 0, "total": 0,
                 "message": "Alpha158 所有因子已评价，无需补算"}
 
-    logger.info("Alpha158 补算评价指标: %d 个因子待评价", len(targets))
+    logger.info("补算评价指标: %d 个因子待评价", len(targets))
 
     eval_result = await batch_evaluate_alpha158(
         eval_start=eval_start,
@@ -558,11 +567,11 @@ async def backfill_alpha158_metrics(
 
     evaluated = eval_result.get("evaluated", 0)
     failed = eval_result.get("failed", 0)
-    logger.info("Alpha158 补算完成: %d/%d 成功", evaluated, len(targets))
+    logger.info("补算完成: %d/%d 成功", evaluated, len(targets))
     return {
         "ok": True,
         "evaluated": evaluated,
         "eval_failed": failed,
         "total": len(targets),
-        "message": f"Alpha158 补算完成 {evaluated}/{len(targets)}",
+        "message": f"补算完成 {evaluated}/{len(targets)}",
     }

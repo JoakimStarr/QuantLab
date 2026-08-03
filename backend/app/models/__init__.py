@@ -7,6 +7,19 @@ from .mining_task import MiningTask
 from .sync_history import SyncHistory
 from .task_result import TaskResult
 from .fundamental import FundamentalPIT
+from .baostock import (
+    StockDaily,
+    StockBasic,
+    StockIndustry,
+    TradeCalendar,
+    FinProfit,
+    FinOperation,
+    FinGrowth,
+    FinBalance,
+    FinCashflow,
+    FinDupont,
+    MarginDaily,
+)
 
 __all__ = [
     "User",
@@ -18,4 +31,15 @@ __all__ = [
     "SyncHistory",
     "TaskResult",
     "FundamentalPIT",
+    "StockDaily",
+    "StockBasic",
+    "StockIndustry",
+    "TradeCalendar",
+    "FinProfit",
+    "FinOperation",
+    "FinGrowth",
+    "FinBalance",
+    "FinCashflow",
+    "FinDupont",
+    "MarginDaily",
 ]

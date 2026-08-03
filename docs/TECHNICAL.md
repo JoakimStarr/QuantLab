@@ -445,13 +445,9 @@ cp .env.example .env
 ./start.sh dev
 ```
 
-### 8.2 Docker
+### 8.2 生产部署
 
-```bash
-docker compose up -d --build
-```
-
-详见 [docs/DEVELOPMENT.md#生产环境部署](DEVELOPMENT.md)。
+生产部署（systemd + Nginx）详见 [docs/DEPLOY.md](DEPLOY.md)。
 
 ### 8.3 CORS
 

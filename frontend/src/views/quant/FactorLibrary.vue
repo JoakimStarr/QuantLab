@@ -9,7 +9,6 @@
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
-        <el-button :icon="MagicStick" :loading="backfillingMetrics" @click="onBackfillAlpha158" title="勾选因子后点击，仅重算所选因子的 IC/RankIC/ICIR/换手">补算指标</el-button>
         <el-button type="primary" :icon="Plus" @click="onAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
@@ -32,6 +31,21 @@
         <el-option label="按ICIR" value="icir" />
       </el-select>
       <div class="filter-toolbar__spacer" />
+      <el-button
+        type="primary"
+        :icon="MagicStick"
+        :loading="backfillingMetrics"
+        :disabled="selectedKeys.length === 0"
+        title="勾选因子后点击，重算所选因子的 IC/RankIC/ICIR/换手"
+        @click="onBackfillMetrics"
+      >补算指标 ({{ selectedKeys.length }})</el-button>
+      <el-button
+        type="warning"
+        :loading="aiExplaining"
+        :disabled="selectedKeys.length === 0"
+        title="勾选因子后点击，用 AI 生成因子金融逻辑解释"
+        @click="onAiExplain"
+      >✨ AI 解释 ({{ selectedKeys.length }})</el-button>
       <el-button type="primary" :disabled="selectedKeys.length < 2" @click="compareFactors">对比选中因子 ({{ selectedKeys.length }})</el-button>
       <span class="filter-toolbar__count">共 {{ factors.length }} 个因子</span>
     </section>
@@ -111,7 +125,7 @@ import PageContainer from '@/components/common/PageContainer.vue'
 import VChart from 'vue-echarts'
 import { useFactorStore } from '@/stores/factor'
 import { syncQuantData } from '@/api/quant'
-import { seedAlpha158, backfillAlpha158Metrics, getQuantileAnalysis, neutralizeFactor, decayCheck } from '@/api/factor'
+import { seedAlpha158, backfillAlpha158Metrics, getQuantileAnalysis, neutralizeFactor, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
 
 const router = useRouter()
 const factorStore = useFactorStore()
@@ -122,6 +136,7 @@ const loading = computed(() => factorStore.loading)
 const syncing = ref(false)
 const seedingAlpha158 = ref(false)
 const backfillingMetrics = ref(false)
+const aiExplaining = ref(false)
 const decayChecking = ref(false)
 const decayMap = ref({})  // factor_id -> is_decaying
 
@@ -222,7 +237,7 @@ async function onSeedAlpha158() {
   }
 }
 
-async function onBackfillAlpha158() {
+async function onBackfillMetrics() {
   const ids = selectedKeys.value
   if (ids.length === 0) {
     ElMessage.warning('请先勾选要重算指标的因子')
@@ -240,6 +255,27 @@ async function onBackfillAlpha158() {
     /* 拦截器已提示 */
   } finally {
     backfillingMetrics.value = false
+  }
+}
+
+// AI 因子解释：勾选因子后用 LLM 生成金融逻辑描述
+async function onAiExplain() {
+  const ids = selectedKeys.value
+  if (ids.length === 0) {
+    ElMessage.warning('请先勾选要解释的因子')
+    return
+  }
+  aiExplaining.value = true
+  try {
+    const data = await aiExplainFactorsBatch(ids)
+    const n = data?.total || ids.length
+    ElMessage.success(`已为 ${n} 个因子生成 AI 解释`)
+    factorStore.invalidate()
+    await loadFactors()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    aiExplaining.value = false
   }
 }
 
@@ -729,20 +765,20 @@ onMounted(loadFactors)
   border-radius: 4px;
   display: inline-block;
   max-width: 100%;
-  word-break: break-all;
+  min-width: 0;
   cursor: pointer;
   transition: color 0.15s;
   &:hover {
     color: var(--text-primary);
   }
 }
-.cell-expr--collapsed {
+// 过长表达式一律单行省略（点击可扩宽列看更多，全文在 hover 提示里）
+.cell-expr--collapsed,
+.cell-expr--expanded {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.cell-expr--expanded {
-  white-space: normal;
+  word-break: keep-all;
 }
 .cell-desc {
   font-size: var(--font-size-sm);

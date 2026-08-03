@@ -174,10 +174,10 @@ async def seed_alpha158_api():
 async def backfill_alpha158_metrics_api(
     factor_ids: list[int] = Query(None, description="指定重算的因子 ID 列表；不传则只补算缺指标的 Alpha158 因子"),
 ):
-    """为 Alpha158 因子补算评价（IC/RankIC/ICIR/turnover）。
+    """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
-    传 factor_ids：仅重算所选因子的指标（覆盖已有值）。
-    不传：只补算历史遗留中指标为 NULL 的因子。
+    传 factor_ids：仅重算所选因子的指标（支持任意类别，覆盖已有值）。
+    不传：只补算历史遗留中指标为 NULL 的 Alpha158 因子。
     进度通过 WebSocket `alpha158_progress` 事件推送。
     """
     from app.services.factor.alpha158 import backfill_alpha158_metrics
@@ -360,3 +360,25 @@ async def deep_analysis_api(
     result["factor_name"] = factor.get("name")
     _deep_analysis_cache[cache_key] = {"ts": now, "data": result}
     return ApiResponse(ok=True, data=result)
+
+
+@router.post("/{factor_id}/ai-explain")
+async def ai_explain_factor_api(factor_id: int):
+    """AI 因子解释：为因子生成金融逻辑描述并写回 description。"""
+    from app.services.factor.ai_explain import explain_and_update_factor
+    try:
+        result = await explain_and_update_factor(factor_id)
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("FACTOR_NOT_FOUND", str(e), 404)
+    except Exception as e:
+        logger.exception("AI 因子解释失败 factor_id=%s", factor_id)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 因子解释失败: {e}", 500)
+
+
+@router.post("/ai-explain-batch")
+async def ai_explain_factors_batch_api(factor_ids: list[int] = Query(...)):
+    """批量 AI 因子解释（逐个调用 LLM，失败跳过）。"""
+    from app.services.factor.ai_explain import explain_factors_batch
+    results = await explain_factors_batch(factor_ids)
+    return ApiResponse(ok=True, data={"items": results, "total": len(results)})

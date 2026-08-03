@@ -119,21 +119,19 @@ QuantLab/
 │   ├── migrations/              Alembic 迁移
 │   ├── tests/                   pytest 测试
 │   ├── alembic.ini
-│   └── Dockerfile
 ├── frontend/                    前端（Vue3 + Vite + Element Plus）
 │   ├── src/                     api/components/composables/config/router/stores/styles/utils/views
 │   ├── package.json
 │   ├── vite.config.js
-│   ├── nginx.conf               生产反向代理配置
-│   └── Dockerfile
+│   ├── nginx.conf               生产反向代理配置（参考 docs/DEPLOY.md）
 ├── docs/                        技术文档（本文件所在）
 ├── data/                        QLib bin / SQLite / processed / models / industry_map.json
 ├── models/                      模型产物
 ├── logs/                        日志输出
 ├── config.yaml                  主配置
 ├── .env / .env.example          环境变量
-├── docker-compose.yml
-├── start.sh                     一键启动脚本（dev/docker）
+├── start.sh                     一键启动脚本（dev 模式）
+├── setup.sh                     环境引导脚本（venv + npm install）
 ├── requirements.txt
 ├── pyproject.toml               ruff/pytest/mypy 配置
 └── pytest.ini
@@ -208,9 +206,9 @@ QuantLab/
 | `ADMIN_PASSWORD_HASH` | 空 | bcrypt 哈希（推荐，优先于明文） |
 | `LOGIN_RATE_LIMIT` | 5/minute | 登录限流（slowapi） |
 | `CORS_ORIGINS` | 空 | 逗号分隔的 CORS 来源，覆盖 config |
-| `PROJECT_ROOT` | 代码目录上四级 | 项目根（Docker 设 /app） |
-| `STATIC_DIR` | static | 前端静态目录（Docker 设 /app/static） |
-| `TZ` | — | 时区（Docker 设 Asia/Shanghai） |
+| `PROJECT_ROOT` | 代码目录上四级 | 项目根 |
+| `STATIC_DIR` | static | 前端静态目录 |
+| `TZ` | — | 时区（本地部署按系统时区） |
 | `GLM_API_KEY` / `SILICONFLOW_API_KEY` / `OPENCODEZEN_API_KEY` | 空 | AI Provider Key |
 | `VITE_API_BASE_URL` | http://localhost:8000/api/v1 | 前端 API 基址 |
 | `VITE_APP_TITLE` | 量化策略研究平台 | 前端标题 |
@@ -230,8 +228,8 @@ QuantLab/
 
 ```bash
 cd ~/QuantLab
-./start.sh            # dev 模式（默认）
-./start.sh docker     # docker 模式
+./setup.sh            # 首次：环境引导（建 .venv + 装依赖）
+./start.sh            # 启动（dev 模式）
 ```
 
 `start.sh dev` 会：
@@ -376,26 +374,9 @@ ADMIN_PASSWORD_HASH=$2b$12$...     # bcrypt 哈希
 LOGIN_RATE_LIMIT=5/minute
 ```
 
-### 6.2 Docker 部署
+### 6.2 生产部署（systemd + Nginx）
 
-`docker-compose.yml` 仅含 `backend` 服务（前端由 FastAPI StaticFiles 服务）：
-
-```bash
-# 先构建前端
-cd frontend && npm run build && cd ..
-docker-compose up --build
-```
-
-挂载与配置：
-- `config.yaml` → `/app/config.yaml:ro`
-- `data/` / `models/` / `logs/` → `/app/...`（可写）
-- `frontend/dist` → `/app/static:ro`
-- 环境变量：`PROJECT_ROOT=/app`、`STATIC_DIR=/app/static`、`TZ=Asia/Shanghai`
-- 启动命令：`uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1`
-- 资源限制：内存 4g
-- 健康检查：`GET /health`，30s 间隔，20s start_period
-
-> ⚠️ `workers=1`：SQLite + APScheduler 单例不宜多 worker；如需多进程需换 DB 与分布式调度。
+生产环境推荐用 systemd 托管后端进程 + Nginx 反向代理，完整配置示例见 [docs/DEPLOY.md](DEPLOY.md)。
 
 ### 6.3 反向代理配置
 
@@ -425,7 +406,6 @@ docker-compose up --build
 
 - **现象**：在 Windows 侧用 `\\wsl$\` 编辑后运行报错
 - **解决**：所有源码与 `.venv` 在 WSL 内操作；`start.sh` 自动用 `.venv/bin/python`
-- **Docker Desktop**：确保 WSL2 后端已启用
 
 ### 7.2 QLib 初始化失败
 
@@ -484,8 +464,8 @@ cd frontend && npm run dev       # 开发
 cd frontend && npm run build     # 构建
 cd frontend && npm run lint      # 检查
 
-# Docker
-docker-compose up --build
+# 生产部署（详见 docs/DEPLOY.md）
+# systemd + Nginx，不再使用 Docker
 ```
 
 ---

@@ -10,7 +10,9 @@ class SyncHistory(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     universe = Column(String, nullable=False)
-    data_source = Column(String, nullable=False)  # chenditc / akshare
+    data_source = Column(String, nullable=False)  # chenditc / akshare / baostock
+    # 智能同步路径：chenditc_full / baostock_incremental / baostock_today（老记录为 None）
+    sync_path = Column(String, nullable=True)
     status = Column(String, nullable=False)  # running / ok / failed
     started_at = Column(TIMESTAMP, nullable=False, default=datetime.now)
     finished_at = Column(TIMESTAMP, nullable=True)

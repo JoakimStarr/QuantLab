@@ -70,6 +70,39 @@ class Base(DeclarativeBase):
     """SQLAlchemy ORM 基类。"""
 
 
+
+
+async def _ensure_columns() -> None:
+    """幂等补列：为已有表补充新增字段（PostgreSQL 兼容，重复执行不报错）。
+
+    在 async 上下文内用 run_sync 执行（asyncpg 驱动无法在同步引擎上直连）。
+    """
+    from sqlalchemy import text, inspect
+    pending = {
+        "stock_data_status": [("last_sync_path", "VARCHAR")],
+        "sync_history": [("sync_path", "VARCHAR")],
+    }
+
+    def _do(sync_conn):
+        insp = inspect(sync_conn)
+        for tbl, cols in pending.items():
+            if not insp.has_table(tbl):
+                continue
+            existing = {c["name"] for c in insp.get_columns(tbl)}
+            for col_name, col_type in cols:
+                if col_name not in existing:
+                    try:
+                        sync_conn.execute(
+                            text(f'ALTER TABLE "{tbl}" ADD COLUMN "{col_name}" {col_type}')
+                        )
+                        logger.info("补列成功: %s.%s", tbl, col_name)
+                    except Exception as e:
+                        logger.warning("补列跳过 %s.%s: %s", tbl, col_name, e)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
+
+
 async def init_db() -> None:
     """启动时初始化数据库：建表 + Alembic 迁移。
 
@@ -82,6 +115,8 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # 为已有库幂等补充新列（create_all 只建新表，不会给旧表加列）
+    await _ensure_columns()
     # 确认表已创建
     async with engine.begin() as conn:
         tables = await conn.run_sync(

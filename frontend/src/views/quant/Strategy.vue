@@ -8,7 +8,10 @@
       </div>
       <div class="page-header__actions">
         <el-button :icon="Refresh" @click="loadStrategies">刷新</el-button>
-        <el-button type="primary" :disabled="selectedResults.length < 2" :loading="comparing" @click="compareResults">对比选中策略 ({{ selectedResults.length }})</el-button>
+        <el-button :disabled="selectedResults.length < 2" :loading="comparing" @click="compareResults">对比选中策略 ({{ selectedResults.length }})</el-button>
+        <el-button type="warning" :loading="aiGenerating" :disabled="!factorCount" @click="onAiGenerate">
+          {{ aiGenerating ? 'AI 生成中...' : '✨ AI 生成策略' }}
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">新建策略</el-button>
       </div>
     </header>
@@ -306,6 +309,7 @@ defineOptions({ name: 'QuantStrategy' })
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
@@ -313,7 +317,8 @@ import {
   listStrategies, createStrategy, runBacktest,
   listBacktestResults, getBacktestResult,
   getAllBacktestStatuses,
-  runWalkForward, getWalkForwardResults
+  runWalkForward, getWalkForwardResults,
+  aiGenerateStrategy
 } from '@/api/strategy'
 import { useFactorStore } from '@/stores/factor'
 
@@ -324,6 +329,10 @@ const factorStore = useFactorStore()
 const strategies = ref([])
 const selectedStrategy = ref(null)
 const listLoading = ref(false)
+
+// === AI 策略 ===
+const aiGenerating = ref(false)
+const factorCount = computed(() => factorStore.factors?.length || 0)
 
 // === 回测状态 ===
 const backtestStatuses = ref({})
@@ -710,6 +719,32 @@ function viewResults(row) {
 // === "归档"链接：仅提示 ===
 function archive(row) {
   ElMessage.info(`归档策略「${row.name}」(id=${row.id})`)
+}
+
+// === AI 生成策略 ===
+async function onAiGenerate() {
+  if (!factorStore.factors?.length) {
+    ElMessage.warning('因子库为空，请先在因子库导入 Alpha158 或新增因子')
+    return
+  }
+  aiGenerating.value = true
+  try {
+    const data = await aiGenerateStrategy({})
+    ElMessage.success(`AI 已生成策略「${data.strategy?.name}」`)
+    // 展示 AI 推荐理由
+    ElMessageBox.alert(
+      `${data.rationale || ''}\n\n因子: ${(data.factors || []).map(f => f.name).join(', ')}\n` +
+      `topk=${data.strategy?.topk}, n_drop=${data.strategy?.n_drop}, 调仓=${data.strategy?.rebalance_freq}`,
+      'AI 策略已创建',
+      { confirmButtonText: '好的' }
+    )
+    loadStrategies()
+  } catch (e) {
+    const msg = e?.response?.data?.error?.message || e?.message || 'AI 生成失败'
+    ElMessage.error('AI 生成策略失败: ' + msg)
+  } finally {
+    aiGenerating.value = false
+  }
 }
 
 // === 新建策略对话框 ===

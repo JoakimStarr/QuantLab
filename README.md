@@ -40,7 +40,7 @@
 | **GPU 加速** | 自动检测（torch / nvidia-smi） | LightGBM 训练、符号回归 |
 | **可观测性** | Prometheus 指标 + JSON 结构化日志 + request_id 链路追踪 | 监控、排查、审计 |
 | **安全** | JWT（exp + refresh）+ bcrypt + 生产环境安全闸门 + 表达式沙箱 | 防默认凭据、防任意代码执行 |
-| **运维** | Docker + healthcheck + 日志轮转 + CI/CD（GitHub Actions） | 部署、回归、监控 |
+| **运维** | systemd/Nginx + 日志轮转 + CI/CD（GitHub Actions） | 部署、回归、监控 |
 
 ---
 
@@ -52,33 +52,25 @@
 git clone https://github.com/JoakimStarr/QuantLab.git
 cd QuantLab
 
-# 2. 安装依赖
-# 后端用 Python 3.11（pyqlib 不支持 3.13）
-conda create -n quant python=3.11 -y
-conda activate quant
-pip install -r requirements.txt
+# 一键引导：创建 .venv + 安装 Python/前端依赖 + 建数据目录
+./setup.sh
 
-# 前端
-cd frontend && npm install && cd ..
-
-# 3. 配置环境变量
-cp .env.example .env
+# 配置环境变量
+cp .env.example .env   # setup.sh 已自动复制，按需修改
 # 至少需要配置一个 AI Provider（推荐 OPENCODEZEN_API_KEY）
-# OPENCODEZEN_API_KEY=sk-xxxxxxxx
+# 还需配置 PostgreSQL 连接（POSTGRES_PASSWORD 等），详见 docs/QUICKSTART.md
 
-# 4. 启动
-./start.sh dev
+# 启动
+./start.sh
 # 后端：  http://localhost:8000
 # 前端：  http://localhost:3000
 # 文档：  http://localhost:8000/docs  (Swagger UI)
 # 指标：  http://localhost:8000/metrics (Prometheus)
 ```
 
-### 2.2 Docker 部署
+### 2.2 生产部署
 
-```bash
-docker compose up -d --build
-```
+生产环境建议用 systemd 托管 + Nginx 反向代理，详见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
 **生产部署前必须设置**：
 ```bash
@@ -88,7 +80,7 @@ SECRET_KEY=$(openssl rand -hex 32)
 ADMIN_PASSWORD=<足够强>
 ```
 
-否则启动时会被安全闸门拦截。详见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#生产环境部署)。
+否则启动时会被安全闸门拦截。
 
 ### 2.3 第一次跑通要做什么
 
@@ -118,7 +110,6 @@ QuantLab/
 │   │   ├── scheduler/        # APScheduler 任务（同步、归档、清理）
 │   │   └── migrations/       # Alembic 迁移
 │   ├── tests/                # pytest 测试套件
-│   └── Dockerfile
 │
 ├── frontend/                 # 前端 (Vue 3 + Element Plus + ECharts)
 │   ├── src/
@@ -134,7 +125,6 @@ QuantLab/
 │
 ├── docs/                     # 技术文档（前端 /docs 页面读取这里）
 ├── config.yaml               # 全局配置（数据库/AI Provider/任务/挖掘等）
-├── docker-compose.yml
 └── README.md                 # ← 你正在读
 ```
 

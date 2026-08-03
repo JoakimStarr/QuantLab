@@ -48,10 +48,13 @@ def _db_available() -> bool:
 
 @pytest.fixture(scope="session", autouse=True)
 async def _create_tables(_db_available):
-    """session 级：建表 -> 测试 -> drop_all。
+    """session 级：建表 -> 测试 -> （仅测试库）drop_all。
 
     如果 DATABASE_URL 设置但 DB 不可达，设 _DB_REALLY_AVAILABLE=False，
     后续 _truncate_tables 跳过，不影响不依赖 DB 的测试。
+
+    安全：只有数据库名包含 "test" 时才 drop_all（防止测试清空真实开发库）。
+    指向真实库时只建表 + 逐测试 TRUNCATE，不删表。
     """
     global _DB_REALLY_AVAILABLE
     if not _db_available:
@@ -67,7 +70,9 @@ async def _create_tables(_db_available):
     except Exception:
         _DB_REALLY_AVAILABLE = False
     yield
-    if _DB_REALLY_AVAILABLE:
+    # 仅测试库允许 drop_all；真实库保留表结构（数据已由逐测试 TRUNCATE 清理）
+    is_test_db = "test" in engine.url.database.lower()
+    if _DB_REALLY_AVAILABLE and is_test_db:
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.drop_all)

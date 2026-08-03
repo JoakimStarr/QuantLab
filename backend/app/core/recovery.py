@@ -110,16 +110,16 @@ async def recover_stale_mining():
 
 
 async def _auto_retry_sync(universes: list):
-    """对被中断的 universe 列表自动触发后台重试同步。"""
+    """对被中断的 universe 列表自动触发后台重试同步（baostock 回填）。"""
     import asyncio
     from app.schemas.quant import SyncDataRequest
-    from app.services.data.sync_runner import run_sync_task
+    from app.services.data.baostock_backfill import run_baostock_backfill_task
 
     pending = []
     for universe in universes:
         logger.info("recover: 自动重试 universe=%s", universe)
         req = SyncDataRequest(universe=universe)
-        t = asyncio.create_task(run_sync_task(req))
+        t = asyncio.create_task(run_baostock_backfill_task(req))
         # 保留引用并记录异常，避免任务异常被静默吞没
         t.add_done_callback(
             lambda fut: fut.exception() and logger.error("recover: 自动重试失败: %s", fut.exception())

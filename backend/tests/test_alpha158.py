@@ -87,7 +87,7 @@ class TestBackfillAlpha158Metrics:
         result = run(backfill_alpha158_metrics(factor_ids=[999]))
 
         batch.assert_not_awaited()
-        assert "不在 Alpha158" in result["message"]
+        assert "所选因子不存在" in result["message"]
 
     def test_backfill_all_evaluated(self, monkeypatch):
         """无缺指标因子且未指定 ids：提示无需补算。"""

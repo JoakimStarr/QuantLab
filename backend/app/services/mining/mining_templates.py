@@ -71,6 +71,20 @@ MINING_TEMPLATES = {
         "allowed_ops": ["Sum", "Mean", "Std", "Corr", "Rank", "Ref", "Delta"],
         "ic_threshold": 0.03,
     },
+    "valuation": {
+        "name": "估值/基本面因子模板",
+        "description": "基于估值与换手的基本面因子挖掘，关注价值与质量特征",
+        "llm_prompt": (
+            "请生成 5 个估值/基本面类量化因子表达式，使用 qlib 语法。"
+            "因子应基于估值字段 $pe_ttm, $pb_mrq, $ps_ttm, $pcf_ncf_ttm 和换手率 $turn。"
+            "常用思路：低估(Rank(-$pe_ttm))、估值分位、估值-动量结合、换手确认等。"
+            "可使用 Rank, Ref, Mean, Std, Delta, Log, If 等算子。"
+            '返回 JSON 格式: {{"factors": [{{"name": "...", "expression": "...", "description": "..."}}]}}'
+        ),
+        "base_features": ["$pe_ttm", "$pb_mrq", "$ps_ttm", "$pcf_ncf_ttm", "$turn", "$close"],
+        "allowed_ops": ["Rank", "Ref", "Mean", "Std", "Delta", "Log", "If", "Abs", "Sign"],
+        "ic_threshold": 0.03,
+    },
 }
 
 

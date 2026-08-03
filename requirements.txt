@@ -70,15 +70,13 @@ cachetools>=5.3.0
 
 # 结构化日志（structlog + python-json-logger 替换自研 JSONFormatter）
 structlog>=24.4.0
-python-json-logger>=6.1.0
+python-json-logger>=4.1.0
 # asgi-correlation-id: 自动注入 request_id 到日志上下文（替代自研 RequestContextMiddleware）
 asgi-correlation-id>=0.2.0
 
 # 重试：tenacity 替代手写重试循环
 tenacity>=8.5.0
 
-# Redis：异步 Pub/Sub 进度共享（多实例）
-redis>=5.0.0
 
 # json-repair：修复 LLM 返回的损坏 JSON（单引号、尾逗号、markdown 代码块等）
 json-repair>=0.31.0

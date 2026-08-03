@@ -89,13 +89,6 @@ class SchedulerSettings(SettingsBaseModel):
     quant_data_update_time: str = "18:00"
 
 
-class RedisSettings(SettingsBaseModel):
-    """Redis 连接配置"""
-
-    url: str = ""
-    enabled: bool = False
-
-
 class LoggingSettings(SettingsBaseModel):
     dir: str = "logs"
     level: str = "INFO"
@@ -128,12 +121,6 @@ class QuantSettings(SettingsBaseModel):
     )
     qlib_provider_uri: str = "data/qlib_bin/cn_data"
     slippage_bps: int = 5
-    smart_sync: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "full_sync_threshold_days": 7,
-            "include_intraday": True,
-        }
-    )
     sync_indices: list[str] = Field(
         default_factory=lambda: [
             "sh000001",
@@ -184,7 +171,12 @@ class MiningSettings(SettingsBaseModel):
                 "$high",
                 "$low",
                 "$volume",
-                "$factor",
+                "$amount",
+                "$change",
+                "$turn",
+                "$preclose",
+                "$pe_ttm",
+                "$pb_mrq",
             ],
         }
     )
@@ -277,7 +269,6 @@ class Settings(BaseSettings):
     ai_provider: AIProviderSettings = AIProviderSettings()
     api: APISettings = APISettings()
     scheduler: SchedulerSettings = SchedulerSettings()
-    redis: RedisSettings = RedisSettings()
     logging: LoggingSettings = LoggingSettings()
     quant: QuantSettings = QuantSettings()
     mining: MiningSettings = MiningSettings()
@@ -318,7 +309,6 @@ class Settings(BaseSettings):
             "ai_provider": "ai_provider",
             "api": "api",
             "scheduler": "scheduler",
-            "redis": "redis",
             "logging": "logging",
             "quant": "quant",
             "mining": "mining",

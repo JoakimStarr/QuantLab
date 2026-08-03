@@ -28,8 +28,15 @@ _QLIB_OPS = {
     "Skew", "Kurt",
 }
 
-# 允许的字段（$开头）
-_QLIB_FIELDS = {"$open", "$close", "$high", "$low", "$volume", "$amount", "$factor", "$change"}
+# 允许的字段（$开头）——与 baostock 回填写入 qlib bin 的字段一致
+_QLIB_FIELDS = {
+    "$open", "$high", "$low", "$close", "$preclose",
+    "$volume", "$amount", "$turn",
+    "$tradestatus", "$pct_chg", "$is_st",
+    "$pe_ttm", "$pb_mrq", "$ps_ttm", "$pcf_ncf_ttm",
+    "$adjustflag",
+    "$change", "$tradable",
+}
 
 # 严格禁止的标识符（词边界匹配，避免 "os" 误伤 "close"）
 _FORBIDDEN_WORDS = {"import", "exec", "eval", "lambda", "os",

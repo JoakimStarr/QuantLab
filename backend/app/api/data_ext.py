@@ -104,7 +104,7 @@ async def data_preview_api(
         else:
             instruments = [code_upper]
 
-        fields = ["$open", "$close", "$high", "$low", "$volume", "$factor"]
+        fields = ["$open", "$close", "$high", "$low", "$volume"]
         try:
             df = D.features(instruments, fields, start_time="2020-01-01",
                             end_time=datetime.now().strftime("%Y-%m-%d"), freq="day")
@@ -130,7 +130,6 @@ async def data_preview_api(
                 "high": round(float(row.get("$high", 0)), 2),
                 "low": round(float(row.get("$low", 0)), 2),
                 "volume": int(row.get("$volume", 0)),
-                "factor": round(float(row.get("$factor", 1)), 4),
             })
         return rows
 
@@ -223,49 +222,158 @@ async def sync_history_api(
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})
 
 
-@router.put("/data-source")
-async def switch_data_source_api(
-    source: str = Query(..., description="chenditc 或 akshare"),
+@router.get("/sync-stats")
+async def sync_stats_api(
+    days: int = Query(30, ge=1, le=365, description="统计最近 N 天"),
+    universe: str = Query(None, description="按股票池筛选"),
+    db=Depends(get_db),
 ):
-    """[deprecated] 切换数据源。智能同步已自动判断路径，此接口保留向后兼容。"""
-    if source not in ("chenditc", "akshare"):
-        raise AppError("VALIDATION_ERROR", "数据源仅支持 chenditc 或 akshare", 422)
+    """同步统计聚合：路径分布/成功率/耗时/失败原因/完整性趋势。
 
-    # 更新配置文件
-    import yaml
-    config_path = settings.PROJECT_ROOT / "config.yaml"
-    try:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-        cfg.setdefault("quant", {})["data_source"] = source
-        with open(config_path, "w") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
-        # 更新运行时配置
-        settings.quant["data_source"] = source
-        return ApiResponse(ok=True, data={"data_source": source, "message": f"数据源已切换为 {source}"})
-    except Exception as e:
-        raise AppError("CONFIG_ERROR", f"配置更新失败: {e}", 500)
+    供前端 SyncMonitor 面板展示用。
+    """
+    from datetime import timedelta
 
+    cutoff = datetime.now() - timedelta(days=days)
 
-@router.get("/data-source")
-async def get_data_source_api():
-    """[deprecated] 获取当前数据源。智能同步已自动判断路径。"""
-    return ApiResponse(ok=True, data={"source": settings.quant.get("data_source", "chenditc")})
+    # 基础查询
+    query = select(SyncHistory).where(SyncHistory.started_at >= cutoff)
+    if universe:
+        query = query.where(SyncHistory.universe == universe)
+    query = query.order_by(SyncHistory.started_at.desc())
+    result = await db.execute(query)
+    rows = result.scalars().all()
 
+    if not rows:
+        return ApiResponse(ok=True, data={
+            "path_distribution": {},
+            "success_rate": {"ok": 0, "failed": 0, "running": 0, "total": 0, "rate": 0},
+            "duration_stats": {"avg": 0, "max": 0, "min": 0, "p50": 0, "p95": 0},
+            "daily_duration": [],
+            "top5_slowest": [],
+            "failure_reasons": [],
+            "integrity_trend": [],
+        })
 
-@router.post("/incremental-sync")
-async def incremental_sync_api(background_tasks=None):
-    """增量数据同步（添加1: 数据增量更新）"""
-    from app.services.quant.qlib_init import is_qlib_available
-    if not await is_qlib_available():
-        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+    # 1. 路径分布
+    path_dist = {}
+    for r in rows:
+        p = r.sync_path or r.data_source or "unknown"
+        path_dist[p] = path_dist.get(p, 0) + 1
 
-    # 增量同步在后台执行
-    from app.api.quant_data import _run_sync_task
-    from app.schemas.quant import SyncDataRequest
-    req = SyncDataRequest(universe=settings.quant.get("universe", "csi300"))
-    background_tasks.add_task(_run_sync_task, req)
-    return ApiResponse(ok=True, data={"message": "增量同步已提交"})
+    # 2. 成功率
+    status_counts = {"ok": 0, "failed": 0, "running": 0}
+    for r in rows:
+        s = r.status or "running"
+        status_counts[s] = status_counts.get(s, 0) + 1
+    total = len(rows)
+    rate = status_counts["ok"] / total if total > 0 else 0
+
+    # 3. 耗时统计（仅 status=ok/failed 的已完成记录）
+    durations = [r.duration_seconds for r in rows if r.duration_seconds is not None]
+    if durations:
+        durations_sorted = sorted(durations)
+        n = len(durations_sorted)
+        avg = sum(durations) / n
+        p50 = durations_sorted[n // 2]
+        p95 = durations_sorted[int(n * 0.95)] if n >= 20 else durations_sorted[-1]
+        duration_stats = {
+            "avg": round(avg, 1),
+            "max": round(max(durations), 1),
+            "min": round(min(durations), 1),
+            "p50": round(p50, 1),
+            "p95": round(p95, 1),
+        }
+    else:
+        duration_stats = {"avg": 0, "max": 0, "min": 0, "p50": 0, "p95": 0}
+
+    # 4. 每日耗时列表（按日期正序，供折线图）
+    daily_map = {}
+    for r in rows:
+        if r.started_at and r.duration_seconds is not None:
+            date_str = r.started_at.strftime("%Y-%m-%d")
+            daily_map.setdefault(date_str, []).append(r)
+    daily_duration = []
+    for date_str in sorted(daily_map.keys()):
+        recs = daily_map[date_str]
+        avg_dur = sum(r.duration_seconds for r in recs) / len(recs)
+        last = recs[0]  # 最近一条
+        daily_duration.append({
+            "date": date_str,
+            "duration": round(avg_dur, 1),
+            "path": last.sync_path or last.data_source or "unknown",
+            "status": last.status,
+        })
+
+    # 5. Top5 最耗时
+    by_duration = sorted(
+        [r for r in rows if r.duration_seconds is not None],
+        key=lambda x: x.duration_seconds, reverse=True
+    )[:5]
+    top5_slowest = [{
+        "id": r.id,
+        "started_at": r.started_at.strftime("%Y-%m-%d %H:%M") if r.started_at else None,
+        "duration": round(r.duration_seconds, 1),
+        "path": r.sync_path or r.data_source or "unknown",
+        "status": r.status,
+        "universe": r.universe,
+    } for r in by_duration]
+
+    # 6. 失败原因分类
+    failure_reasons = []
+    failed_rows = [r for r in rows if r.status == "failed" and r.error]
+    reason_map = {}
+    for r in failed_rows:
+        err = (r.error or "")[:200]
+        # 简单关键词分类
+        if "timeout" in err.lower() or "超时" in err:
+            reason = "超时"
+        elif "connection" in err.lower() or "连接" in err or "network" in err.lower():
+            reason = "网络/连接"
+        elif "login" in err.lower() or "auth" in err.lower() or "认证" in err:
+            reason = "认证失败"
+        elif "data" in err.lower() and "not" in err.lower():
+            reason = "数据缺失"
+        else:
+            reason = "其他"
+        reason_map[reason] = reason_map.get(reason, 0) + 1
+    failure_reasons = [{"reason": k, "count": v} for k, v in
+                        sorted(reason_map.items(), key=lambda x: x[1], reverse=True)]
+
+    # 7. 数据完整性趋势（stock_count/latest_date 按日期正序）
+    integrity_rows = [r for r in rows if r.stock_count is not None or r.latest_date]
+    integrity_rows.sort(key=lambda x: x.started_at or datetime.min)
+    # 去重：同一日期只保留最后一条
+    seen_dates = set()
+    integrity_trend = []
+    for r in reversed(integrity_rows):  # 逆序，保留每天最新
+        date_str = r.started_at.strftime("%Y-%m-%d") if r.started_at else None
+        if date_str and date_str not in seen_dates:
+            seen_dates.add(date_str)
+            integrity_trend.append({
+                "date": date_str,
+                "stock_count": r.stock_count,
+                "latest_date": r.latest_date,
+                "row_count": r.row_count,
+            })
+    integrity_trend.reverse()  # 恢复正序
+
+    return ApiResponse(ok=True, data={
+        "path_distribution": path_dist,
+        "success_rate": {**status_counts, "total": total, "rate": round(rate, 4)},
+        "duration_stats": duration_stats,
+        "daily_duration": daily_duration,
+        "top5_slowest": top5_slowest,
+        "failure_reasons": failure_reasons,
+        "integrity_trend": integrity_trend,
+        "failed_records": [{
+            "id": r.id,
+            "started_at": r.started_at.strftime("%Y-%m-%d %H:%M") if r.started_at else None,
+            "error": (r.error or "")[:500],
+            "path": r.sync_path or r.data_source or "unknown",
+            "universe": r.universe,
+        } for r in failed_rows[:20]],  # 最近20条失败记录
+    })
 
 
 @router.post("/eod-sync")
@@ -358,14 +466,3 @@ async def sync_industry_api():
         "message": "行业同步暂未开放，后期规划",
         "status": 503,
     })
-
-
-@router.get("/sync-path-prediction")
-async def sync_path_prediction_api():
-    """预判智能同步路径（基于 latest_date 距今天数，不执行同步）
-
-    供前端展示预计走哪条路径（chenditc全量/baostock增量/同步当日）。
-    """
-    from app.services.data.smart_sync import predict_sync_path
-    prediction = predict_sync_path()
-    return ApiResponse(ok=True, data=prediction)

@@ -1,11 +1,10 @@
 """量化数据管理 API：股票数据同步到 qlib bin、数据新鲜度、qlib 可用性。
 
-数据源优先级由 config.quant.data_source 决定（默认 baostock）：
-  - chenditc：下载 chenditc/investment_data 预构建 qlib_bin.tar.gz（全量历史, 每日更新）
-  - baostock：一次拉取全市场某日K线（增量主源, 含ST标记+估值字段, 不限频）
-  - akshare ：逐只爬取 AKShare 行情后转储 qlib bin（仅个股/指数兜底, 易被反爬）
+数据源固定 baostock（全量回填 + 增量补缺）：
+  - 全量回填：POST /quant/data/sync?years=N，从最新交易日向旧逐日拉全市场，
+    写 qlib bin + PG stock_daily 全字段（手动触发，无自动同步）。
 """
-from app.services.data.smart_sync import run_smart_sync_task as _run_sync_task
+from app.services.data.baostock_backfill import run_baostock_backfill_task as _run_sync_task
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
@@ -13,7 +12,6 @@ from sqlalchemy import select, func
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.errors import AppError
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.common import ApiResponse
 from app.schemas.quant import SyncDataRequest
@@ -117,21 +115,13 @@ async def sync_data_api(
     background_tasks: BackgroundTasks,
     db=Depends(get_db),
 ):
-    """触发股票数据同步到 qlib bin（后台执行）。
+    """触发 baostock 全量回填同步（后台执行，手动触发）。
 
-    数据源由 config.quant.data_source 决定（默认 baostock，可选 chenditc/akshare）。
+    years 指定回填年数（从最新向旧）；不传默认 config.quant.backfill_years（默认5）。
     """
-    from app.services.quant.qlib_init import is_qlib_available
-    if not await is_qlib_available():
-        raise AppError(
-            "QLIB_NOT_AVAILABLE",
-            "qlib 未安装，无法同步数据。请在 Python 3.11 环境安装 pyqlib 后重试",
-            503,
-        )
-
     universe = req.universe or settings.quant.get("universe", "csi300")
-    # 智能同步：路径由 latest_date 距今天数自动判断（chenditc全量/baostock增量/同步当日）
-    data_source = "smart_sync"
+    years = req.years or int(settings.quant.get("backfill_years", 5))
+    data_source = "baostock"
     # 若正在同步则拒绝（带超时检测：超过10分钟视为卡死，允许重新同步）
     existing = await db.execute(
         select(StockDataStatus).where(StockDataStatus.universe == universe)
@@ -160,11 +150,10 @@ async def sync_data_api(
 
     background_tasks.add_task(_run_sync_task, req)
     return ApiResponse(ok=True, data={
-        "message": f"已触发 universe={universe} 数据同步（后台执行，数据源={data_source}）",
+        "message": f"已触发 universe={universe} 数据同步（baostock 回填 {years} 年，后台执行）",
         "universe": universe,
         "data_source": data_source,
-        "start_date": req.start_date or settings.quant.get("default_backtest_period", {}).get("start"),
-        "end_date": req.end_date,
+        "years": years,
     })
 
 

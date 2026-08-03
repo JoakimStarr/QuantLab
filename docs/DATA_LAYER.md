@@ -529,10 +529,10 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 |----|----|------|
 | 应用时区 | `Asia/Shanghai` | `config.app.timezone` |
 | 调度器时区 | `Asia/Shanghai` | `scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")` |
-| 容器时区 | `TZ=Asia/Shanghai` | `docker-compose.yml` environment |
+| 系统时区 | 本地系统时区 | 建议设为 `Asia/Shanghai`（本地部署） |
 | 定时同步 | 工作日 18:00 | `register_scheduled_jobs`（mon-fri 18:00） |
 
-> ⚠️ 容器部署务必设置 `TZ=Asia/Shanghai`，否则 APScheduler 按容器默认 UTC 触发，同步时间会偏移 8 小时。
+> ⚠️ 本地部署时请确保系统时区为 `Asia/Shanghai`，否则 APScheduler 可能按 UTC 触发，同步时间会偏移 8 小时。
 
 ### 8.2 关键路径
 
@@ -546,12 +546,12 @@ akshare 调用 → 失败/空 → mootdx → 失败 → tushare 免费额度 →
 | 日志 | `logs/` | `config.logging.dir` |
 | 行业映射 | `data/industry_map.json` | `industry_sync.sync_industry_data` |
 
-> 路径解析：`Settings.PROJECT_ROOT` 由环境变量 `PROJECT_ROOT` 决定（Docker 设为 `/app`），否则回退到代码所在目录上四级。所有相对路径基于 `PROJECT_ROOT` 拼接。
+> 路径解析：`Settings.PROJECT_ROOT` 由环境变量 `PROJECT_ROOT` 决定，未设置时回退到代码所在目录上四级。所有相对路径基于 `PROJECT_ROOT` 拼接。
 
 ### 8.3 权限要求
 
 - `data/`、`models/`、`logs/` 目录必须对运行用户**可写**（同步 bin、训练 AutoML、写日志）
-- `config.yaml` 在 Docker 中以 `:ro` 只读挂载，但 `PUT /quant/data/data-source` 会尝试回写——若只读挂载该接口会 500，需挂载为可写或避免调用
+- `config.yaml` 本地部署默认可读写；注意 `PUT /quant/data/data-source` 接口已 deprecated，前端已移除数据源下拉框，避免调用该接口
 - QLib bin 目录替换（chenditc 全量同步）需原子 rename 权限，建议与暂存目录同文件系统
 
 ### 8.4 WSL 路径注意

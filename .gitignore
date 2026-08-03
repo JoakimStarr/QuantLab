@@ -42,6 +42,8 @@ data/qlib_bin/
 data/raw/
 data/processed/
 data/models/
+# 数据备份（可重新生成，避免提交大文件）
+data/backup/
 
 # Python 缓存
 __pycache__/

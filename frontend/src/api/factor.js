@@ -51,3 +51,15 @@ export function decayCheck() {
 export function neutralizeFactor(id, params) {
   return request.post('/factors/' + id + '/neutralize', null, { params })
 }
+
+// AI 因子解释：为因子生成金融逻辑描述并写回 description
+export function aiExplainFactor(factorId) {
+  return request.post('/factors/' + factorId + '/ai-explain')
+}
+
+// 批量 AI 因子解释
+export function aiExplainFactorsBatch(factorIds) {
+  return request.post('/factors/ai-explain-batch', null, {
+    params: { factor_ids: factorIds },
+  })
+}

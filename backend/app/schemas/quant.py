@@ -9,6 +9,7 @@ class SyncDataRequest(BaseModel):
     codes: Optional[list[str]] = None  # 默认 config.universe
     universe: Optional[str] = None     # 覆盖 config.universe
     days: Optional[int] = None         # akshare增量同步天数（默认30）
+    years: Optional[int] = None        # baostock 全量回填年数（从最新向旧）
 
 
 class QlibStatusResponse(BaseModel):

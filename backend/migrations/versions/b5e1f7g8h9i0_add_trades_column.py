@@ -5,6 +5,7 @@ Revises: d4e5f6g7h8i9
 Create Date: 2026-08-02
 """
 from alembic import op
+import sqlalchemy as sa
 
 # revision identifiers
 revision = "b5e6f7g8h9i0"
@@ -13,33 +14,23 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
+def _column_exists(table: str, column: str) -> bool:
+    """用 inspector 检查列是否存在（与其它迁移一致，兼容 create_all 已建列的新库）。"""
     bind = op.get_bind()
-    dialect = bind.dialect.name
-    exists = False
-    try:
-        if dialect == "postgresql":
-            res = bind.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='backtest_result' AND column_name='trades'"
-            )
-            exists = res.fetchone() is not None
-        else:
-            res = bind.execute("PRAGMA table_info(backtest_result)")
-            exists = any(row[1] == "trades" for row in res.fetchall())
-    except Exception:
-        exists = False
-    if not exists:
-        op.execute("ALTER TABLE backtest_result ADD COLUMN trades TEXT")
+    inspector = sa.inspect(bind)
+    if table not in inspector.get_table_names():
+        return False
+    return column in {c["name"] for c in inspector.get_columns(table)}
+
+
+def upgrade() -> None:
+    if not _column_exists("backtest_result", "trades"):
+        op.add_column(
+            "backtest_result",
+            sa.Column("trades", sa.Text(), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    dialect = bind.dialect
-    try:
-        if dialect == "postgresql":
-            op.execute("ALTER TABLE backtest_result DROP COLUMN trades")
-        else:
-            op.execute("ALTER TABLE backtest_result DROP COLUMN trades")
-    except Exception:
-        pass
+    if _column_exists("backtest_result", "trades"):
+        op.drop_column("backtest_result", "trades")

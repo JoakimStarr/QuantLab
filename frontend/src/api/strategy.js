@@ -49,3 +49,20 @@ export function runWalkForward(id, params) {
 export function getWalkForwardResults(id) {
   return request.get('/strategies/' + id + '/walk-forward-results')
 }
+
+// === AI 策略能力 ===
+
+// AI 生成策略：参考因子库评价自动推荐因子组合与参数
+export function aiGenerateStrategy(params) {
+  return request.post('/strategies/ai/generate', null, { params })
+}
+
+// AI 参数建议：基于因子组合（+历史回测）推荐参数范围
+export function aiSuggestParams(strategyId) {
+  return request.post('/strategies/' + strategyId + '/ai/params')
+}
+
+// AI 策略复盘：解读回测结果生成文字报告
+export function aiReviewBacktest(strategyId, resultId) {
+  return request.post('/strategies/' + strategyId + '/ai/review', null, { params: { result_id: resultId } })
+}

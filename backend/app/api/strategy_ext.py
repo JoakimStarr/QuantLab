@@ -359,3 +359,56 @@ async def walk_forward_results_api(strategy_id: int):
         "result": json.loads(tr.payload) if tr.payload else None,
         "error": tr.error,
     })
+
+
+@router.post("/ai/generate")
+async def ai_generate_strategy_api(
+    universe: str = Query(None, description="股票池"),
+    start: str = Query(None, description="回测起始日期"),
+    end: str = Query(None, description="回测结束日期"),
+    factor_ids: list[int] = Query(None, description="偏好因子 ID 子集"),
+):
+    """AI 生成策略：参考因子库评价自动推荐因子组合与参数，创建策略。"""
+    from app.services.strategy.ai_strategy import generate_strategy_with_ai
+    try:
+        result = await generate_strategy_with_ai(
+            universe=universe, start=start, end=end,
+            prefer_factor_ids=factor_ids,
+        )
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+    except Exception as e:
+        logger.exception("AI 生成策略失败")
+        raise AppError("AI_STRATEGY_ERROR", f"AI 生成策略失败: {e}", 500)
+
+
+@router.post("/{strategy_id}/ai/params")
+async def ai_suggest_params_api(strategy_id: int):
+    """AI 参数建议：基于因子组合（+历史回测）推荐参数范围。"""
+    from app.services.strategy.ai_strategy import suggest_params_with_ai
+    try:
+        result = await suggest_params_with_ai(strategy_id)
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+    except Exception as e:
+        logger.exception("AI 参数建议失败")
+        raise AppError("AI_STRATEGY_ERROR", f"AI 参数建议失败: {e}", 500)
+
+
+@router.post("/{strategy_id}/ai/review")
+async def ai_review_backtest_api(
+    strategy_id: int,
+    result_id: int = Query(None, description="指定回测结果 ID（默认最新）"),
+):
+    """AI 策略复盘：解读回测结果生成文字报告。"""
+    from app.services.strategy.ai_strategy import review_backtest_with_ai
+    try:
+        result = await review_backtest_with_ai(strategy_id, result_id=result_id)
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+    except Exception as e:
+        logger.exception("AI 策略复盘失败")
+        raise AppError("AI_STRATEGY_ERROR", f"AI 策略复盘失败: {e}", 500)

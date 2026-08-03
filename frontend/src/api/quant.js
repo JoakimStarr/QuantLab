@@ -10,14 +10,9 @@ const blobRequest = axios.create({
 
 // === 量化数据同步与状态 ===
 
-// 智能同步（自动判断 chenditc全量/baostock增量/同步当日）
+// baostock 全量回填同步（years: 回填年数，从最新向旧）
 export function syncQuantData(params) {
   return request.post('/quant/data/sync', params)
-}
-
-// 预判智能同步路径（不执行同步，供前端展示）
-export function getSyncPathPrediction() {
-  return request.get('/quant/data/sync-path-prediction')
 }
 
 export function getQuantDataStatus() {
@@ -48,19 +43,9 @@ export function getSyncHistory(limit) {
   return request.get('/quant/data/sync-history', { params: { limit } })
 }
 
-// 切换数据源
-export function switchDataSource(source) {
-  return request.put('/quant/data/data-source', null, { params: { source } })
-}
-
-// 获取当前数据源
-export function getDataSource() {
-  return request.get('/quant/data/data-source')
-}
-
-// 增量同步
-export function incrementalSync() {
-  return request.post('/quant/data/incremental-sync', null, { params: {} })
+// 同步统计聚合（成功率/耗时/失败原因等，供数据管理页监控面板）
+export function getSyncStats(days = 30, universe) {
+  return request.get('/quant/data/sync-stats', { params: { days, universe } })
 }
 
 // 增量EOD同步（基于akshare国内源，拉取最近N天）

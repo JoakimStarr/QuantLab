@@ -39,10 +39,6 @@ data:
   models_dir: models
   processed_dir: data/processed
   raw_dir: data/raw
-redis:
-  url: "redis://localhost:6379/0"
-  enabled: false
-
 logging:
   dir: logs
   handlers:
@@ -111,7 +107,8 @@ quant:
   benchmark: SH000300
   cost_buy: 0.0013
   cost_sell: 0.0023
-  data_source: chenditc
+  data_source: baostock
+  backfill_years: 5
   default_backtest_period:
     end: '2024-12-31'
     start: '2020-01-01'
@@ -127,9 +124,6 @@ quant:
     risk_aversion: 0.5
   qlib_provider_uri: data/qlib_bin/cn_data
   slippage_bps: 5
-  smart_sync:
-    full_sync_threshold_days: 7
-    include_intraday: true
   sync_indices:
   - sh000001
   - sh000300
