@@ -610,12 +610,15 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
     roll_windows = settings.mining.get("llm", {}).get("roll_windows", [60, 120])
     # 行业中性化：默认开启（消除行业暴露假 IC）
     ind_neutralize = settings.mining.get("llm", {}).get("industry_neutralize", True)
+    # 子样本稳健性：默认开启（时间半区 + 市值分组 IC）
+    robustness = settings.mining.get("llm", {}).get("robustness", True)
     from app.core.executor import run_cpu
     return await asyncio.wait_for(
         run_cpu(evaluate_factor_with_validation, expr, start, end,
                 horizon=horizon, existing_ic_series=existing_ic_series,
                 baseline_exprs=baseline_exprs, roll_windows=roll_windows,
-                industry_neutralize_enabled=ind_neutralize),
+                industry_neutralize_enabled=ind_neutralize,
+                robustness_enabled=robustness),
         timeout=timeout,
     )
 

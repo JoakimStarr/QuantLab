@@ -441,6 +441,7 @@ def evaluate_factor_with_validation(
     baseline_exprs: list = None,
     roll_windows: list = None,
     industry_neutralize_enabled: bool = False,
+    robustness_enabled: bool = False,
 ) -> dict:
     """完整因子多维验证。
 
@@ -697,7 +698,72 @@ def evaluate_factor_with_validation(
         except Exception as e:
             logger.debug("正交 IC 计算失败: %s", e)
 
+    # 子样本稳健性：时间半区 + 市值分组 IC
+    if robustness_enabled:
+        try:
+            from app.services.quant.factor_eval import load_factor_values
+            amount_df = load_factor_values("$amount", start, end, universe)
+            result["robustness"] = compute_robustness(
+                factor_df, label_df, amount_df=amount_df
+            )
+        except Exception as e:
+            logger.debug("子样本稳健性计算失败: %s", e)
+
     # 写入缓存
     _ic_cache_put(cache_key, result)
 
     return result
+
+
+def compute_robustness(
+    factor_df: pd.DataFrame,
+    label_df: pd.DataFrame,
+    factor_col: str = "factor",
+    label_col: str = "label",
+    amount_df: pd.DataFrame = None,
+) -> dict:
+    """子样本稳健性：按时间半区 + 市值分组计算 IC。
+
+    Args:
+        factor_df / label_df: MultiIndex(datetime, instrument)
+        amount_df: 可选，含 '$amount' 列，用于市值分组
+
+    Returns:
+        {"time": {"first_half": ic, "second_half": ic},
+         "mktcap": {"large": ic, "mid": ic, "small": ic}}
+    """
+    out = {"time": {}, "mktcap": {}}
+    if factor_df.empty or label_df.empty:
+        return out
+
+    wide = factor_df[[factor_col]].join(label_df[[label_col]], how="inner").dropna()
+    if wide.empty:
+        return out
+
+    # 1. 时间半区
+    dates = sorted(wide.index.get_level_values("datetime").unique())
+    if len(dates) >= 2:
+        mid = dates[len(dates) // 2]
+        for name, mask in [("first_half", wide.index.get_level_values("datetime") <= mid),
+                           ("second_half", wide.index.get_level_values("datetime") > mid)]:
+            sub = wide[mask]
+            if len(sub) >= 10:
+                ic = float(sub[factor_col].corr(sub[label_col]))
+                out["time"][name] = round(ic, 4) if not np.isnan(ic) else None
+
+    # 2. 市值分组（用 $amount 当日成交额代理）
+    if amount_df is not None and not amount_df.empty:
+        try:
+            mkt = amount_df["$amount"].groupby(level="datetime").transform(lambda s: s.rank(pct=True))
+            wide2 = wide.copy()
+            wide2["mkt_rank"] = mkt
+            wide2 = wide2.dropna()
+            for name, lo, hi in [("small", 0, 0.34), ("mid", 0.34, 0.67), ("large", 0.67, 1.0)]:
+                sub = wide2[(wide2["mkt_rank"] > lo) & (wide2["mkt_rank"] <= hi)]
+                if len(sub) >= 10:
+                    ic = float(sub[factor_col].corr(sub[label_col]))
+                    out["mktcap"][name] = round(ic, 4) if not np.isnan(ic) else None
+        except Exception:
+            pass
+
+    return out
