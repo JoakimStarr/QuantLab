@@ -219,7 +219,15 @@ async def _insert_stock_daily(rows: list) -> None:
 
 
 async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
-    """入库 stock_basic / stock_industry / trade_calendar（幂等）。"""
+    """入库 stock_basic / stock_industry / trade_calendar（幂等，分批防 asyncpg 参数上限）。"""
+    # asyncpg 单条 SQL 最多 32767 参数；全市场 ~5200 股一次插入会超限，
+    # 分批每批 800 行（6 字段 × 800 = 4800 参数）。
+    BATCH = 800
+
+    def _chunk(rows: list):
+        for i in range(0, len(rows), BATCH):
+            yield rows[i:i + BATCH]
+
     async with async_session() as session:
         if df_basic is not None and not df_basic.empty:
             rows = []
@@ -232,8 +240,8 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
                     "type": str(r["type"]) if pd.notna(r["type"]) else None,
                     "status": str(r["status"]) if pd.notna(r["status"]) else None,
                 })
-            if rows:
-                stmt = pg_insert(StockBasic.__table__).values(rows)
+            for chunk in _chunk(rows):
+                stmt = pg_insert(StockBasic.__table__).values(chunk)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
                 await session.execute(stmt)
 
@@ -247,16 +255,17 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
                     "industry_classification": str(r["industryClassification"]) if pd.notna(r["industryClassification"]) else None,
                     "update_date": _parse_date(r.get("updateDate")),
                 })
-            if rows:
-                stmt = pg_insert(StockIndustry.__table__).values(rows)
+            for chunk in _chunk(rows):
+                stmt = pg_insert(StockIndustry.__table__).values(chunk)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
                 await session.execute(stmt)
 
         if trade_dates:
             rows = [{"trade_date": date.fromisoformat(d), "is_trading_day": True} for d in trade_dates]
-            stmt = pg_insert(TradeCalendar.__table__).values(rows)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["trade_date"])
-            await session.execute(stmt)
+            for chunk in _chunk(rows):
+                stmt = pg_insert(TradeCalendar.__table__).values(chunk)
+                stmt = stmt.on_conflict_do_nothing(index_elements=["trade_date"])
+                await session.execute(stmt)
         await session.commit()
 
 
@@ -300,9 +309,13 @@ def _build_instruments(qlib_dir: str, code_range: dict, calendar: list,
     _write_instrument_file(qlib_dir, "all", all_entries)
     _write_instrument_file(qlib_dir, "csiall", all_entries)
     if hs300:
-        _write_instrument_file(qlib_dir, "csi300", [(c.upper(), cal_start, cal_end) for c in hs300])
+        # hs300/zz500 来自 baostock query_hs300_stocks，code 为 baostock 格式（sh.600000），
+        # 需转 qlib 格式（sh600000）再大写
+        entries = [(from_baostock_code(c).upper(), cal_start, cal_end) for c in hs300]
+        _write_instrument_file(qlib_dir, "csi300", entries)
     if zz500:
-        _write_instrument_file(qlib_dir, "csi500", [(c.upper(), cal_start, cal_end) for c in zz500])
+        entries = [(from_baostock_code(c).upper(), cal_start, cal_end) for c in zz500]
+        _write_instrument_file(qlib_dir, "csi500", entries)
 
 
 async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
