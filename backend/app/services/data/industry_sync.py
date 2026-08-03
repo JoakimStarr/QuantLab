@@ -80,3 +80,19 @@ def load_industry_map() -> dict:
         return {}
     with open(INDUSTRY_MAP_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+async def load_industry_map_async() -> dict:
+    """从 PG stock_industry 加载行业映射（优先），JSON 文件兜底。"""
+    try:
+        from sqlalchemy import select
+        from app.core.database import async_session
+        from app.models.baostock import StockIndustry
+        async with async_session() as session:
+            result = await session.execute(select(StockIndustry.code, StockIndustry.industry))
+            rows = result.all()
+            if rows:
+                return {code: ind for code, ind in rows if ind}
+    except Exception as e:
+        logger.warning("PG 行业映射加载失败，回退 JSON: %s", e)
+    return load_industry_map()

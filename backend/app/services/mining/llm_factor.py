@@ -264,6 +264,15 @@ def _build_generation_prompt(template: dict, n_candidates: int) -> str:
     allowed_ops = template.get("allowed_ops") or mining_cfg.get("allowed_ops", [])
     fields = template.get("base_features") or _AVAILABLE_FIELDS
     base_prompt = template.get("prompt") or template.get("llm_prompt") or _USER_PROMPT_TEMPLATE
+    # 候选池参考（若有）：给 LLM 提供可参考的表达式，提高命中率
+    candidate_hint = ""
+    try:
+        from app.services.mining.candidate_pool import format_candidates_for_prompt, get_candidates_for_template
+        cands = get_candidates_for_template(template, n=6)
+        if cands:
+            candidate_hint = format_candidates_for_prompt(cands) + "\n"
+    except Exception:
+        candidate_hint = ""
     # 若模板自带 prompt，则在其后追加数量/约束说明
     if template.get("prompt") or template.get("llm_prompt"):
         return (
@@ -271,6 +280,7 @@ def _build_generation_prompt(template: dict, n_candidates: int) -> str:
             + f"\n\n请生成 {n_candidates} 个 qlib 因子表达式。\n"
             + f"【可用算子】{', '.join(allowed_ops)}\n"
             + f"【可用字段】{', '.join(fields)}\n"
+            + (candidate_hint or "")
             + "【多样性要求】生成的因子应尽量覆盖不同风格："
             + "动量趋势、均值反转、波动率、量价关系、估值（$pe_ttm/$pb_mrq/$ps_ttm/$pcf_ncf_ttm 可用）、"
             + "换手（$turn 可用）。避免全部因子都是同一类型的变体。\n"
@@ -281,7 +291,12 @@ def _build_generation_prompt(template: dict, n_candidates: int) -> str:
 
 def _build_feedback_prompt(template: dict, n_candidates: int,
                            prev_expressions: list, prev_round: dict) -> str:
-    """构建反馈 prompt：把上一轮结果反馈给 LLM 以引导改进。"""
+    """构建反馈 prompt：把上一轮结果反馈给 LLM 以引导改进。
+
+    增强：
+    - 展示上一轮被沙箱拒绝的表达式及原因，避免 LLM 重犯
+    - 若上一轮全部未达标，明确要求改变策略（避免围绕高IC因子出变体）
+    """
     feedback_lines = ["上一轮生成的因子及评价结果："]
     for r in prev_round.get("results", [])[:5]:
         feedback_lines.append(
@@ -289,6 +304,23 @@ def _build_feedback_prompt(template: dict, n_candidates: int,
             f"  IC: {r.get('ic', 0):.4f}, RankIC: {r.get('rank_ic', 0) or 0:.4f}"
         )
     feedback_lines.append(f"\n上一轮最佳IC: {prev_round.get('best_ic', 0):.4f}")
+
+    # 展示被拒表达式（强反馈：避免重犯）
+    rejected = prev_round.get("rejected", [])
+    if rejected:
+        feedback_lines.append("\n上一轮被拒绝的表达式（请避免类似结构）：")
+        for rej in rejected[:5]:
+            feedback_lines.append(
+                f"  表达式: {rej.get('expression', '')} 原因: {rej.get('reason', '')}"
+            )
+
+    # 全不达标时强反馈
+    if prev_round.get("best_ic", 0) < 0.03:
+        feedback_lines.append(
+            "\n⚠️ 上一轮所有因子 IC 均未达标。请彻底改变策略："
+            "更换算子组合、更换字段、改变窗口长度，不要重复上一轮的结构。"
+        )
+
     feedback_lines.append("\n请基于以上反馈，生成新的因子表达式。")
     feedback_lines.append("要求：")
     feedback_lines.append("1. 尝试不同的算子组合或参数")
@@ -389,20 +421,25 @@ async def iterative_mine_factors(
 
             # 沙箱校验 + 去重
             valid_exprs = []
+            rejected = []
             for c in candidates:
                 expr = (c.get("expression") or "").strip()
                 name = (c.get("name") or "").strip()
                 if not expr or not name:
+                    rejected.append({"expression": expr, "reason": "表达式或名称为空"})
                     continue
                 try:
                     validate_expression(expr)
                 except ExpressionValidationError as e:
                     logger.info("迭代因子 %s 沙箱拒绝: %s", name, e)
+                    rejected.append({"expression": expr, "reason": f"沙箱拒绝: {e}"})
                     continue
                 known = [e for e in prev_expressions]
                 known += [v["expression"] for v in valid_exprs]
                 known += [b["expression"] for b in all_best]
-                if _is_duplicate(expr, known):
+                dup = _is_duplicate(expr, known)
+                if dup:
+                    rejected.append({"expression": expr, "reason": dup})
                     continue
                 valid_exprs.append({"name": name, "expression": expr, "description": c.get("description", "")})
 
@@ -496,6 +533,7 @@ async def iterative_mine_factors(
                 "evaluated": len(round_results),
                 "best_ic": best_ic,
                 "results": round_results,
+                "rejected": rejected,
             })
             improvement_curve.append(best_ic)
 
@@ -568,11 +606,16 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
     end = period.get("end", "2024-12-31")
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
     timeout = settings.mining.get("llm", {}).get("eval_timeout_seconds", 120)
+    # 滚动窗口重验：默认 60/120 天窗口，验证 IC 稳健性
+    roll_windows = settings.mining.get("llm", {}).get("roll_windows", [60, 120])
+    # 行业中性化：默认开启（消除行业暴露假 IC）
+    ind_neutralize = settings.mining.get("llm", {}).get("industry_neutralize", True)
     from app.core.executor import run_cpu
     return await asyncio.wait_for(
         run_cpu(evaluate_factor_with_validation, expr, start, end,
                 horizon=horizon, existing_ic_series=existing_ic_series,
-                baseline_exprs=baseline_exprs),
+                baseline_exprs=baseline_exprs, roll_windows=roll_windows,
+                industry_neutralize_enabled=ind_neutralize),
         timeout=timeout,
     )
 

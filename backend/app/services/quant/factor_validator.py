@@ -439,6 +439,8 @@ def evaluate_factor_with_validation(
     existing_ic_series: list[pd.Series] = None,
     diversity_threshold: float = 0.8,
     baseline_exprs: list = None,
+    roll_windows: list = None,
+    industry_neutralize_enabled: bool = False,
 ) -> dict:
     """完整因子多维验证。
 
@@ -512,6 +514,18 @@ def evaluate_factor_with_validation(
     actual_dates = sorted(factor_df.index.get_level_values("datetime").unique())
     splits = SampleSplitter().split_by_dates(actual_dates)
 
+    # 行业中性化（可选）：消除行业暴露造成的假 IC
+    if industry_neutralize_enabled:
+        try:
+            from app.services.factor.neutralize import industry_neutralize
+            from app.services.data.industry_sync import load_industry_map
+            ind_map = load_industry_map()
+            if ind_map:
+                factor_df = industry_neutralize(factor_df, industry_map=ind_map)
+                logger.info("因子 %s 已做行业中性化", factor_expr)
+        except Exception as e:
+            logger.debug("行业中性化失败，跳过: %s", e)
+
     # 加载基准因子值（正交后挖掘用）：候选因子对基准残差化
     baseline_factor_dfs = None
     if baseline_exprs:
@@ -555,6 +569,30 @@ def evaluate_factor_with_validation(
 
     # 6. 滚动 IC 统计
     rolling_eval = RollingICEvaluator.evaluate(valid_ic)
+
+    # 6.5 滚动窗口重验：把全样本按窗口滑动的多个子段 IC，取中位数作为稳健性
+    roll_ics = []
+    if roll_windows:
+        all_dates = sorted(factor_df.index.get_level_values("datetime").unique())
+        for win in roll_windows:
+            if len(all_dates) < win * 2:
+                continue
+            for i in range(0, len(all_dates) - win + 1, max(1, win // 2)):
+                sub_dates = all_dates[i:i + win]
+                if len(sub_dates) < max(10, win // 2):
+                    continue
+                try:
+                    sub_start = str(sub_dates[0].date())
+                    sub_end = str(sub_dates[-1].date())
+                    sub_ic = compute_daily_ic_series(
+                        factor_expr, sub_start, sub_end, universe, horizon,
+                        factor_df=factor_df, label_df=label_df,
+                    )
+                    if len(sub_ic) > 0:
+                        roll_ics.append(float(sub_ic.mean()))
+                except Exception:
+                    continue
+    roll_ic_median = float(np.median(roll_ics)) if roll_ics else None
 
     # 7. 统计显著性（Newey-West 校正，lags=horizon 对齐标签重叠周期）
     significance = StatisticalSignificance.test(valid_ic, alpha=significance_alpha, lags=horizon)
@@ -621,6 +659,8 @@ def evaluate_factor_with_validation(
 
         # 滚动统计
         "rolling_stats": rolling_eval,
+        "roll_ic_median": round(roll_ic_median, 4) if roll_ic_median is not None else None,
+        "roll_ic_windows": len(roll_ics),
 
         # 显著性
         "significance": significance,
