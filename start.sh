@@ -130,7 +130,7 @@ if [ "$MODE" = "dev" ]; then
         exit 1
     fi
     # 关键第三方库检查（避免运行时才发现缺失）
-    if ! "$PYTHON_BIN" -c "import fastapi_users_db_sqlalchemy, empyrical, alphalens, skfolio, tenacity, structlog, prometheus_fastapi_instrumentator, cachetools, zxcvbn" >/dev/null 2>&1; then
+    if ! "$PYTHON_BIN" -c "import fastapi_users_db_sqlalchemy, empyrical, alphalens, tenacity, structlog, prometheus_fastapi_instrumentator, cachetools, zxcvbn" >/dev/null 2>&1; then
         red "后端依赖缺失，请先安装:"
         echo "  $PYTHON_BIN -m pip install -r requirements.txt"
         exit 1
