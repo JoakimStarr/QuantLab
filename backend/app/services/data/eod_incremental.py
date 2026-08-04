@@ -681,31 +681,32 @@ async def _incremental_sync_eod_akshare(
 
 
 def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
-                    old_calendar: list, fields, overwrite: bool = False):
-    """将单只股票的 akshare 数据同步到 bin 文件
+                    global_calendar: list, fields, overwrite: bool = False):
+    """将单只股票数据同步到 bin 文件（统一日历契约）。
 
-    策略：
-      1. 将 df 的日期与 old_calendar 合并，得到 merged_calendar
-      2. 对每个字段，读取旧 bin，按日期映射重建数组
-      3. 当 overwrite=True 时用新数据覆盖所有匹配日期；否则仅写入日历中
-         不存在的新日期（避免不同复权方式导致价格序列断裂）
-      4. 写回 bin 文件
+    设计：
+      - bin 文件 = 4 字节 start_index 头 + float32 数组，start_index 恒为 0
+      - 数据数组始终与全局日历对齐：arr[i] 对应 global_calendar[i]
+      - 旧 bin 仅在数据范围落在当前全局日历内时（old_start + len <= 日历长度）
+        按日期映射保留；否则视为日历变更导致的错位数据，丢弃重建，
+        避免"首尾重复/数据错位"类损坏累积。
+      - overwrite=True 用新数据覆盖所有匹配日期；False 仅写入日历中不存在的新日期。
 
     注意：merged_calendar 仅用于确定新日期的索引位置。全局日历合并
     由调用方在所有股票处理完成后统一执行。
     """
-    if not old_calendar:
+    if not global_calendar:
         # 日历为空，无法定位索引（极端情况）
         return
 
-    cal_set = set(old_calendar)
+    cal_set = set(global_calendar)
 
     # 分离已有日期和新日期
     df_dates = df["date"].tolist()
     new_dates_in_df = sorted([d for d in df_dates if d not in cal_set])
 
     # 合并后的日历（仅用于确定新日期的索引）
-    merged_cal = _merge_calendar(old_calendar, new_dates_in_df)
+    merged_cal = _merge_calendar(global_calendar, new_dates_in_df)
     merged_idx = {d: i for i, d in enumerate(merged_cal)}
 
     # 筛选需要写入的日期：overwrite=True 时全部写入，否则仅写入新日期
@@ -729,17 +730,20 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
         # 准备新数据
         new_values = df[field].values.astype(np.float32)
 
-        if old_values is None or len(old_values) == 0:
-            # 无旧数据：创建新数组，仅填充需要写入的日期
-            arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
-            for d, row_i in write_pairs:
-                if d in merged_idx:
-                    arr[merged_idx[d]] = new_values[row_i]
-            _write_bin(bin_path, arr, 0)
-        else:
-            # 有旧数据：按日期映射重建
+        # ---- 旧 bin 对齐校验 ----
+        # 旧 bin 数据范围（[old_start, old_start + len)）必须落在当前合并日历内，
+        # 否则说明旧 bin 是对齐到另一份日历写入的（日历被覆盖/缩短过），
+        # 无法安全映射 → 丢弃旧数据，仅用新数据重建。
+        old_aligned = (
+            old_values is not None
+            and len(old_values) > 0
+            and old_start >= 0
+            and old_start + len(old_values) <= len(merged_cal)
+        )
+        if old_aligned:
+            # 按日期映射重建数组
             mapping = _build_index_mapping(
-                old_calendar, old_start, len(old_values), merged_cal,
+                global_calendar, old_start, len(old_values), merged_cal,
             )
             arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
             # 散布旧数据（保留已有值）
@@ -748,17 +752,16 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
                 arr[mapping[valid]] = old_values[valid]
 
             # ===== 复权基准对齐 =====
-            # chenditc 历史数据首值归一化为 1.0，akshare 新数据是实际前复权价格，
-            # 两者直接拼接会导致价格跳变。通过旧数据最后一个有效值与 akshare 同日值
-            # 计算复权比例，将 akshare 新数据乘以比例后再写入。
+            # 历史数据与增量数据价格口径不一致时，通过旧数据最后一个有效值与
+            # 新数据同日值计算复权比例，将新数据乘以比例后再写入，避免价格跳变。
             if field in PRICE_FIELDS and not overwrite:
                 old_valid_indices = np.where(~np.isnan(old_values))[0]
                 if len(old_valid_indices) > 0:
                     old_last_idx = old_valid_indices[-1]
                     old_last_value = float(old_values[old_last_idx])
                     cal_pos = old_start + old_last_idx
-                    if 0 <= cal_pos < len(old_calendar):
-                        old_last_date = old_calendar[cal_pos]
+                    if 0 <= cal_pos < len(global_calendar):
+                        old_last_date = global_calendar[cal_pos]
                         if old_last_date in df_dates:
                             matching_idx = df_dates.index(old_last_date)
                             akshare_value = float(new_values[matching_idx])
@@ -772,9 +775,20 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
                                     os.path.basename(feat_dir), field, ratio,
                                     old_last_value, akshare_value, old_last_date,
                                 )
+        else:
+            # 旧 bin 与当前日历不对齐：丢弃重建（并记录，便于排查）
+            arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
+            if old_values is not None and len(old_values) > 0:
+                logger.warning(
+                    "bin 与日历不对齐，丢弃旧数据重建 %s "
+                    "(old_start=%d, old_len=%d, cal_len=%d)",
+                    bin_path, old_start,
+                    len(old_values) if old_values is not None else 0,
+                    len(merged_cal),
+                )
 
-            # 写入新数据（仅指定日期）
-            for d, row_i in write_pairs:
-                if d in merged_idx:
-                    arr[merged_idx[d]] = new_values[row_i]
-            _write_bin(bin_path, arr, 0)
+        # 写入新数据（仅指定日期）
+        for d, row_i in write_pairs:
+            if d in merged_idx:
+                arr[merged_idx[d]] = new_values[row_i]
+        _write_bin(bin_path, arr, 0)

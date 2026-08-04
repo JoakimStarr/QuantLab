@@ -80,6 +80,69 @@ def test_is_st_none_backward_compat():
     assert t.iloc[1] == 1.0
 
 
+# ---------- _sync_stock_bin 日历对齐修复 ----------
+
+def test_sync_bin_new_file_aligned_to_calendar(tmp_path):
+    """新 bin 写入：数据数组长度必须等于全局日历长度，start_index=0。"""
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    cal = ["2024-01-15", "2024-01-16", "2024-01-17"]
+    df = pd.DataFrame({"date": ["2024-01-16", "2024-01-17"], "close": [10.0, 11.0]})
+    eod._sync_stock_bin(str(feat), df, cal, ["close"], overwrite=True)
+
+    values, start = eod._read_bin(str(feat / "close.day.bin"))
+    assert start == 0
+    assert len(values) == len(cal) == 3
+    assert np.isnan(values[0])          # 01-15 无数据
+    assert values[1] == 10.0            # 01-16
+    assert values[2] == 11.0            # 01-17
+
+
+def test_sync_bin_calendar_extend_keeps_old_data(tmp_path):
+    """日历向后扩展：旧数据按日期映射保留，不丢失、不错位。"""
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    cal1 = ["2024-01-15", "2024-01-16", "2024-01-17"]
+    df1 = pd.DataFrame({"date": ["2024-01-15", "2024-01-16", "2024-01-17"],
+                        "close": [10.0, 11.0, 12.0]})
+    eod._sync_stock_bin(str(feat), df1, cal1, ["close"], overwrite=True)
+
+    # 日历扩展两个新交易日
+    cal2 = ["2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18", "2024-01-19"]
+    df2 = pd.DataFrame({"date": ["2024-01-18", "2024-01-19"], "close": [13.0, 14.0]})
+    eod._sync_stock_bin(str(feat), df2, cal2, ["close"], overwrite=True)
+
+    values, start = eod._read_bin(str(feat / "close.day.bin"))
+    assert start == 0
+    assert len(values) == 5
+    assert values.tolist() == [10.0, 11.0, 12.0, 13.0, 14.0]
+
+
+def test_sync_bin_mismatched_old_bin_rebuilt(tmp_path, caplog):
+    """旧 bin 长度超出当前日历（日历被缩短过）→ 丢弃重建，不产生错位数据。"""
+    import logging
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    # 先用长日历写入（模拟历史完整日历）
+    cal_long = ["2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18", "2024-01-19"]
+    df_long = pd.DataFrame({"date": cal_long, "close": [10.0, 11.0, 12.0, 13.0, 14.0]})
+    eod._sync_stock_bin(str(feat), df_long, cal_long, ["close"], overwrite=True)
+
+    # 传入更短日历（模拟日历被意外覆盖/缩短）→ 旧 bin 超界，应丢弃重建
+    cal_short = ["2024-01-18", "2024-01-19"]
+    df_short = pd.DataFrame({"date": ["2024-01-19"], "close": [99.0]})
+    with caplog.at_level(logging.WARNING, logger="app.services.data.eod_incremental"):
+        eod._sync_stock_bin(str(feat), df_short, cal_short, ["close"], overwrite=True)
+
+    values, start = eod._read_bin(str(feat / "close.day.bin"))
+    assert start == 0
+    assert len(values) == 2
+    assert np.isnan(values[0])          # 01-18 无新数据 → NaN
+    assert values[1] == 99.0            # 01-19 新数据
+    # 确认触发了丢弃重建警告
+    assert any("不对齐" in r.message for r in caplog.records)
+
+
 def test_st_overrides_board_threshold():
     # 同一只主板股，非ST日10%才停，ST日5%即停
     t = eod._compute_tradable(
