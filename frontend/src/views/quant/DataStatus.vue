@@ -333,7 +333,7 @@
         </el-form>
         <div v-if="eodResult" class="eod-result">
           <el-alert
-            :title="`同步完成: 成功 ${eodResult.success}/${eodResult.total_stocks}，新增 ${eodResult.new_dates?.length || 0} 个交易日`"
+            :title="eodResultTitle"
             :type="eodResult.failed > 0 ? 'warning' : 'success'"
             :closable="false"
             show-icon
@@ -353,38 +353,41 @@
     </el-dialog>
 
     <!-- 数据完整性校验弹窗 -->
-    <el-dialog v-model="showIntegrityDialog" title="数据完整性校验" width="720px">
+    <el-dialog v-model="showIntegrityDialog" title="数据完整性校验" width="760px">
       <div v-if="integrityChecking" v-loading="true" style="min-height: 200px"></div>
-      <div v-else-if="integrityResult && integrityResult.ok" class="integrity-result">
-        <el-alert :title="integrityResult.summary" :type="(integrityResult.length_mismatches > 0 || integrityResult.stocks_missing_fields > 0) ? 'warning' : 'success'" :closable="false" show-icon style="margin-bottom: 16px" />
-        <div class="integrity-stats">
-          <div class="stat-item"><span class="stat-label">日历天数</span><span class="stat-value">{{ integrityResult.calendar_days }}</span></div>
-          <div class="stat-item"><span class="stat-label">股票总数</span><span class="stat-value">{{ integrityResult.total_stocks }}</span></div>
-          <div class="stat-item"><span class="stat-label">有效股票</span><span class="stat-value">{{ integrityResult.valid_stocks }}</span></div>
-          <div class="stat-item"><span class="stat-label">缺字段</span><span class="stat-value" :class="{warn: integrityResult.stocks_missing_fields > 0}">{{ integrityResult.stocks_missing_fields }}</span></div>
-          <div class="stat-item"><span class="stat-label">全NaN</span><span class="stat-value" :class="{warn: integrityResult.stocks_all_nan > 0}">{{ integrityResult.stocks_all_nan }}</span></div>
-          <div class="stat-item"><span class="stat-label">长度不匹配</span><span class="stat-value" :class="{warn: integrityResult.length_mismatches > 0}">{{ integrityResult.length_mismatches }}</span></div>
+      <div v-else-if="validationReport" class="integrity-result">
+        <el-alert
+          :title="validationReport.summary"
+          :type="validationReport.ok ? 'success' : 'warning'"
+          :closable="false" show-icon style="margin-bottom: 12px"
+        />
+        <div v-if="validationReport.sync_state?.syncing" class="calendar-sync-note">
+          <el-tag size="small" type="warning">回填中</el-tag>
+          <span class="calendar-sync-text">数据同步进行中，校验结果可能不完整，请等同步完成后再校验</span>
         </div>
-        <div v-if="integrityResult.issues && integrityResult.issues.length" style="margin-top: 16px">
-          <div style="font-weight: 600; margin-bottom: 8px">问题明细（{{ integrityResult.issues.length }} 条）</div>
-          <el-table :data="integrityResult.issues" size="small" stripe max-height="300">
-            <el-table-column prop="code" label="股票代码" width="120" />
-            <el-table-column prop="field" label="字段" width="100" />
-            <el-table-column prop="issue" label="问题" width="120">
-              <template #default="{row}">
-                <el-tag :type="row.issue === 'file_missing' ? 'danger' : 'warning'" size="small">{{ row.issue === 'file_missing' ? '文件缺失' : '长度不匹配' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="预期/实际" width="140">
-              <template #default="{row}">{{ row.expected }} / {{ row.actual }}</template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div v-if="integrityResult.all_nan_stocks && integrityResult.all_nan_stocks.length" style="margin-top: 16px">
-          <div style="font-weight: 600; margin-bottom: 8px">全 NaN 股票（{{ integrityResult.all_nan_stocks.length }} 只）</div>
-          <div style="display: flex; flex-wrap: wrap; gap: 4px">
-            <el-tag v-for="s in integrityResult.all_nan_stocks" :key="s" size="small" type="info">{{ s }}</el-tag>
+        <div class="check-list">
+          <div v-for="(chk, name) in validationReport.checks" :key="name" class="check-item">
+            <el-tag :type="checkStatusTagType(chk.status)" size="small" class="check-status">{{ checkStatusLabel(chk.status) }}</el-tag>
+            <span class="check-name">{{ checkName(name) }}</span>
+            <span class="check-msg">{{ chk.message }}</span>
           </div>
+        </div>
+        <div v-if="driftNeedsRepair" class="drift-box">
+          <div class="drift-title">待修复差异</div>
+          <el-tag v-if="validationReport.drift.missing_calendar_days" size="small">day.txt 缺 {{ validationReport.drift.missing_calendar_days }} 天</el-tag>
+          <el-tag v-if="validationReport.drift.missing_field_files" size="small">字段文件缺 {{ validationReport.drift.missing_field_files }} 个</el-tag>
+          <el-tag v-if="validationReport.drift.db_without_bin" size="small">DB 无 bin {{ validationReport.drift.db_without_bin }} 只</el-tag>
+          <el-tag v-if="validationReport.drift.range_mismatch" size="small">区间错位 {{ validationReport.drift.range_mismatch }} 只</el-tag>
+          <el-tag v-if="validationReport.drift.pg_missing_dates" size="small" type="warning">缺 {{ validationReport.drift.pg_missing_dates }} 个交易日（需 baostock）</el-tag>
+        </div>
+        <div v-if="integrityResult && integrityResult.calendar_sync" class="calendar-sync-note">
+          <el-tag size="small" type="info">只读说明</el-tag>
+          <span class="calendar-sync-text">{{ integrityResult.calendar_sync }}</span>
+        </div>
+        <div class="integrity-stats" v-if="validationReport.rows !== undefined">
+          <div class="stat-item"><span class="stat-label">qlib 抽样行数</span><span class="stat-value">{{ validationReport.rows }}</span></div>
+          <div class="stat-item"><span class="stat-label">抽样股票</span><span class="stat-value">{{ validationReport.total_stocks }}</span></div>
+          <div class="stat-item"><span class="stat-label">bin 股票数</span><span class="stat-value">{{ validationReport.checks.coverage.stocks_in_bin }}</span></div>
         </div>
       </div>
       <div v-else-if="integrityResult && !integrityResult.ok">
@@ -392,6 +395,12 @@
       </div>
       <template #footer>
         <el-button @click="showIntegrityDialog = false">关闭</el-button>
+        <el-button
+          v-if="driftNeedsRepair && !validationReport?.sync_state?.syncing"
+          type="warning" @click="doRepair" :loading="repairing" :disabled="repairing"
+        >
+          {{ repairLabel }}
+        </el-button>
         <el-button type="primary" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="integrityChecking">重新校验</el-button>
       </template>
     </el-dialog>
@@ -403,9 +412,10 @@ defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, getSyncStats, eodSync, syncIndices, integrityCheck, syncIndustry, getSyncProgress } from '@/api/quant'
+import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, getSyncStats, eodSync, getEodResult, syncIndices, syncIndustry, getSyncProgress, validateData, repairData } from '@/api/quant'
 
 const statusList = ref([])
 const route = useRoute()
@@ -431,6 +441,8 @@ const industrySyncing = ref(false)
   const integrityChecking = ref(false)
   const showIntegrityDialog = ref(false)
   const integrityResult = ref(null)
+  const validationReport = ref(null)
+  const repairing = ref(false)
 const currentStatus = computed(() => statusList.value[0] || {})
 
 // 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
@@ -465,6 +477,13 @@ const daysSinceUpdate = computed(() => {
 
 const syncProgressText = computed(() => {
   return `正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...`
+})
+
+const eodResultTitle = computed(() => {
+  const r = eodResult.value
+  if (!r) return ''
+  if (r.ok === false || r.failed === undefined) return r.error || '同步失败'
+  return `同步完成: 成功 ${r.success ?? 0}/${r.total_stocks ?? 0}，新增 ${r.new_dates?.length || 0} 个交易日`
 })
 
 const previewColumns = computed(() => {
@@ -622,16 +641,33 @@ async function doEodSync() {
   eodSyncing.value = true
   eodResult.value = null
   try {
-    const data = await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite)
-    eodResult.value = data
-    const msg = `增量同步完成: 成功 ${data.success}/${data.total_stocks}，新增 ${data.new_dates?.length || 0} 个交易日`
-    ElMessage.success(msg)
+    // EOD 同步是后台任务，提交后立即返回（无实际结果），需轮询 /eod-result 获取真实结果
+    await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite)
+    ElMessage.success('增量同步已提交，后台执行中')
+    await loadEodResult()
+    eodSyncing.value = false
     loadAll()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('增量EOD同步失败: ' + (e?.message || e))
-  } finally {
     eodSyncing.value = false
   }
+}
+
+async function loadEodResult() {
+  // 后台任务完成后轮询真实结果（最多等 60s，避免进度未写入时拿到 null）
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 1000))
+    try {
+      const data = await getEodResult()
+      if (data && data.ok !== false && data.success !== undefined) {
+        eodResult.value = data
+        return data
+      }
+    } catch (e) {
+      // 结果尚未写入，继续轮询
+    }
+  }
+  return null
 }
 
 async function doSyncIndices() {
@@ -663,14 +699,66 @@ async function doIntegrityCheck() {
   integrityChecking.value = true
   showIntegrityDialog.value = true
   integrityResult.value = null
+  validationReport.value = null
   try {
-    const data = await integrityCheck()
-    integrityResult.value = data
+    // 校验为只读操作：不重建 day.txt、不触发任何同步，避免与回填互相影响。
+    // day.txt 与数据库不一致时由「日历同步」检查项报告，可用「一键补齐」修复。
+    const data = await validateData()
+    validationReport.value = data
+    integrityResult.value = { ...data, calendar_sync: '校验只读，未改动任何数据' }
     ElMessage.success(data?.summary || '校验完成')
   } catch (e) {
     integrityResult.value = { ok: false, error: String(e?.message || e) }
   } finally {
     integrityChecking.value = false
+  }
+}
+
+const driftNeedsRepair = computed(() => !!validationReport.value?.drift?.needs_repair)
+const repairLabel = computed(() => {
+  const d = validationReport.value?.drift
+  if (d?.needs_baostock) return `一键补齐（含 baostock ${d.pg_missing_dates} 天）`
+  return '一键补齐'
+})
+const checkStatusLabel = (s) => ({ ok: '正常', warn: '警告', error: '异常' }[s] || s)
+const checkStatusTagType = (s) => ({ ok: 'success', warn: 'warning', error: 'danger' }[s] || 'info')
+const checkName = (n) => ({
+  fields: 'bin 字段完整性',
+  fieldset: '字段集合',
+  calendar: '日历同步',
+  coverage: '覆盖一致性',
+  qlib: 'qlib 可读性',
+}[n] || n)
+
+async function doRepair() {
+  const d = validationReport.value?.drift
+  if (!d) return
+  const parts = [
+    d.missing_calendar_days ? `day.txt 缺 ${d.missing_calendar_days} 天` : '',
+    d.missing_field_files ? `字段文件缺 ${d.missing_field_files} 个` : '',
+    d.db_without_bin ? `DB 无 bin ${d.db_without_bin} 只` : '',
+    d.range_mismatch ? `区间错位 ${d.range_mismatch} 只` : '',
+  ].filter(Boolean)
+  let msg = '将修复：' + (parts.join('、') || 'bin 数据不一致')
+  if (d.needs_baostock) msg += `\n另需从 baostock 补拉 ${d.pg_missing_dates} 个缺失交易日（消耗网络与请求配额）。`
+  try {
+    await ElMessageBox.confirm(msg + '\n确认执行？', '一键补齐', {
+      confirmButtonText: '执行',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  repairing.value = true
+  try {
+    await repairData({ include_baostock: !!d.needs_baostock, universe: 'all' })
+    ElMessage.success('补齐任务已提交（后台执行）')
+    startProgressPolling()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('补齐提交失败: ' + (e?.message || e))
+  } finally {
+    repairing.value = false
   }
 }
 
@@ -947,4 +1035,38 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
 .integrity-stats .stat-label { font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px; }
 .integrity-stats .stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .integrity-stats .stat-value.warn { color: var(--warning); }
+.calendar-sync-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #f5f7fa);
+  border-radius: 6px;
+}
+.calendar-sync-text { font-size: 13px; color: var(--text-secondary); }
+.check-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-tertiary, #f5f7fa);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.check-item .check-status { flex-shrink: 0; }
+.check-item .check-name { flex-shrink: 0; color: var(--text-primary); font-weight: 600; min-width: 88px; }
+.check-item .check-msg { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drift-box {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--warning);
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.drift-box .drift-title { font-size: 13px; font-weight: 600; color: var(--warning); margin-right: 4px; }
 </style>

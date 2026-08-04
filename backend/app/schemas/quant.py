@@ -12,6 +12,12 @@ class SyncDataRequest(BaseModel):
     years: Optional[int] = None        # baostock 全量回填年数（从最新向旧）
 
 
+class RepairRequest(BaseModel):
+    """一键补齐：根据校验差异修复 DB 与 qlib 不一致。"""
+    include_baostock: bool = False   # 是否允许从 baostock 补拉 PG 缺失交易日
+    universe: str = "all"
+
+
 class QlibStatusResponse(BaseModel):
     available: bool
     message: Optional[str] = None

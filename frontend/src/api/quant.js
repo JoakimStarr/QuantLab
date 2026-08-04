@@ -55,6 +55,11 @@ export function eodSync(universe, days, overwrite) {
   })
 }
 
+// 获取最近一次 EOD 增量同步的真实结果（后台任务完成后轮询）
+export function getEodResult() {
+  return request.get('/quant/data/eod-result')
+}
+
 // 同步指数数据（上证、沪深300、中证500等）
 export function syncIndices() {
   return request.post('/quant/data/sync-indices')
@@ -63,6 +68,21 @@ export function syncIndices() {
 // 数据完整性校验
 export function integrityCheck(universe) {
   return request.get('/quant/data/integrity-check', { params: { universe } })
+}
+
+// 全市场数据校验（bin 字段/DB 字段/日历/覆盖 一致性）
+export function validateData(universe) {
+  return request.get('/quant/data/validate', { params: { universe } })
+}
+
+// 一键补齐：按校验差异修复 DB 与 qlib 不一致（include_baostock 允许从 baostock 补拉）
+export function repairData(params) {
+  return request.post('/quant/data/repair', params)
+}
+
+// 以数据库 stock_daily 为准重建 qlib 日历 day.txt（校验前先对齐时间轴）
+export function syncCalendar() {
+  return request.post('/quant/data/sync-calendar')
 }
 
 // @deprecated 行业同步已禁用（后期规划）

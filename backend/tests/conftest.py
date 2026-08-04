@@ -83,12 +83,22 @@ async def _create_tables(_db_available):
 
 @pytest.fixture(autouse=True)
 async def _truncate_tables(_db_available):
-    """每个测试后：清空所有表。DB 不可用或表不存在时静默跳过。"""
+    """每个测试后：清空所有表（仅测试库，防止误清真实开发库）。
+
+    与 _create_tables 一致：只有 DATABASE_URL 指向库名含 "test" 的库时才执行
+    table.delete() 清空；指向真实开发库（如 quantlab）时跳过，保护业务数据。
+    DB 不可用或表不存在时静默跳过。
+    """
     if not _db_available or not _DB_REALLY_AVAILABLE:
         yield
         return
+    from app.core.database import engine
+    if "test" not in (engine.url.database or "").lower():
+        # 真实库：不 TRUNCATE，避免测试清空开发数据
+        yield
+        return
     yield
-    from app.core.database import Base, engine
+    from app.core.database import Base
 
     try:
         async with engine.begin() as conn:
