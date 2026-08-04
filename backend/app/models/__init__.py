@@ -7,6 +7,7 @@ from .mining_task import MiningTask
 from .sync_history import SyncHistory
 from .task_result import TaskResult
 from .fundamental import FundamentalPIT
+from .macro import MacroIndicator
 from .baostock import (
     StockDaily,
     StockBasic,
@@ -31,6 +32,7 @@ __all__ = [
     "SyncHistory",
     "TaskResult",
     "FundamentalPIT",
+    "MacroIndicator",
     "StockDaily",
     "StockBasic",
     "StockIndustry",

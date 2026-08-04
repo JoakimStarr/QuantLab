@@ -68,6 +68,17 @@ const routes = [
         }
       },
       {
+        path: 'quant/macro',
+        name: 'Macro',
+        component: () => import('@/views/quant/Macro.vue'),
+        meta: {
+          title: '宏观指标',
+          icon: 'Odometer',
+          transition: 'fade-in-up',
+          keepAlive: true
+        }
+      },
+      {
         path: 'quant/factor-compare',
         name: 'FactorCompare',
         component: () => import('@/views/quant/FactorCompare.vue'),

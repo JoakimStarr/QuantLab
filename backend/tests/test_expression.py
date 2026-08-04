@@ -128,3 +128,28 @@ class TestExpressionSandbox:
         expr = "($close - Mean($close, 20)) / Std($close, 20)"
         result = validate_expression(expr)
         assert result == expr
+
+    @pytest.mark.parametrize("expr", [
+        "Ref($pmi, 1)",
+        "Mean($pmi, 3)",
+        "Greater($pmi, 50)",
+        "Rank($cpi)",
+        "Corr($ppi, $gdp, 5)",
+        "($pmi - $pmi_nm) / $cpi",
+    ])
+    def test_macro_fields_valid(self, expr):
+        """宏观指标字段应通过白名单校验。"""
+        result = validate_expression(expr)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.parametrize("expr", [
+        "$macro_pmi",
+        "$PMI",
+        "$unknown_macro",
+        "$cpi_x",
+    ])
+    def test_macro_fields_case_and_exact_match(self, expr):
+        """宏观字段大小写敏感且必须精确匹配白名单。"""
+        with pytest.raises(ExpressionValidationError):
+            validate_expression(expr)

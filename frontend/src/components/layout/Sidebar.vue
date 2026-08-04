@@ -64,6 +64,7 @@ const menuItems = [
   { path: '/quant/backtest-compare', title: '回测对比', icon: 'Histogram' },
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
+  { path: '/quant/macro', title: '宏观指标', icon: 'Odometer' },
   { path: '/docs', title: '技术文档', icon: 'Reading' },
   { path: '/system/logs', title: '日志管理', icon: 'Document' },
 ]

@@ -11,6 +11,7 @@ from app.api.factor_ext import router as factor_ext_router
 from app.api.strategy_ext import router as strategy_ext_router
 from app.api.mining_ext import router as mining_ext_router
 from app.api.market import router as market_router
+from app.api.macro import router as macro_router
 from app.core.auth import require_user
 
 api_router = APIRouter()
@@ -32,3 +33,4 @@ api_router.include_router(strategy_router, dependencies=_auth)
 api_router.include_router(mining_router, dependencies=_auth)
 api_router.include_router(logs_router, dependencies=_auth)
 api_router.include_router(market_router, dependencies=_auth)
+api_router.include_router(macro_router, dependencies=_auth)

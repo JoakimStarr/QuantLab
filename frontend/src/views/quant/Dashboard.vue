@@ -32,6 +32,8 @@
         @run-stock-kline="runStockKline"
       />
 
+      <MacroSnapshot :items="macroItems" />
+
       <KLineChart
         :kline-items="klineItems"
         :indices="indices"
@@ -81,6 +83,7 @@ import KLineChart from '@/components/dashboard/KLineChart.vue'
 import FactorStats from '@/components/dashboard/FactorStats.vue'
 import MiningTasks from '@/components/dashboard/MiningTasks.vue'
 import BacktestList from '@/components/dashboard/BacktestList.vue'
+import MacroSnapshot from '@/components/dashboard/MacroSnapshot.vue'
 import DecayAlert from '@/components/dashboard/DecayAlert.vue'
 import Guide from '@/components/common/Guide.vue'
 import { listFactors } from '@/api/factor'
@@ -88,6 +91,7 @@ import { listStrategies, listAllBacktestResults } from '@/api/strategy'
 import { listMiningTasks } from '@/api/mining'
 import { getQuantDataStatus } from '@/api/quant'
 import { listIndices, getIndexKline, getMarketOverview } from '@/api/market'
+import { getMacroIndicators } from '@/api/macro'
 import { searchStocks } from '@/api/quant'
 
 const loading = ref(true)
@@ -109,6 +113,7 @@ const selectedIndex = ref('SH000300')
 const selectedPeriod = ref('1d')
 const klineItems = ref([])
 const overviewItems = ref([])
+const macroItems = ref([])
 const klineLoading = ref(false)
 const activeIndicators = ref(['MA'])
 // 时间范围：1月/3月/6月/1年/2年/全部/自定义，默认 2 年（用户明确要求）
@@ -186,6 +191,24 @@ async function loadOverview() {
   }
 }
 
+// 宏观指标最新值快照（Dashboard 卡片）
+async function loadMacroSnapshot() {
+  try {
+    const res = await getMacroIndicators()
+    const items = res?.items ?? []
+    // 每个 indicator-field_name 保留最新一条
+    const labelMap = { pmi: '制造业PMI', pmi_nm: '非制造业PMI', cpi: 'CPI同比', ppi: 'PPI同比', gdp: 'GDP同比' }
+    const latest = {}
+    for (const it of items) {
+      const k = `${it.indicator}-${it.field_name}`
+      if (!latest[k] || it.available_date > latest[k].available_date) latest[k] = it
+    }
+    macroItems.value = Object.values(latest).map(it => ({ ...it, label: labelMap[it.field_name] || it.field_name }))
+  } catch {
+    macroItems.value = []
+  }
+}
+
 async function loadAll() {
   loading.value = true
   try {
@@ -224,6 +247,7 @@ function refreshAll() {
   loadAll()
   loadOverview()
   loadKline()
+  loadMacroSnapshot()
 }
 
 async function runStockKline(query) {
@@ -252,6 +276,7 @@ onMounted(() => {
   loadAll()
   loadOverview()
   loadKline()
+  loadMacroSnapshot()
   if (!localStorage.getItem('quantlab_guide_seen')) guideVisible.value = true
 })
 </script>

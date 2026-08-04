@@ -80,6 +80,10 @@ async def data_status_api(db=Depends(get_db)):
 async def _detect_stale_sync(db) -> int:
     """检测超时同步：上次更新超过 30 分钟仍为 syncing 的，自动标记为 failed。
 
+    仅对自动触发的同步（sync_trigger='auto'）生效——手动"开始同步"下载全市场
+    数据本来就慢，可能远超 30 分钟，不能被误杀；手动同步由任务自身的
+    120s 单日拉取超时 + 启动时 recover_stale_sync 兜底，不会永久卡死。
+
     在状态查询时调用，避免容器重启后 syncing 状态长期残留。
     Returns:
         被标记为 failed 的记录数。
@@ -89,6 +93,7 @@ async def _detect_stale_sync(db) -> int:
     result = await db.execute(
         select(StockDataStatus).where(
             StockDataStatus.status == "syncing",
+            StockDataStatus.sync_trigger == "auto",
             StockDataStatus.last_updated < threshold,
         )
     )
@@ -122,29 +127,33 @@ async def sync_data_api(
     universe = req.universe or settings.quant.get("universe", "csi300")
     years = req.years or int(settings.quant.get("backfill_years", 5))
     data_source = "baostock"
-    # 若正在同步则拒绝（带超时检测：超过10分钟视为卡死，允许重新同步）
+    # 若已有同步在真实执行（内存进度活跃），拒绝重复提交，避免并发重复下载：
+    # baostock 禁止并发连接，两个回填并发会互相拖垮。
+    from app.services.data.sync_progress import get_progress
+    active = get_progress()
+    if active and active.get("status") not in ("done", "failed", "idle", None):
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": f"正在同步中，请稍候（当前 universe={active.get('universe')}）",
+            "status": 409,
+        })
     existing = await db.execute(
         select(StockDataStatus).where(StockDataStatus.universe == universe)
     )
     rec = existing.scalar_one_or_none()
     if rec and rec.status == "syncing":
-        from datetime import timedelta
-        if rec.last_updated and datetime.now() - rec.last_updated < timedelta(minutes=10):
-            return ApiResponse(ok=False, error={
-                "code": "SYNC_IN_PROGRESS",
-                "message": f"universe={universe} 正在同步中，请稍后",
-                "status": 409,
-            })
-        # 超时，允许覆盖
-        logger.warning("universe=%s 上次同步超时（%s），允许重新同步", universe, rec.last_updated)
+        # 进程内无活跃同步但 DB 仍残留 syncing（如容器重启/进程被杀），
+        # 允许重新触发，由启动时 recover_stale_sync 统一收尾
+        logger.warning("universe=%s 残留 syncing 状态（%s），允许重新同步", universe, rec.last_updated)
 
-    # 立即标记为 syncing 并更新 last_updated（用于超时检测）
+    # 立即标记为 syncing 并更新 last_updated（手动触发，不限时）
     if rec is None:
         rec = StockDataStatus(universe=universe, status="syncing")
         db.add(rec)
     else:
         rec.status = "syncing"
         rec.last_error = None
+    rec.sync_trigger = "manual"
     rec.last_updated = datetime.now()
     await db.commit()
 

@@ -36,6 +36,8 @@ _QLIB_FIELDS = {
     "$pe_ttm", "$pb_mrq", "$ps_ttm", "$pcf_ncf_ttm",
     "$adjustflag",
     "$change", "$tradable",
+    # 宏观指标字段（macro_sync 广播写入 features/*/{field}.day.bin）
+    "$pmi", "$pmi_nm", "$cpi", "$ppi", "$gdp",
 }
 
 # 严格禁止的标识符（词边界匹配，避免 "os" 误伤 "close"）
