@@ -374,10 +374,13 @@
         </div>
         <div v-if="driftNeedsRepair" class="drift-box">
           <div class="drift-title">待修复差异</div>
+          <el-tag v-if="validationReport.checks.fields.bad_size_stocks" size="small">bin 长度异常 {{ validationReport.checks.fields.bad_size_stocks }} 只</el-tag>
+          <el-tag v-if="validationReport.drift.stocks_with_gaps" size="small">疑似损坏 {{ validationReport.drift.stocks_with_gaps }} 只</el-tag>
           <el-tag v-if="validationReport.drift.missing_calendar_days" size="small">day.txt 缺 {{ validationReport.drift.missing_calendar_days }} 天</el-tag>
           <el-tag v-if="validationReport.drift.missing_field_files" size="small">字段文件缺 {{ validationReport.drift.missing_field_files }} 个</el-tag>
           <el-tag v-if="validationReport.drift.db_without_bin" size="small">DB 无 bin {{ validationReport.drift.db_without_bin }} 只</el-tag>
           <el-tag v-if="validationReport.drift.range_mismatch" size="small">区间错位 {{ validationReport.drift.range_mismatch }} 只</el-tag>
+          <el-tag v-if="validationReport.drift.bin_without_db" size="small" type="info">bin 无 DB 记录 {{ validationReport.drift.bin_without_db }} 只</el-tag>
           <el-tag v-if="validationReport.drift.pg_missing_dates" size="small" type="warning">缺 {{ validationReport.drift.pg_missing_dates }} 个交易日（需 baostock）</el-tag>
         </div>
         <div v-if="integrityResult && integrityResult.calendar_sync" class="calendar-sync-note">
@@ -424,6 +427,8 @@ const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0 })
 const syncProgress = ref(null)
 let progressTimer = null
+// 轮询连续拿不到进度（data=null）的次数，超过阈值停止轮询，避免空转泄漏
+let nullPollCount = 0
 const previewVisible = ref(false)
 const previewData = ref([])
 const previewLoading = ref(false)
@@ -476,7 +481,8 @@ const daysSinceUpdate = computed(() => {
 })
 
 const syncProgressText = computed(() => {
-  return `正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...`
+  if (syncProgress.value?.data_source === 'repair') return '正在执行数据补齐（独立进程后台运行），请耐心等待...'
+  return '正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...'
 })
 
 const eodResultTitle = computed(() => {
@@ -613,9 +619,19 @@ async function smartSync() {
 
 function startProgressPolling() {
   if (progressTimer) clearInterval(progressTimer)
+  nullPollCount = 0
   pollSyncProgress()
   progressTimer = setInterval(pollSyncProgress, 1000)
 }
+
+const taskLabel = (src) => ({
+  repair: '数据补齐',
+  backfill: '数据回填',
+  baostock: '数据同步',
+  eod: '增量同步',
+  eastmoney: '宏观同步',
+  indices: '指数同步',
+}[src] || '后台任务')
 
 async function pollSyncProgress() {
   try {
@@ -623,13 +639,31 @@ async function pollSyncProgress() {
     syncProgress.value = data
     if (data?.status === 'done' || data?.status === 'failed') {
       if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+      nullPollCount = 0
       syncing.value = false
+      const label = taskLabel(data?.data_source)
       if (data?.status === 'done') {
-        ElMessage.success('智能同步完成')
+        ElMessage.success(label + '完成')
+        // 补齐完成后自动重新校验，刷新报告
+        if (data?.data_source === 'repair' && showIntegrityDialog.value) {
+          doIntegrityCheck()
+        }
       } else {
-        ElMessage.error('智能同步失败: ' + (data?.error || '未知错误'))
+        ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
       }
       loadAll()
+      return
+    }
+    if (data === null) {
+      // 连续一段时间无进度（worker 未写入/已退出且无残留文件），停止轮询
+      nullPollCount += 1
+      if (nullPollCount > 30) {
+        if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+        nullPollCount = 0
+        syncing.value = false
+      }
+    } else {
+      nullPollCount = 0
     }
   } catch (e) {
     // 静默失败，继续轮询
@@ -733,30 +767,40 @@ const checkName = (n) => ({
 async function doRepair() {
   const d = validationReport.value?.drift
   if (!d) return
+  const f = validationReport.value?.checks?.fields || {}
   const parts = [
     d.missing_calendar_days ? `day.txt 缺 ${d.missing_calendar_days} 天` : '',
+    f.bad_size_stocks ? `bin 长度异常 ${f.bad_size_stocks} 只` : '',
+    d.stocks_with_gaps ? `疑似损坏 ${d.stocks_with_gaps} 只` : '',
     d.missing_field_files ? `字段文件缺 ${d.missing_field_files} 个` : '',
     d.db_without_bin ? `DB 无 bin ${d.db_without_bin} 只` : '',
     d.range_mismatch ? `区间错位 ${d.range_mismatch} 只` : '',
   ].filter(Boolean)
   let msg = '将修复：' + (parts.join('、') || 'bin 数据不一致')
-  if (d.needs_baostock) msg += `\n另需从 baostock 补拉 ${d.pg_missing_dates} 个缺失交易日（消耗网络与请求配额）。`
+  if (d.needs_baostock) msg += `<br>另需从 baostock 补拉 ${d.pg_missing_dates} 个缺失交易日（消耗网络与请求配额）。`
   try {
-    await ElMessageBox.confirm(msg + '\n确认执行？', '一键补齐', {
+    await ElMessageBox.confirm(msg + '<br>确认执行？', '一键补齐', {
       confirmButtonText: '执行',
       cancelButtonText: '取消',
       type: 'warning',
+      dangerouslyUseHTMLString: true,
     })
   } catch {
     return
   }
   repairing.value = true
+  syncing.value = true
+  syncProgress.value = null
   try {
     await repairData({ include_baostock: !!d.needs_baostock, universe: 'all' })
-    ElMessage.success('补齐任务已提交（后台执行）')
+    ElMessage.success('补齐任务已提交（独立进程后台执行）')
     startProgressPolling()
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('补齐提交失败: ' + (e?.message || e))
+    if (e?.code !== 'SYNC_IN_PROGRESS') {
+      // 非 409 冲突才重复提示（拦截器已弹过"正在同步/修复中"）
+      if (e !== 'cancel') ElMessage.error('补齐提交失败: ' + (e?.message || e))
+    }
+    syncing.value = false
   } finally {
     repairing.value = false
   }
