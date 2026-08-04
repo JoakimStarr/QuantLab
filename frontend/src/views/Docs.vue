@@ -79,15 +79,6 @@
       </div>
     </div>
 
-    <!-- 当前分类指示条 -->
-    <div v-if="categoryFilter !== 'all'" class="docs-cat-bar">
-      <span class="docs-cat-bar__label">当前分类</span>
-      <el-tag size="large" type="primary" closable @close="categoryFilter = 'all'">
-        {{ currentCategoryLabel }}
-      </el-tag>
-      <span class="docs-cat-bar__count">{{ currentCategoryCount }} 篇文档</span>
-    </div>
-
     <!-- 主内容区域：侧边栏 + 正文 -->
     <div class="docs-body" :class="[`sidebar--${sidebarPos}`, { 'docs-body--reading': readingMode }]">
       <!-- TOC 侧边栏 -->
@@ -216,6 +207,8 @@ const loadError = ref('')
 const categoryFilter = ref(
   route.query.category || localStorage.getItem('docs_category') || 'all'
 )
+// 已加载文档缓存：Map<slug, doc>，重复切换秒开；模块级，跨路由往返保留
+const docCache = new Map()
 
 // markdown-it 实例（带 highlight.js 代码高亮）
 const md = new MarkdownIt({
@@ -310,17 +303,6 @@ const filteredGroupedDocs = computed(() =>
     ? groupedDocs.value
     : groupedDocs.value.filter(g => g.name === categoryFilter.value)
 )
-// 当前分类显示文案 + 文档数（用于顶部指示条）
-const currentCategoryLabel = computed(() =>
-  categoryFilter.value === 'all' ? '全部分类' : categoryFilter.value
-)
-const currentCategoryCount = computed(() => {
-  if (categoryFilter.value === 'all') {
-    return groupedDocs.value.reduce((n, g) => n + g.docs.length, 0)
-  }
-  const g = groupedDocs.value.find(x => x.name === categoryFilter.value)
-  return g ? g.docs.length : 0
-})
 
 // 切换分类时，若当前文档不在该分类下，跳到该分类第一篇
 watch(categoryFilter, (val) => {
@@ -412,11 +394,22 @@ function scrollToHash() {
 
 async function loadDoc(slug) {
   if (!slug) return
+  // 已缓存：直接展示（秒开），不触发 loading
+  if (docCache.has(slug)) {
+    doc.value = docCache.get(slug)
+    toc.value = generateToc(doc.value?.content || '')
+    collapsedSections.value = new Set()
+    await nextTick()
+    scrollToHash()
+    return
+  }
   loading.value = true
   loadError.value = ''
   try {
     const res = await getDoc(slug)
-    doc.value = res?.data || res
+    const d = res?.data || res
+    docCache.set(slug, d)
+    doc.value = d
     toc.value = generateToc(doc.value?.content || '')
     collapsedSections.value = new Set()
     await nextTick()
@@ -760,26 +753,6 @@ html.dark .markdown-body blockquote {
 .docs-toolbar-right {
   display: flex;
   align-items: center;
-}
-
-/* 当前分类指示条 */
-.docs-cat-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 24px;
-  background: var(--el-color-primary-light-9);
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  flex-shrink: 0;
-}
-.docs-cat-bar__label {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-.docs-cat-bar__count {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ============================================================
