@@ -68,33 +68,99 @@
             title="目录在右"
           >⟹</el-button>
         </el-button-group>
+        <el-button
+          :type="readingMode ? 'primary' : ''"
+          :icon="View"
+          size="small"
+          style="margin-left: 8px"
+          title="阅读模式（隐藏目录）"
+          @click="readingMode = !readingMode"
+        >{{ readingMode ? '退出阅读' : '阅读模式' }}</el-button>
       </div>
     </div>
 
+    <!-- 当前分类指示条 -->
+    <div v-if="categoryFilter !== 'all'" class="docs-cat-bar">
+      <span class="docs-cat-bar__label">当前分类</span>
+      <el-tag size="large" type="primary" closable @close="categoryFilter = 'all'">
+        {{ currentCategoryLabel }}
+      </el-tag>
+      <span class="docs-cat-bar__count">{{ currentCategoryCount }} 篇文档</span>
+    </div>
+
     <!-- 主内容区域：侧边栏 + 正文 -->
-    <div class="docs-body" :class="`sidebar--${sidebarPos}`">
+    <div class="docs-body" :class="[`sidebar--${sidebarPos}`, { 'docs-body--reading': readingMode }]">
       <!-- TOC 侧边栏 -->
       <aside class="docs-sidebar">
         <div class="toc-title">目录</div>
         <nav class="toc-nav">
-          <a
-            v-for="item in toc"
+          <div
+            v-for="item in visibleToc"
             :key="item.id"
-            :href="'#' + item.id"
-            :class="['toc-item', `toc-h${item.level}`, { 'toc-item--active': activeHeading === item.id }]"
-            @click.prevent="scrollToHeading(item.id)"
-          >{{ item.text }}</a>
+            :class="['toc-row', `toc-h${item.level}`, { 'toc-row--active': activeHeading === item.id }]"
+          >
+            <span
+              v-if="item.children.length"
+              class="toc-caret"
+              :class="{ 'toc-caret--open': !collapsedSections.has(item.id) }"
+              @click="toggleTocSection(item.id)"
+            >▸</span>
+            <a
+              class="toc-item"
+              :href="'#' + item.id"
+              @click.prevent="scrollToHeading(item.id)"
+            >{{ item.text }}</a>
+          </div>
         </nav>
         <div v-if="!toc.length" class="toc-empty">无标题结构</div>
       </aside>
 
       <!-- 文档正文 -->
-      <main class="docs-content" ref="contentRef" :style="{ fontSize: fontSize + 'px' }" @scroll="onContentScroll">
+      <main
+        class="docs-content"
+        ref="contentRef"
+        :style="{ fontSize: fontSize + 'px' }"
+        v-loading="loading"
+        @scroll="onContentScroll"
+        @click="onContentClick"
+      >
         <div v-if="!doc" class="docs-empty">
           <el-icon :size="48" color="var(--el-text-color-placeholder)"><Document /></el-icon>
           <p>请从上方选择一篇文档</p>
         </div>
-        <div v-else class="markdown-body" v-html="renderedHtml" />
+        <template v-else>
+          <el-alert
+            v-if="loadError"
+            :title="loadError"
+            type="error"
+            show-icon
+            :closable="true"
+            @close="loadError = ''"
+            class="docs-error"
+          />
+          <div class="doc-meta">
+            <span class="doc-meta__group">{{ doc.group || '未分组' }}</span>
+            <span v-if="doc.summary" class="doc-meta__summary">{{ doc.summary }}</span>
+            <span class="doc-meta__count">约 {{ docWordCount }} 字</span>
+          </div>
+          <div class="markdown-body" v-html="renderedHtml" />
+          <nav class="doc-nav">
+            <el-button
+              v-if="docNav.prev"
+              link
+              @click="onDocChange(docNav.prev.slug)"
+              title="上一篇"
+            >⟵ {{ docNav.prev.title }}</el-button>
+            <span v-else class="doc-nav__placeholder" />
+            <el-button
+              v-if="docNav.next"
+              link
+              @click="onDocChange(docNav.next.slug)"
+              title="下一篇"
+            >{{ docNav.next.title }} ⟶</el-button>
+            <span v-else class="doc-nav__placeholder" />
+          </nav>
+        </template>
       </main>
     </div>
   </div>
@@ -103,11 +169,34 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ZoomIn, ZoomOut, Document } from '@element-plus/icons-vue'
+import { ZoomIn, ZoomOut, Document, View } from '@element-plus/icons-vue'
 import { listDocs as fetchDocList, getDoc } from '@/api/docs'
 import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js'
+// highlight.js 按需注册：仅文档实际用到的语言，避免全量 384 语言打进分包（~1MB）
+import hljs from 'highlight.js/lib/core'
+import json from 'highlight.js/lib/languages/json'
+import python from 'highlight.js/lib/languages/python'
+import sql from 'highlight.js/lib/languages/sql'
+import bash from 'highlight.js/lib/languages/bash'
+import yaml from 'highlight.js/lib/languages/yaml'
+import markdown from 'highlight.js/lib/languages/markdown'
+import ini from 'highlight.js/lib/languages/ini'
 import 'highlight.js/styles/github-dark.css'
+
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('py', python)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('yml', yaml)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('md', markdown)
+hljs.registerLanguage('ini', ini)
+hljs.registerLanguage('env', ini)
+hljs.registerLanguage('toml', ini)
 
 const route = useRoute()
 const router = useRouter()
@@ -116,13 +205,17 @@ const docs = ref([])
 const doc = ref(null)
 const currentSlug = ref('')
 const sidebarPos = ref(localStorage.getItem('docs_sidebar_pos') || 'right')
+const readingMode = ref(localStorage.getItem('docs_reading_mode') === '1')
 const fontSize = ref(parseInt(localStorage.getItem('docs_font_size') || '15', 10))
 const fontSizeLabel = computed(() => `${fontSize.value}px`)
 const contentRef = ref(null)
 const toc = ref([])
 const activeHeading = ref('')
 const loading = ref(false)
-const categoryFilter = ref('all')
+const loadError = ref('')
+const categoryFilter = ref(
+  route.query.category || localStorage.getItem('docs_category') || 'all'
+)
 
 // markdown-it 实例（带 highlight.js 代码高亮）
 const md = new MarkdownIt({
@@ -217,16 +310,30 @@ const filteredGroupedDocs = computed(() =>
     ? groupedDocs.value
     : groupedDocs.value.filter(g => g.name === categoryFilter.value)
 )
+// 当前分类显示文案 + 文档数（用于顶部指示条）
+const currentCategoryLabel = computed(() =>
+  categoryFilter.value === 'all' ? '全部分类' : categoryFilter.value
+)
+const currentCategoryCount = computed(() => {
+  if (categoryFilter.value === 'all') {
+    return groupedDocs.value.reduce((n, g) => n + g.docs.length, 0)
+  }
+  const g = groupedDocs.value.find(x => x.name === categoryFilter.value)
+  return g ? g.docs.length : 0
+})
 
 // 切换分类时，若当前文档不在该分类下，跳到该分类第一篇
-watch(categoryFilter, () => {
+watch(categoryFilter, (val) => {
+  // 持久化：URL query + localStorage，刷新后保持当前分类
+  localStorage.setItem('docs_category', val || 'all')
+  router.replace({ query: { ...route.query, category: val === 'all' ? undefined : val } })
   const groups = filteredGroupedDocs.value
   if (!groups.length) return
   const first = groups[0]?.docs?.[0]
   const inSet = groups.some(g => g.docs.some(d => d.slug === currentSlug.value))
   if (!inSet && first) {
     currentSlug.value = first.slug
-    router.replace({ query: { slug: first.slug } })
+    router.replace({ query: { slug: first.slug, ...(val === 'all' ? {} : { category: val }) } })
     loadDoc(first.slug)
   }
 })
@@ -253,7 +360,7 @@ function generateToc(content) {
     }
     if (inFence) continue
 
-    const match = /^(#{1,3})\s+(.+)$/.exec(line)
+    const match = /^(#{1,4})\s+(.+)$/.exec(line)
     if (!match) continue
 
     const level = match[1].length
@@ -306,16 +413,17 @@ function scrollToHash() {
 async function loadDoc(slug) {
   if (!slug) return
   loading.value = true
+  loadError.value = ''
   try {
     const res = await getDoc(slug)
     doc.value = res?.data || res
     toc.value = generateToc(doc.value?.content || '')
+    collapsedSections.value = new Set()
     await nextTick()
     scrollToHash()
   } catch (e) {
     console.error('[Docs] load doc failed:', e)
-    doc.value = null
-    toc.value = []
+    loadError.value = '加载文档失败：' + (e?.message || e)
   } finally {
     loading.value = false
   }
@@ -344,6 +452,90 @@ function onDocChange(slug) {
   router.replace({ query: { slug } })
   loadDoc(slug)
 }
+
+// === 上/下一篇导航（按分组内 order 顺序）===
+const docNav = computed(() => {
+  const flat = groupedDocs.value.flatMap(g => g.docs)
+  const idx = flat.findIndex(d => d.slug === currentSlug.value)
+  if (idx < 0) return { prev: null, next: null }
+  return {
+    prev: flat[idx - 1] || null,
+    next: flat[idx + 1] || null,
+  }
+})
+
+// === 文档元信息（字数估算）===
+const docWordCount = computed(() => {
+  if (!doc.value?.content) return 0
+  const text = doc.value.content
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`]*`/g, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_\-|]/g, '')
+    .trim()
+  return text.length
+})
+
+// === TOC 折叠：按层级嵌套，h2 可展开/收起 ===
+const tocTree = computed(() => {
+  const tree = []
+  const stack = []
+  for (const item of toc.value) {
+    const node = { ...item, children: [] }
+    while (stack.length && stack[stack.length - 1].level >= item.level) stack.pop()
+    if (stack.length) stack[stack.length - 1].children.push(node)
+    else tree.push(node)
+    stack.push(node)
+  }
+  return tree
+})
+const collapsedSections = ref(new Set())
+function toggleTocSection(id) {
+  const s = new Set(collapsedSections.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  collapsedSections.value = s
+}
+const visibleToc = computed(() => {
+  const out = []
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      out.push(n)
+      if (n.children.length && !collapsedSections.value.has(n.id)) walk(n.children)
+    }
+  }
+  walk(tocTree.value)
+  return out
+})
+
+// === 代码块复制按钮（渲染后注入 + 事件委托）===
+watch(renderedHtml, async () => {
+  await nextTick()
+  const root = contentRef.value?.querySelector('.markdown-body')
+  if (!root) return
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.code-copy-btn')) return
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'code-copy-btn'
+    btn.textContent = '复制'
+    pre.appendChild(btn)
+  })
+})
+
+function onContentClick(e) {
+  const btn = e.target.closest?.('.code-copy-btn')
+  if (!btn) return
+  const pre = btn.closest('pre')
+  const text = pre?.querySelector('code')?.textContent || ''
+  if (!text) return
+  navigator.clipboard?.writeText(text).then(() => {
+    btn.textContent = '已复制'
+    setTimeout(() => { btn.textContent = '复制' }, 1500)
+  }).catch(() => { btn.textContent = '复制失败' })
+}
+
+watch(readingMode, (v) => localStorage.setItem('docs_reading_mode', v ? '1' : '0'))
 
 watch(
   () => route.query.slug,
@@ -444,7 +636,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--el-border-color-lighter);
   padding: 8px 12px;
   text-align: left;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 .markdown-body table th {
   background: var(--el-fill-color-light);
@@ -467,6 +660,32 @@ onBeforeUnmount(() => {
   margin: 16px 0;
   border-radius: 6px;
   overflow: hidden;
+  position: relative;
+}
+
+.markdown-body .code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  font-family: var(--el-font-family);
+}
+.markdown-body pre:hover .code-copy-btn {
+  opacity: 1;
+}
+.markdown-body pre .code-copy-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 .markdown-body pre code {
   display: block;
@@ -500,8 +719,8 @@ onBeforeUnmount(() => {
 
 /* 暗色主题适配 */
 html.dark .markdown-body code {
-  background: #2d2d2d;
-  color: #ff79c6;
+  background: var(--el-fill-color-light);
+  color: var(--el-color-primary-light-5);
 }
 html.dark .markdown-body table th {
   background: #2d2d2d;
@@ -541,6 +760,26 @@ html.dark .markdown-body blockquote {
 .docs-toolbar-right {
   display: flex;
   align-items: center;
+}
+
+/* 当前分类指示条 */
+.docs-cat-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 24px;
+  background: var(--el-color-primary-light-9);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  flex-shrink: 0;
+}
+.docs-cat-bar__label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.docs-cat-bar__count {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ============================================================
@@ -592,15 +831,49 @@ html.dark .markdown-body blockquote {
   flex-direction: column;
 }
 
+.toc-row {
+  display: flex;
+  align-items: flex-start;
+  border-left: 3px solid transparent;
+  transition: background 0.15s;
+  position: relative;
+}
+.toc-row:hover {
+  background: var(--el-color-primary-light-9);
+}
+.toc-row--active {
+  background: var(--el-color-primary-light-9);
+  border-left-color: var(--el-color-primary);
+}
+.toc-row--active .toc-item {
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.toc-caret {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  padding-top: 6px;
+  font-size: 10px;
+  transition: transform 0.15s;
+  user-select: none;
+}
+.toc-caret--open {
+  transform: rotate(90deg);
+}
+
 .toc-item {
+  flex: 1;
+  min-width: 0;
   display: block;
-  padding: 5px 16px;
+  padding: 5px 12px;
   color: var(--el-text-color-regular);
   text-decoration: none;
   font-size: 13px;
   line-height: 1.4;
-  border-left: 3px solid transparent;
-  transition: all 0.15s;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -608,19 +881,12 @@ html.dark .markdown-body blockquote {
 }
 
 .toc-item:hover {
-  background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
 }
 
-.toc-item--active {
-  color: var(--el-color-primary);
-  border-left-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  font-weight: 500;
-}
-
-.toc-h2 { padding-left: 28px; }
-.toc-h3 { padding-left: 40px; }
+.toc-h2 { padding-left: 4px; }
+.toc-h3 { padding-left: 20px; }
+.toc-h4 { padding-left: 36px; }
 
 .toc-empty {
   padding: 16px;
@@ -646,5 +912,63 @@ html.dark .markdown-body blockquote {
   height: 100%;
   gap: 16px;
   color: var(--el-text-color-placeholder);
+}
+
+/* 阅读模式：隐藏 TOC 侧边栏 */
+.docs-body--reading .docs-sidebar {
+  display: none;
+}
+
+/* 加载失败提示 */
+.docs-error {
+  margin: 16px 24px 0;
+}
+
+/* 文档元信息条 */
+.doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 960px;
+  margin: 16px auto 0;
+  padding: 0 32px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.doc-meta__group {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 500;
+  font-size: 12px;
+}
+.doc-meta__summary {
+  flex: 1;
+  min-width: 200px;
+  color: var(--el-text-color-regular);
+}
+.doc-meta__count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 上/下一篇导航 */
+.doc-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 32px 40px;
+  font-size: 13px;
+}
+.doc-nav :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+.doc-nav__placeholder {
+  flex: 1;
 }
 </style>
