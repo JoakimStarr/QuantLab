@@ -92,6 +92,11 @@ class SchedulerSettings(SettingsBaseModel):
 class LoggingSettings(SettingsBaseModel):
     dir: str = "logs"
     level: str = "INFO"
+    # 日志定期清理：普通日志轮转备份保留天数（默认 7 天）
+    retention_days: int = 7
+    # error.log 错误日志备份保留天数（更长，保证清理后仍能定位历史错误）
+    error_retention_days: int = 15
+    cleanup_enabled: bool = True
 
 
 class QuantSettings(SettingsBaseModel):

@@ -81,6 +81,7 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.format_exc_info,  # 把 exc_info 元组格式化为可读 traceback（输出到 exception 键）
         _extra_fields_processor,
         _request_id_processor,
         _add_logger_name,
@@ -156,3 +157,116 @@ def set_log_level(level: str) -> None:
         raise ValueError(f"无效的日志级别: {level}")
     logging.getLogger().setLevel(level)
     logging.getLogger(__name__).info("日志级别已调整为: %s", level)
+
+
+# 清理时的备份文件后缀模式 -> 保留天数（普通日志短、错误日志长）
+_CLEANUP_PATTERNS = {
+    "quantlab.log.*": "retention_days",
+    "audit.jsonl.*": "retention_days",
+    "error.log.*": "error_retention_days",
+}
+
+
+def cleanup_old_logs(log_dir: str | Path = None,
+                     retention_days: int = 7,
+                     error_retention_days: int = 15) -> dict:
+    """删除过期的日志轮转备份，保留足够长的错误日志用于定位问题。
+
+    规则：
+    - 只清理带轮转后缀的备份文件（quantlab.log.1、error.log.2 等），
+      当前正在写入的文件（无后缀）永不删除
+    - 普通日志（quantlab.log/audit.jsonl 备份）保留 retention_days 天
+    - 错误日志（error.log 备份）保留 error_retention_days 天（更长），
+      保证普通日志清掉后仍能回溯历史错误与 traceback
+    - 错误日志内容同时可由 /logs API 按 level=ERROR 检索
+    - 用 `{log_dir}/.cleanup.lock` 文件锁防并发：多实例/重复触发时
+      后到的实例直接跳过，避免并发删除
+
+    Args:
+        log_dir: 日志目录（默认使用 setup_logging 设置的全局目录）
+        retention_days: 普通日志备份保留天数
+        error_retention_days: 错误日志备份保留天数
+
+    Returns:
+        dict: {deleted: [文件名], freed_bytes: int, deleted_count: int,
+               skipped: bool}（skipped=True 表示有其他实例正在清理）
+    """
+    import time
+
+    log_path = Path(log_dir) if log_dir else log_dir_global()
+    if not log_path.is_dir():
+        return {"deleted": [], "freed_bytes": 0, "deleted_count": 0, "skipped": False}
+
+    lock = _acquire_cleanup_lock(log_path)
+    if lock is None:
+        logging.getLogger(__name__).warning("日志清理被跳过：其他实例正在执行（%s）", log_path)
+        return {"deleted": [], "freed_bytes": 0, "deleted_count": 0, "skipped": True}
+    try:
+        now = time.time()
+        deleted: list[str] = []
+        freed_bytes = 0
+        for pattern, key in _CLEANUP_PATTERNS.items():
+            keep_days = error_retention_days if key == "error_retention_days" else retention_days
+            for fp in sorted(log_path.glob(pattern)):
+                try:
+                    age_days = (now - fp.stat().st_mtime) / 86400.0
+                except OSError:
+                    continue
+                if age_days > keep_days:
+                    try:
+                        freed_bytes += fp.stat().st_size
+                        fp.unlink()
+                        deleted.append(str(fp.name))
+                    except OSError:
+                        continue
+        if deleted:
+            logging.getLogger(__name__).info(
+                "日志清理: 删除 %d 个过期备份，释放 %.2f MB: %s",
+                len(deleted), freed_bytes / 1048576.0, ",".join(deleted))
+        return {"deleted": deleted, "freed_bytes": freed_bytes,
+                "deleted_count": len(deleted), "skipped": False}
+    finally:
+        _release_cleanup_lock(lock)
+
+
+def _acquire_cleanup_lock(log_path: Path):
+    """获取清理互斥锁（非阻塞 flock）。返回文件对象，失败返回 None。
+
+    多实例部署时防止两个进程同时删除同一批文件。
+    """
+    try:
+        import fcntl
+    except ImportError:  # 非 POSIX 平台（如 Windows）退化为无锁
+        return None
+    lock_path = log_path / ".cleanup.lock"
+    try:
+        f = open(lock_path, "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        try:
+            if "f" in locals():
+                f.close()
+        except OSError:
+            pass
+        return None
+
+
+def _release_cleanup_lock(f) -> None:
+    """释放清理锁并删除锁文件。"""
+    try:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_UN)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        f.close()
+        if f.name and Path(f.name).exists():
+            Path(f.name).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def log_dir_global() -> Path:
+    """返回当前日志目录（兼容未走 setup_logging 的调用）。"""
+    return globals().get("log_dir", Path("logs"))

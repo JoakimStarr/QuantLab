@@ -57,6 +57,30 @@ async def cleanup_task():
     logger.info("数据归档清理任务完成")
 
 
+async def log_cleanup_task():
+    """日志文件定期清理：每天 03:30 删除过期的轮转备份。
+
+    规则（config.logging）：
+    - quantlab.log / audit.jsonl 的轮转备份保留 retention_days 天（默认 7）
+    - error.log 的轮转备份保留 error_retention_days 天（默认 15，更长），
+      保证普通日志清理后仍可定位历史错误
+    """
+    from app.core.config import settings
+    from app.core.logging_config import cleanup_old_logs
+
+    if not settings.logging.cleanup_enabled:
+        return
+    import asyncio
+
+    result = await asyncio.to_thread(
+        cleanup_old_logs, None,
+        settings.logging.retention_days,
+        settings.logging.error_retention_days,
+    )
+    logger.info("日志清理完成: 删除 %d 个，释放 %.2f MB",
+                result["deleted_count"], result["freed_bytes"] / 1048576.0)
+
+
 async def start_scheduler():
     from app.services.task.update_service import register_scheduled_jobs
     register_scheduled_jobs(scheduler)
@@ -66,6 +90,13 @@ async def start_scheduler():
         hour=3, minute=0, day_of_week="sun",
         id="data_cleanup", replace_existing=True,
         name="数据库归档清理",
+    )
+    # 日志文件定期清理：每天 03:30（普通日志 7 天 / 错误日志 15 天）
+    scheduler.add_job(
+        log_cleanup_task, "cron",
+        hour=3, minute=30,
+        id="log_cleanup", replace_existing=True,
+        name="日志文件定期清理",
     )
     scheduler.start()
 

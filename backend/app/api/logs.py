@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
-# 允许查询的日志文件白名单
-_ALLOWED_FILES = {"app.log", "error.log", "quantlab.log", "api.jsonl", "perf.jsonl", "audit.jsonl"}
+# 允许查询的日志文件白名单（与 logging_config.setup_logging / audit_log 实际产物一致）
+_ALLOWED_FILES = {"error.log", "quantlab.log", "audit.jsonl"}
 
 # 文本日志行正则: "2026-07-28 15:34:23,123 [INFO] app.module: message [req=xxx]"
 _TEXT_LOG_RE = re.compile(
@@ -112,7 +112,8 @@ def _read_log_file(fp: Path, is_json: bool, max_lines: int) -> list[dict]:
                     "timestamp": obj.get("timestamp", ""),
                     "level": obj.get("level", ""),
                     "logger": obj.get("logger", ""),
-                    "message": obj.get("message", ""),
+                    # structlog 默认用 "event" 作为消息键，兼容旧 "message" 键
+                    "message": obj.get("message") or obj.get("event", ""),
                     "request_id": obj.get("request_id", ""),
                     "traceback": obj.get("exception", ""),
                 })

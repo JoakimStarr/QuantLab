@@ -4,6 +4,7 @@
 """
 import logging
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
 from pythonjsonlogger import jsonlogger
 
@@ -13,13 +14,20 @@ logger = logging.getLogger("audit")
 
 
 def _ensure_audit_handler() -> None:
-    """确保 audit logger 有 file handler（懒加载，避免 import 时创建文件）。"""
+    """确保 audit logger 有 file handler（懒加载，避免 import 时创建文件）。
+
+    用 RotatingFileHandler 轮转（10MB × 5），避免单文件无限增长；
+    过期备份由 logging_config.cleanup_old_logs 定期清理。
+    """
     if logger.handlers:
         return
     log_dir = settings.PROJECT_ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(
-        str(log_dir / "audit.jsonl"), encoding="utf-8",
+    handler = RotatingFileHandler(
+        str(log_dir / "audit.jsonl"),
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding="utf-8",
     )
     handler.setFormatter(
         jsonlogger.JsonFormatter(

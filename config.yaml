@@ -40,24 +40,12 @@ data:
   raw_dir: data/raw
 logging:
   dir: logs
-  handlers:
-    api:
-      filename: api.jsonl
-      format: json
-    app:
-      backup_count: 30
-      filename: app.log
-      max_bytes: 10485760
-    audit:
-      filename: audit.jsonl
-      format: json
-    error:
-      filename: error.log
-      level: ERROR
-    perf:
-      filename: perf.jsonl
-      format: json
   level: INFO
+  # 日志定期清理：普通日志(quantlab.log/audit.jsonl)轮转备份保留天数
+  retention_days: 7
+  # 错误日志(error.log)备份保留天数（更长，清理后仍可定位历史错误）
+  error_retention_days: 15
+  cleanup_enabled: true
 mining:
   automl:
     combo_method: lightgbm
