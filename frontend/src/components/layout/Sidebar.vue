@@ -61,6 +61,7 @@ const menuItems = [
   { path: '/quant/factors', title: '因子库', icon: 'Coin' },
   { path: '/quant/factor-compare', title: '因子对比', icon: 'DataLine' },
   { path: '/quant/strategy', title: '策略回测', icon: 'TrendCharts' },
+  { path: '/quant/strategy-library', title: '策略库', icon: 'Collection' },
   { path: '/quant/backtest-compare', title: '回测对比', icon: 'Histogram' },
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },

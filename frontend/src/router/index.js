@@ -46,6 +46,17 @@ const routes = [
         }
       },
       {
+        path: 'quant/strategy-library',
+        name: 'QuantStrategyLibrary',
+        component: () => import('@/views/quant/StrategyLibrary.vue'),
+        meta: {
+          title: '策略库',
+          icon: 'Collection',
+          transition: 'fade-in-up',
+          keepAlive: true
+        }
+      },
+      {
         path: 'quant/mining',
         name: 'Mining',
         component: () => import('@/views/quant/Mining.vue'),

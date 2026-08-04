@@ -7,11 +7,20 @@
         </div>
       </template>
       <template v-else>
-        <div class="kpi-card" v-for="card in kpiCards" :key="card.key">
+        <div
+          class="kpi-card"
+          :class="{ 'kpi-card--clickable': card.to }"
+          v-for="card in kpiCards"
+          :key="card.key"
+          :role="card.to ? 'link' : undefined"
+          :tabindex="card.to ? 0 : undefined"
+          @click="card.to && go(card.to)"
+          @keydown.enter="card.to && go(card.to)"
+        >
           <div class="kpi-card__label">{{ card.label }}</div>
           <div class="kpi-card__value">{{ card.value }}</div>
           <div class="kpi-card__sub">{{ card.sub }}</div>
-          <el-icon class="kpi-card__icon"><component :is="card.icon" /></el-icon>
+          <el-icon class="kpi-card__icon" :style="{ color: card.iconColor }"><component :is="card.icon" /></el-icon>
         </div>
       </template>
     </section>
@@ -24,15 +33,44 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Coin, TrendCharts, MagicStick, DataAnalysis } from '@element-plus/icons-vue'
 import { isToday, isWithinDays } from './utils'
+
+const router = useRouter()
+function go(name) {
+  router.push({ name })
+}
 
 const props = defineProps({
   stats: { type: Object, default: () => ({}) },
   loading: { type: Boolean, default: false },
   dataStatus: { type: Object, default: () => ({}) }
 })
+
+// KPI 数字滚动动画
+const animatedValues = ref({ factor: 0, strategy: 0, mining: 0, backtest: 0 })
+function animate(targets) {
+  const from = { ...animatedValues.value }
+  const duration = 600
+  const start = performance.now()
+  const tick = (now) => {
+    const p = Math.min(1, (now - start) / duration)
+    const e = 1 - Math.pow(1 - p, 3)
+    for (const k of Object.keys(targets)) {
+      animatedValues.value[k] = Math.round(from[k] + (targets[k] - from[k]) * e)
+    }
+    if (p < 1) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+watch(() => ({
+  factor: props.stats?.factorTotal ?? 0,
+  strategy: props.stats?.strategies?.length ?? 0,
+  mining: props.stats?.miningTotal ?? 0,
+  backtest: props.stats?.backtestTotal ?? 0
+}), (targets) => animate(targets), { deep: true, immediate: true })
 
 const kpiCards = computed(() => {
   const s = props.stats || {}
@@ -50,30 +88,38 @@ const kpiCards = computed(() => {
     {
       key: 'factor',
       label: '因子总数',
-      value: s.factorTotal ?? 0,
+      value: animatedValues.value.factor,
       sub: `内置 ${factorBySource.builtin} / LLM ${factorBySource.llm} / 符号 ${factorBySource.symbolic}`,
-      icon: Coin
+      icon: Coin,
+      iconColor: 'var(--primary)',
+      to: 'FactorLibrary'
     },
     {
       key: 'strategy',
       label: '策略数量',
-      value: strategies.length,
+      value: animatedValues.value.strategy,
       sub: `活跃 ${activeStrategies} / 归档 ${archivedStrategies}`,
-      icon: TrendCharts
+      icon: TrendCharts,
+      iconColor: 'var(--success)',
+      to: 'QuantStrategy'
     },
     {
       key: 'mining',
       label: '挖掘任务',
-      value: s.miningTotal ?? 0,
+      value: animatedValues.value.mining,
       sub: `今日 ${todayMining} / 运行中 ${runningMining}`,
-      icon: MagicStick
+      icon: MagicStick,
+      iconColor: 'var(--warning)',
+      to: 'Mining'
     },
     {
       key: 'backtest',
       label: '回测记录',
-      value: s.backtestTotal ?? 0,
+      value: animatedValues.value.backtest,
       sub: `近7日 ${last7dBacktests}`,
-      icon: DataAnalysis
+      icon: DataAnalysis,
+      iconColor: 'var(--danger)',
+      to: 'QuantStrategy'
     }
   ]
 })
@@ -114,6 +160,19 @@ const freshnessText = computed(() => {
   border-radius: 12px;
   padding: 20px;
 }
+.kpi-card--clickable {
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+.kpi-card--clickable:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+.kpi-card--clickable:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 .kpi-card__label { font-size: 14px; color: var(--text-tertiary); }
 .kpi-card__value {
   font-size: 32px; font-weight: 600; color: var(--text-primary);
@@ -122,7 +181,7 @@ const freshnessText = computed(() => {
 .kpi-card__sub { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
 .kpi-card__icon {
   position: absolute; top: 20px; right: 20px;
-  font-size: 20px; color: var(--text-tertiary);
+  font-size: 22px;
 }
 .kpi-freshness {
   display: flex; align-items: center; gap: 12px;

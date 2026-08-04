@@ -5,8 +5,19 @@
         <h2>量化研究看板</h2>
         <p>量化研究全景概览</p>
       </div>
-      <el-button @click="refreshAll" :loading="loading" size="small">刷新</el-button>
+      <div class="dashboard-header__actions">
+        <span v-if="lastTradeDate" class="dashboard-last-update">最近行情 {{ lastTradeDate }}</span>
+        <el-button @click="refreshAll" :loading="loading" size="small">刷新</el-button>
+      </div>
     </header>
+
+    <!-- 加载失败的非阻塞提示条 -->
+    <el-alert
+      v-for="err in loadErrors" :key="err"
+      class="dashboard-alert"
+      :title="err" type="error" :closable="true" show-icon
+      @close="loadErrors = loadErrors.filter(e => e !== err)"
+    />
 
     <!-- 初始加载骨架屏 -->
     <template v-if="initialLoading">
@@ -28,35 +39,39 @@
       <MarketOverview
         :items="overviewItems"
         :selected="selectedIndex"
-        @update:selected="selectedIndex = $event"
+        :loading="overviewLoading"
+        @update:selected="onSelectIndex"
         @run-stock-kline="runStockKline"
       />
-
-      <MacroSnapshot :items="macroItems" />
 
       <KLineChart
         :kline-items="klineItems"
         :indices="indices"
         :selected-index="selectedIndex"
+        :stock-target="stockTarget"
         :selected-period="selectedPeriod"
         :active-indicators="activeIndicators"
         :periods="periods"
         :kline-loading="klineLoading"
         :time-range="timeRange"
         :custom-range="customRange"
-        @update:selected-index="selectedIndex = $event"
+        @update:selected-index="onSelectIndex"
         @update:selected-period="selectedPeriod = $event"
         @update:active-indicators="activeIndicators = $event"
         @update:time-range="timeRange = $event"
         @update:custom-range="customRange = $event"
         @run-stock-kline="runStockKline"
+        @select-stock="onSelectStock"
+        @clear-stock="onClearStock"
       />
 
+      <MacroSnapshot :items="macroItems" :loading="macroLoading" />
+
       <el-row :gutter="16">
-        <el-col :xs="24" :sm="12">
+        <el-col :xs="24" :sm="12" class="dashboard-col">
           <FactorStats :total="factorTotal" :by-source="factorBySource" />
         </el-col>
-        <el-col :xs="24" :sm="12">
+        <el-col :xs="24" :sm="12" class="dashboard-col">
           <MiningTasks :tasks="recentMining" :loading="loading" />
         </el-col>
       </el-row>
@@ -98,6 +113,10 @@ const loading = ref(true)
 const initialLoading = ref(true)
 const guideVisible = ref(false)
 const router = useRouter()
+const overviewLoading = ref(false)
+const macroLoading = ref(false)
+const loadErrors = ref([])
+let klineReqId = 0
 
 const factorTotal = ref(0)
 const factorBySource = ref({ builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 })
@@ -110,6 +129,7 @@ const dataStatus = ref({})
 
 const indices = ref([])
 const selectedIndex = ref('SH000300')
+const stockTarget = ref(null)
 const selectedPeriod = ref('1d')
 const klineItems = ref([])
 const overviewItems = ref([])
@@ -166,6 +186,7 @@ function rangeToDates(range, custom) {
 }
 
 async function loadKline() {
+  const reqId = ++klineReqId
   klineLoading.value = true
   try {
     const { start, end } = rangeToDates(timeRange.value, customRange.value)
@@ -173,39 +194,71 @@ async function loadKline() {
     const params = { period: selectedPeriod.value, limit: 500 }
     if (start) params.start_date = start
     if (end) params.end_date = end
-    const res = await getIndexKline(selectedIndex.value, params)
+    const res = await getIndexKline(klineCode.value, params)
+    if (reqId !== klineReqId) return
     klineItems.value = res?.items ?? []
   } catch {
+    if (reqId !== klineReqId) return
     klineItems.value = []
+    pushError('行情数据加载失败')
   } finally {
-    klineLoading.value = false
+    if (reqId === klineReqId) klineLoading.value = false
   }
 }
 
+function pushError(msg) {
+  if (!loadErrors.value.includes(msg)) loadErrors.value.push(msg)
+}
+
 async function loadOverview() {
+  overviewLoading.value = true
   try {
     const res = await getMarketOverview()
     overviewItems.value = res?.items ?? []
   } catch {
     overviewItems.value = []
+    pushError('市场行情数据加载失败')
+  } finally {
+    overviewLoading.value = false
   }
 }
 
-// 宏观指标最新值快照（Dashboard 卡片）
+// 宏观指标最新值快照（Dashboard 卡片），附环比变化（最新值 - 上一条值）
 async function loadMacroSnapshot() {
+  macroLoading.value = true
   try {
     const res = await getMacroIndicators()
     const items = res?.items ?? []
-    // 每个 indicator-field_name 保留最新一条
+    // 每个 indicator-field_name 保留最新两条，用于计算环比变化
     const labelMap = { pmi: '制造业PMI', pmi_nm: '非制造业PMI', cpi: 'CPI同比', ppi: 'PPI同比', gdp: 'GDP同比' }
-    const latest = {}
+    const series = {}
     for (const it of items) {
       const k = `${it.indicator}-${it.field_name}`
-      if (!latest[k] || it.available_date > latest[k].available_date) latest[k] = it
+      if (!series[k]) series[k] = []
+      series[k].push(it)
     }
-    macroItems.value = Object.values(latest).map(it => ({ ...it, label: labelMap[it.field_name] || it.field_name }))
+    macroItems.value = Object.values(series).map(arr => {
+      arr.sort((a, b) => String(a.available_date).localeCompare(String(b.available_date)))
+      const latest = arr[arr.length - 1]
+      const prev = arr[arr.length - 2]
+      const latestVal = Number(latest.value)
+      const prevVal = prev ? Number(prev.value) : null
+      const change = prev != null && prevVal != null && latestVal != null &&
+        !Number.isNaN(latestVal) && !Number.isNaN(prevVal)
+        ? latestVal - prevVal
+        : null
+      return {
+        ...latest,
+        label: labelMap[latest.field_name] || latest.field_name,
+        change,
+        prevDate: prev?.available_date ?? null
+      }
+    })
   } catch {
     macroItems.value = []
+    pushError('宏观数据加载失败')
+  } finally {
+    macroLoading.value = false
   }
 }
 
@@ -239,7 +292,6 @@ async function loadAll() {
     ElMessage.error('加载首页数据失败')
   } finally {
     loading.value = false
-    initialLoading.value = false
   }
 }
 
@@ -249,6 +301,30 @@ function refreshAll() {
   loadKline()
   loadMacroSnapshot()
 }
+
+function onSelectIndex(code) {
+  selectedIndex.value = code
+  stockTarget.value = null
+  const item = overviewItems.value.find(i => i.code === code)
+  if (item) ElMessage.success(`已切换指数：${item.name}`)
+}
+
+function onSelectStock(stock) {
+  if (!stock?.code) return
+  stockTarget.value = { code: stock.code, name: stock.name }
+  ElMessage.success(`已加载个股：${stock.name}`)
+}
+
+function onClearStock() {
+  stockTarget.value = null
+}
+
+const klineCode = computed(() => stockTarget.value?.code || selectedIndex.value)
+
+const lastTradeDate = computed(() => {
+  const arr = klineItems.value
+  return arr.length ? arr[arr.length - 1].date : null
+})
 
 async function runStockKline(query) {
   const stockQuery = String(query || '').trim()
@@ -270,18 +346,18 @@ async function runStockKline(query) {
   }
 }
 
-watch([selectedIndex, selectedPeriod, timeRange, customRange], () => loadKline())
+watch([klineCode, selectedPeriod, timeRange, customRange], () => loadKline())
 
-onMounted(() => {
-  loadAll()
-  loadOverview()
-  loadKline()
-  loadMacroSnapshot()
+onMounted(async () => {
   if (!localStorage.getItem('quantlab_guide_seen')) guideVisible.value = true
+  await Promise.all([loadAll(), loadOverview(), loadKline(), loadMacroSnapshot()])
+  initialLoading.value = false
 })
 </script>
 
 <style scoped lang="scss">
+.dashboard-col { display: flex; }
+.dashboard-col > .section-card { flex: 1; }
 .dashboard-header {
   display: flex;
   align-items: flex-start;
@@ -291,5 +367,11 @@ onMounted(() => {
     h2 { margin: 0; font-size: 24px; font-weight: 600; color: var(--text-primary); }
     p { margin: 4px 0 0; font-size: 14px; color: var(--text-tertiary); }
   }
+  &__actions { display: flex; align-items: center; gap: 12px; }
 }
+.dashboard-last-update {
+  font-size: 12px; color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.dashboard-alert { margin-bottom: 16px; }
 </style>

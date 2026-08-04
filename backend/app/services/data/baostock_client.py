@@ -11,6 +11,12 @@ baostock 优势:
 - 一次返回全市场某日数据 (akshare 需逐只爬)
 - 自带 isST 字段 (解决 ST 股 5% 涨跌停 mask)
 - 自带 peTTM/pbMRQ/psTTM/pcfNcfTTM 估值字段
+
+连接生命周期约定（重要，防止账号被 baostock 风控拉黑）:
+- baostock 对"同一 IP 同时在线连接数 / 登录频率"有限制，未登出即被杀会泄漏服务端会话。
+- 爬取进程（app.services.data.sync_worker）必须用 ``baostock_session()`` 上下文包裹整个
+  爬取流程：进入时 login，退出时 finally 必然 logout，配合 worker 的 SIGTERM handler，
+  保证"无论如何先 logout 再退出进程"。SIGKILL 无法拦截，但由服务端超时自动回收兜底。
 """
 import asyncio
 import atexit
@@ -40,18 +46,53 @@ def _ensure_login():
         _logged_in = True
 
 
-def _logout():
-    """登出（atexit 注册）。"""
+def ensure_logout():
+    """幂等登出：仅在已登录时调用 bs.logout()，线程安全。
+
+    由爬取进程在 finally / 信号 handler 中调用，确保退出进程前释放服务端会话。
+    """
     global _logged_in
     with _login_lock:
-        if _logged_in:
-            import baostock as bs
+        if not _logged_in:
+            return
+        import baostock as bs
+        try:
             bs.logout()
+        except Exception as e:
+            logger.warning("baostock logout 异常: %s", e)
+        finally:
             _logged_in = False
             logger.info("baostock logout OK")
 
 
+def _logout():
+    """登出（atexit 注册，兜底）。"""
+    ensure_logout()
+
+
 atexit.register(_logout)
+
+
+class baostock_session:
+    """baostock 登录会话上下文管理器。
+
+    用法（爬取进程入口）::
+
+        with baostock_session():
+            await run_baostock_backfill(...)   # 整个爬取流程
+
+    - __enter__: 幂等登录
+    - __exit__: **无条件** logout（正常/异常/被信号中断都会执行），
+      保证退出进程前连接已归还服务端。
+    """
+
+    def __enter__(self):
+        _ensure_login()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        ensure_logout()
+        return False
 
 
 async def _run_sync(func, *args, **kwargs):

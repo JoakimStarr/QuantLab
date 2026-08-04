@@ -1,5 +1,5 @@
 <template>
-  <SectionCard title="因子衰减告警">
+  <SectionCard title="因子衰减告警" collapsible>
     <template #extra>
       <el-button link type="primary" size="small" :loading="checking" @click="runCheck">检测衰减</el-button>
     </template>
@@ -118,7 +118,7 @@ onUnmounted(() => {
 }
 .decay-badge {
   display: inline-block; min-width: 24px; padding: 2px 8px;
-  border-radius: 10px; background: rgba(210, 69, 69, 0.12); color: var(--danger);
+  border-radius: 10px; background: var(--danger-soft); color: var(--danger);
   font-weight: 600; text-align: center; font-size: 13px;
 }
 .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -127,7 +127,7 @@ onUnmounted(() => {
   display: inline-block; padding: 2px 8px; border-radius: 4px;
   font-size: 12px; font-weight: 500;
 }
-.badge--danger { color: var(--danger); background: rgba(210, 69, 69, 0.1); }
+.badge--danger { color: var(--danger); background: var(--danger-soft); }
 .decay-table :deep(.el-table) {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;

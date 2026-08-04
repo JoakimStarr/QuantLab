@@ -110,6 +110,10 @@ import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { deepAnalysis } from '@/api/quant'
+import { chartTheme, quantileGradient } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 
 const route = useRoute()
 const router = useRouter()
@@ -126,10 +130,19 @@ const icWindow = 60
 const loading = ref(false)
 const result = ref(null)
 
-// 配色（参考 BacktestCompare）
-const colors = ['#1f4ba0', '#1f9d6b', '#d24545', '#c8801c', '#2f7dc2', '#9333ea', '#0891b2', '#be185d']
+// 配色（语义色走 CSS token，随主题切换；后续为扩展调色板）
+const colors = [
+  chartTheme.primary(),
+  chartTheme.success(),
+  chartTheme.danger(),
+  chartTheme.warning(),
+  chartTheme.info(),
+  chartTheme.palette(6),
+  chartTheme.palette(7),
+  chartTheme.palette(8),
+]
 // Q1（红）→ Q5（绿）渐变，最多支持 10 分组
-const quantileColors = ['#d03b3b', '#e8853a', '#d4b73a', '#7ab83a', '#2a9d4a', '#1f9d6b', '#1f7a4a', '#155f3a', '#0e4a2e', '#08351f']
+const quantileColors = quantileGradient
 
 // === 数据解析（兼容多种后端结构） ===
 const summary = computed(() => result.value?.summary || {})
@@ -259,6 +272,7 @@ const statCards = computed(() => {
 // === 图表配置 ===
 // IC 时序：日 IC 浅色 + 60 日均线深色 + 0 轴参考线
 const icTimeseriesOption = computed(() => {
+  void themeRev.value
   const { dates, ic } = icTimeseries.value
   const win = icWindow
   const ma = []
@@ -269,20 +283,21 @@ const icTimeseriesOption = computed(() => {
   }
   return {
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, data: ['日 IC', win + '日均线'], textStyle: { color: '#5b6b85' } },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 0, data: ['日 IC', win + '日均线'], textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true } },
-    yAxis: { type: 'value', name: 'IC', scale: true },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: 'IC', scale: true, axisLabel: { color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series: [
       {
         name: '日 IC',
         type: 'line',
         data: ic,
         showSymbol: false,
-        lineStyle: { width: 1, color: '#9db4d4' },
-        itemStyle: { color: '#9db4d4' },
-        markLine: { silent: true, symbol: 'none', lineStyle: { color: '#909399', type: 'dashed' }, data: [{ yAxis: 0 }] }
+        lineStyle: { width: 1, color: chartTheme.line() },
+        itemStyle: { color: chartTheme.line() },
+        markLine: { silent: true, symbol: 'none', lineStyle: { color: chartTheme.neutral(), type: 'dashed' }, data: [{ yAxis: 0 }] }
       },
       {
         name: win + '日均线',
@@ -299,6 +314,7 @@ const icTimeseriesOption = computed(() => {
 
 // IC 分布直方图：markLine 标均值
 const icDistOption = computed(() => {
+  void themeRev.value
   const { bins, counts } = icDistribution.value
   const centers = bins.map(binCenter)
   const allNumeric = centers.length > 0 && centers.every(c => !Number.isNaN(c))
@@ -308,9 +324,10 @@ const icDistOption = computed(() => {
     const data = centers.map((c, i) => [c, counts[i]])
     return {
       tooltip: { trigger: 'axis' },
+      textStyle: { color: chartTheme.axisText() },
       grid: { left: '3%', right: '4%', bottom: '10%', top: 30, containLabel: true },
-      xAxis: { type: 'value', name: 'IC' },
-      yAxis: { type: 'value', name: '频次' },
+      xAxis: { type: 'value', name: 'IC', axisLabel: { color: chartTheme.axisText() } },
+      yAxis: { type: 'value', name: '频次', axisLabel: { color: chartTheme.axisText() } },
       series: [{
         ...base,
         data,
@@ -325,15 +342,17 @@ const icDistOption = computed(() => {
   }
   return {
     tooltip: { trigger: 'axis' },
+    textStyle: { color: chartTheme.axisText() },
     grid: { left: '3%', right: '4%', bottom: '10%', top: 30, containLabel: true },
-    xAxis: { type: 'category', data: bins.map(String) },
-    yAxis: { type: 'value', name: '频次' },
+    xAxis: { type: 'category', data: bins.map(String), axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '频次', axisLabel: { color: chartTheme.axisText() } },
     series: [{ ...base, data: counts }]
   }
 })
 
 // 分层累计收益：Q1-Q5 渐变 + 多空黑色粗线，tooltip 联动
 const quantileOption = computed(() => {
+  void themeRev.value
   const { dates, groups, longShort } = quantileReturns.value
   const n = nGroups.value
   const series = []
@@ -355,21 +374,23 @@ const quantileOption = computed(() => {
     type: 'line',
     data: longShort,
     showSymbol: false,
-    lineStyle: { width: 2.5, color: '#111111' },
-    itemStyle: { color: '#111111' }
+    lineStyle: { width: 2.5, color: chartTheme.textPrimary() },
+    itemStyle: { color: chartTheme.textPrimary() }
   })
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true } },
-    yAxis: { type: 'value', name: '净值', scale: true },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '净值', scale: true, axisLabel: { color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series
   }
 })
 // 换手率曲线：bar + markLine 平均换手率
 const turnoverOption = computed(() => {
+  void themeRev.value
   const { dates, turnover } = turnoverCurve.value
   const valid = turnover.filter(v => !Number.isNaN(v))
   const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0
@@ -388,9 +409,9 @@ const turnoverOption = computed(() => {
       }
     },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 30, containLabel: true },
-    xAxis: { type: 'category', data: dates, axisLabel: { hideOverlap: true } },
-    yAxis: { type: 'value', name: '换手率%', axisLabel: { formatter: '{value}%' } },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '换手率%', axisLabel: { formatter: '{value}%', color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series: [{
       name: '换手率',
       type: 'bar',
@@ -408,6 +429,7 @@ const turnoverOption = computed(() => {
 
 // IC 衰减曲线：折线 + markArea 标 IC>0.03 区间
 const decayOption = computed(() => {
+  void themeRev.value
   const { lags, ic } = decay.value
   const data = lags.map((l, i) => [l, ic[i]])
   const areas = []
@@ -440,13 +462,13 @@ const decayOption = computed(() => {
         silent: true,
         symbol: 'none',
         data: [
-          { yAxis: 0, lineStyle: { color: '#909399', type: 'dashed' } },
+          { yAxis: 0, lineStyle: { color: chartTheme.neutral(), type: 'dashed' } },
           { yAxis: 0.03, lineStyle: { color: colors[1], type: 'dashed' }, label: { formatter: 'IC=0.03' } }
         ]
       },
       markArea: {
         silent: true,
-        itemStyle: { color: 'rgba(31, 157, 107, 0.12)' },
+        itemStyle: { color: chartTheme.successSoft() },
         data: areas
       }
     }]

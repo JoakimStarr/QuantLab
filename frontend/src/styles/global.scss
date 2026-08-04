@@ -171,10 +171,10 @@ img {
 .text-tertiary { color: var(--text-tertiary); }
 .text-placeholder { color: var(--text-placeholder); }
 
-// Spacing - Margin
+// Spacing - Margin（数值类工具类均按 4px 基数对齐 --space-* token）
 .mt-4 { margin-top: var(--space-xs); }
 .mt-8 { margin-top: var(--space-sm); }
-.mt-12 { margin-top: var(--space-sm); }
+.mt-12 { margin-top: var(--space-12); }
 .mt-16 { margin-top: var(--space-md); }
 .mt-24 { margin-top: var(--space-lg); }
 .mt-32 { margin-top: var(--space-xl); }
@@ -191,7 +191,7 @@ img {
 
 .ml-4 { margin-left: var(--space-xs); }
 .ml-8 { margin-left: var(--space-sm); }
-.ml-12 { margin-left: var(--space-sm); }
+.ml-12 { margin-left: var(--space-12); }
 .ml-16 { margin-left: var(--space-md); }
 
 // Spacing - Padding
@@ -244,7 +244,7 @@ img {
 // Gap
 .gap-4 { gap: var(--space-xs); }
 .gap-8 { gap: var(--space-sm); }
-.gap-12 { gap: var(--space-sm); }
+.gap-12 { gap: var(--space-12); }
 .gap-16 { gap: var(--space-md); }
 .gap-24 { gap: var(--space-lg); }
 .gap-32 { gap: var(--space-xl); }
@@ -340,230 +340,254 @@ img {
 .opacity-75 { opacity: 0.75; }
 .opacity-100 { opacity: 1; }
 
-// === Element Plus Component Overrides ===
+/* === Element Plus Component Overrides ===
+   说明：统一用 #app / body 前缀提升优先级以替代 !important。
+   EP 默认类为 .el-*（0,1,0）；#app .el-*（1,0,1）与 body .el-*（0,1,1）均可稳定胜出。
+   dialog/popper/dropdown/select/loading 等会被 teleport 到 body，故用 body 前缀。 */
 
-// Cards
-.el-card {
-  border-radius: var(--radius-md) !important;
-  border: 1px solid var(--border) !important;
-  background-color: var(--bg-card) !important;
-  transition: box-shadow var(--duration-normal) var(--ease-in-out),
-              transform var(--duration-normal) var(--ease-in-out) !important;
+#app {
+  // Cards
+  .el-card {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background-color: var(--bg-card);
+    transition: box-shadow var(--duration-normal) var(--ease-in-out),
+                transform var(--duration-normal) var(--ease-in-out);
 
-  @media (hover: hover) {
-    &:hover {
-      box-shadow: var(--shadow-md);
+    @media (hover: hover) {
+      &:hover {
+        box-shadow: var(--shadow-md);
+      }
     }
   }
-}
 
-.el-card.is-always-shadow,
-.el-card.is-hover-shadow {
-  box-shadow: var(--shadow-card) !important;
-}
-
-// Buttons
-.el-button {
-  border-radius: var(--radius-sm) !important;
-  font-weight: var(--font-weight-medium) !important;
-  transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-  &:active {
-    transform: scale(0.97);
-  }
-}
-
-.el-button--primary {
-  --el-button-bg-color: var(--primary);
-  --el-button-border-color: var(--primary);
-  --el-button-hover-bg-color: var(--primary-light);
-  --el-button-hover-border-color: var(--primary-light);
-  --el-button-active-bg-color: var(--primary-dark);
-  --el-button-active-border-color: var(--primary-dark);
-}
-
-.el-button--success {
-  --el-button-bg-color: var(--success);
-  --el-button-border-color: var(--success);
-  --el-button-hover-bg-color: var(--success-light);
-  --el-button-hover-border-color: var(--success-light);
-  --el-button-active-bg-color: var(--success-dark);
-  --el-button-active-border-color: var(--success-dark);
-}
-
-.el-button--warning {
-  --el-button-bg-color: var(--warning);
-  --el-button-border-color: var(--warning);
-  --el-button-hover-bg-color: var(--warning-light);
-  --el-button-hover-border-color: var(--warning-light);
-  --el-button-active-bg-color: var(--warning-dark);
-  --el-button-active-border-color: var(--warning-dark);
-}
-
-.el-button--danger {
-  --el-button-bg-color: var(--danger);
-  --el-button-border-color: var(--danger);
-  --el-button-hover-bg-color: var(--danger-light);
-  --el-button-hover-border-color: var(--danger-light);
-  --el-button-active-bg-color: var(--danger-dark);
-  --el-button-active-border-color: var(--danger-dark);
-}
-
-.el-button--info {
-  --el-button-bg-color: var(--info);
-  --el-button-border-color: var(--info);
-  --el-button-hover-bg-color: var(--info-light);
-  --el-button-hover-border-color: var(--info-light);
-  --el-button-active-bg-color: var(--info-dark);
-  --el-button-active-border-color: var(--info-dark);
-}
-
-// Tags
-.el-tag {
-  border-radius: var(--radius-sm) !important;
-  font-weight: var(--font-weight-medium) !important;
-}
-
-// Tables
-.el-table {
-  border-radius: var(--radius-sm) !important;
-  background-color: var(--bg-card) !important;
-
-  &::before {
-    background-color: var(--border) !important;
-  }
-}
-
-.el-table th.el-table__cell {
-  background-color: var(--bg-secondary) !important;
-  font-weight: var(--font-weight-semibold) !important;
-  color: var(--text-secondary) !important;
-}
-
-.el-table td.el-table__cell {
-  background-color: var(--bg-card) !important;
-}
-
-.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: var(--bg-secondary) !important;
-}
-
-.el-table tr:hover > td.el-table__cell {
-  background-color: var(--bg-hover) !important;
-}
-
-// Inputs
-.el-input__wrapper {
-  border-radius: var(--radius-sm) !important;
-  background-color: var(--bg-card) !important;
-  box-shadow: 0 0 0 1px var(--border) inset !important;
-  transition: box-shadow var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    box-shadow: 0 0 0 1px var(--text-tertiary) inset !important;
-  }
-}
-
-.el-input.is-focus .el-input__wrapper {
-  box-shadow: 0 0 0 1px var(--primary) inset !important;
-}
-
-.el-input__inner {
-  color: var(--text-primary) !important;
-
-  &::placeholder {
-    color: var(--text-placeholder) !important;
-  }
-}
-
-// Menus
-.el-menu {
-  border-right: none !important;
-  background-color: transparent !important;
-}
-
-.el-menu-item {
-  color: var(--text-secondary) !important;
-  transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    background-color: var(--bg-hover) !important;
-    color: var(--text-primary) !important;
+  .el-card.is-always-shadow,
+  .el-card.is-hover-shadow {
+    box-shadow: var(--shadow-card);
   }
 
-  &.is-active {
-    color: var(--primary) !important;
-    background-color: rgba(var(--primary-rgb), 0.1) !important;
+  // Tags
+  .el-tag {
+    border-radius: var(--radius-sm);
+    font-weight: var(--font-weight-medium);
   }
-}
 
-// Progress bars
-.el-progress-bar__outer {
-  border-radius: var(--radius-full) !important;
-  background-color: var(--bg-tertiary) !important;
-}
+  // Tables
+  .el-table {
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-card);
 
-.el-progress-bar__inner {
-  border-radius: var(--radius-full) !important;
-  transition: width var(--duration-slow) var(--ease-out-expo) !important;
-}
+    &::before {
+      background-color: var(--border);
+    }
+  }
 
-// Descriptions
-.el-descriptions__title {
-  font-weight: var(--font-weight-semibold) !important;
-  color: var(--text-primary) !important;
-}
+  .el-table th.el-table__cell {
+    background-color: var(--bg-secondary);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-secondary);
+  }
 
-.el-descriptions__label {
-  color: var(--text-secondary) !important;
-  font-weight: var(--font-weight-medium) !important;
-}
+  .el-table td.el-table__cell {
+    background-color: var(--bg-card);
+  }
 
-.el-descriptions__content {
-  color: var(--text-primary) !important;
-}
+  .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+    background-color: var(--bg-secondary);
+  }
 
-.el-descriptions--border .el-descriptions__cell {
-  border-color: var(--border) !important;
-}
+  .el-table tr:hover > td.el-table__cell {
+    background-color: var(--bg-hover);
+  }
 
-// Skeleton loading
-.el-skeleton {
-  background-color: transparent !important;
-}
+  // Inputs
+  .el-input__wrapper {
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-card);
+    box-shadow: 0 0 0 1px var(--border) inset;
+    transition: box-shadow var(--duration-fast) var(--ease-in-out);
 
-.el-skeleton__item {
-  border-radius: var(--radius-sm) !important;
-  background-color: var(--bg-tertiary) !important;
-}
+    &:hover {
+      box-shadow: 0 0 0 1px var(--text-tertiary) inset;
+    }
+  }
 
-.el-skeleton__item::after {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent) !important;
-}
+  .el-input.is-focus .el-input__wrapper {
+    box-shadow: 0 0 0 1px var(--primary) inset;
+  }
 
-// Dialogs/Modals
-.el-dialog {
-  border-radius: var(--radius-lg) !important;
-  background-color: var(--bg-card) !important;
-}
+  .el-input__inner {
+    color: var(--text-primary);
 
-.el-dialog__header {
-  border-bottom: 1px solid var(--border) !important;
-}
+    &::placeholder {
+      color: var(--text-placeholder);
+    }
+  }
 
-.el-dialog__title {
-  color: var(--text-primary) !important;
-  font-weight: var(--font-weight-semibold) !important;
-}
+  // Menus
+  .el-menu {
+    border-right: none;
+    background-color: transparent;
+  }
 
-.el-dialog__body {
-  color: var(--text-primary) !important;
-}
+  .el-menu-item {
+    color: var(--text-secondary);
+    transition: all var(--duration-fast) var(--ease-in-out);
 
-// Message boxes
-.el-message-box {
-  border-radius: var(--radius-lg) !important;
-  background-color: var(--bg-card) !important;
+    &:hover {
+      background-color: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    &.is-active {
+      color: var(--primary);
+      background-color: rgba(var(--primary-rgb), 0.1);
+    }
+  }
+
+  // Progress bars
+  .el-progress-bar__outer {
+    border-radius: var(--radius-full);
+    background-color: var(--bg-tertiary);
+  }
+
+  .el-progress-bar__inner {
+    border-radius: var(--radius-full);
+    transition: width var(--duration-slow) var(--ease-out-expo);
+  }
+
+  // Descriptions
+  .el-descriptions__title {
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+  }
+
+  .el-descriptions__label {
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .el-descriptions__content {
+    color: var(--text-primary);
+  }
+
+  .el-descriptions--border .el-descriptions__cell {
+    border-color: var(--border);
+  }
+
+  // Skeleton loading
+  .el-skeleton {
+    background-color: transparent;
+  }
+
+  .el-skeleton__item {
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-tertiary);
+  }
+
+  .el-skeleton__item::after {
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  }
+
+  // Pagination
+  .el-pagination {
+    .el-pager li {
+      background-color: var(--bg-card);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      transition: all var(--duration-fast) var(--ease-in-out);
+
+      &:hover {
+        color: var(--primary);
+      }
+
+      &.is-active {
+        background-color: var(--primary);
+        color: var(--text-inverse);
+      }
+    }
+
+    .btn-prev,
+    .btn-next {
+      background-color: var(--bg-card);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      transition: all var(--duration-fast) var(--ease-in-out);
+
+      &:hover {
+        color: var(--primary);
+        background-color: var(--bg-hover);
+      }
+    }
+  }
+
+  // Breadcrumb
+  .el-breadcrumb__inner,
+  .el-breadcrumb__separator {
+    color: var(--text-secondary);
+  }
+
+  .el-breadcrumb__inner a,
+  .el-breadcrumb__inner.is-link {
+    color: var(--text-secondary);
+    transition: color var(--duration-fast) var(--ease-in-out);
+
+    &:hover {
+      color: var(--primary);
+    }
+  }
+
+  // Form items
+  .el-form-item__label {
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  // Switch
+  .el-switch {
+    --el-switch-off-color: var(--bg-tertiary);
+    --el-switch-on-color: var(--primary);
+  }
+
+  // Tabs
+  .el-tabs__item {
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-medium);
+    transition: all var(--duration-fast) var(--ease-in-out);
+
+    &:hover {
+      color: var(--text-primary);
+    }
+
+    &.is-active {
+      color: var(--primary);
+    }
+  }
+
+  .el-tabs__active-bar {
+    background-color: var(--primary);
+  }
+
+  // Dividers
+  .el-divider {
+    border-color: var(--border);
+  }
+
+  // Badges
+  .el-badge__content {
+    background-color: var(--danger);
+    border-radius: var(--radius-full);
+  }
+
+  // Empty state
+  .el-empty__description {
+    color: var(--text-secondary);
+  }
+
+  // Tooltip trigger
+  .el-tooltip__trigger {
+    outline: none;
+  }
 }
 
 // Code blocks & inline code（解决 monospace 文本在白底白字 / 暗底深字的问题）
@@ -593,249 +617,155 @@ pre {
   line-height: var(--line-height-normal);
 }
 
-// Tooltips
-.el-tooltip__trigger {
-  outline: none !important;
-}
+// ===== 会被 teleport 到 body 的组件（dialog/popper/dropdown/message-box/loading） =====
+// 按钮可在普通页面与弹窗内出现，故一并放 body，保证两处一致。
+body {
+  // Buttons
+  .el-button {
+    border-radius: var(--radius-sm);
+    font-weight: var(--font-weight-medium);
+    transition: all var(--duration-fast) var(--ease-in-out);
 
-.el-popper {
-  border-radius: var(--radius-md) !important;
-  background-color: var(--bg-card) !important;
-  border: 1px solid var(--border) !important;
-  // 关键：tooltip/popper 内容文字色必须随主题走
-  // 浅色主题默认继承 Element Plus #303133 没问题，
-  // 但暗色主题（--bg-card: #161f33 深色）下若不显式设置，会变成深底深字。
-  color: var(--text-primary) !important;
-}
-
-// el-tooltip 内部 popper 容器及内容
-.el-tooltip__popper,
-.el-popper.is-light,
-.el-popper.is-dark {
-  color: var(--text-primary) !important;
-}
-
-// 暗色主题专属：深色背景上字色更亮
-:root.dark .el-popper,
-:root.dark .el-tooltip__popper {
-  color: var(--text-primary) !important;
-}
-
-// Dropdowns
-.el-dropdown-menu {
-  border-radius: var(--radius-md) !important;
-  background-color: var(--bg-card) !important;
-  border: 1px solid var(--border) !important;
-  box-shadow: var(--shadow-lg) !important;
-}
-
-.el-dropdown-menu__item {
-  color: var(--text-primary) !important;
-  transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    background-color: var(--bg-hover) !important;
-    color: var(--primary) !important;
-  }
-}
-
-// Select dropdown
-.el-select-dropdown {
-  border-radius: var(--radius-md) !important;
-  background-color: var(--bg-card) !important;
-  border: 1px solid var(--border) !important;
-  box-shadow: var(--shadow-lg) !important;
-}
-
-.el-select-dropdown__item {
-  color: var(--text-primary) !important;
-  transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    background-color: var(--bg-hover) !important;
-  }
-
-  &.selected {
-    color: var(--primary) !important;
-    font-weight: var(--font-weight-medium) !important;
-  }
-}
-
-// Loading spinner
-.el-loading-mask {
-  background-color: rgba(255, 255, 255, 0.9) !important;
-}
-
-:root.dark .el-loading-mask {
-  background-color: rgba(15, 23, 42, 0.9) !important;
-}
-
-// Pagination
-.el-pagination {
-  .el-pager li {
-    background-color: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    border-radius: var(--radius-sm) !important;
-    transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-    &:hover {
-      color: var(--primary) !important;
-    }
-
-    &.is-active {
-      background-color: var(--primary) !important;
-      color: var(--text-inverse) !important;
+    &:active {
+      transform: scale(0.97);
     }
   }
 
-  .btn-prev,
-  .btn-next {
-    background-color: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    border-radius: var(--radius-sm) !important;
-    transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-    &:hover {
-      color: var(--primary) !important;
-      background-color: var(--bg-hover) !important;
-    }
-  }
-}
-
-// Breadcrumb
-.el-breadcrumb__inner,
-.el-breadcrumb__separator {
-  color: var(--text-secondary) !important;
-}
-
-.el-breadcrumb__inner a,
-.el-breadcrumb__inner.is-link {
-  color: var(--text-secondary) !important;
-  transition: color var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    color: var(--primary) !important;
-  }
-}
-
-// Form items
-.el-form-item__label {
-  color: var(--text-secondary) !important;
-  font-weight: var(--font-weight-medium) !important;
-}
-
-// Switch
-.el-switch {
-  --el-switch-off-color: var(--bg-tertiary) !important;
-  --el-switch-on-color: var(--primary) !important;
-}
-
-// Tabs
-.el-tabs__item {
-  color: var(--text-secondary) !important;
-  font-weight: var(--font-weight-medium) !important;
-  transition: all var(--duration-fast) var(--ease-in-out) !important;
-
-  &:hover {
-    color: var(--text-primary) !important;
+  .el-button--primary {
+    --el-button-bg-color: var(--primary);
+    --el-button-border-color: var(--primary);
+    --el-button-hover-bg-color: var(--primary-light);
+    --el-button-hover-border-color: var(--primary-light);
+    --el-button-active-bg-color: var(--primary-dark);
+    --el-button-active-border-color: var(--primary-dark);
   }
 
-  &.is-active {
-    color: var(--primary) !important;
-  }
-}
-
-.el-tabs__active-bar {
-  background-color: var(--primary) !important;
-}
-
-// Dividers
-.el-divider {
-  border-color: var(--border) !important;
-}
-
-// Badges
-.el-badge__content {
-  background-color: var(--danger) !important;
-  border-radius: var(--radius-full) !important;
-}
-
-// Empty state
-.el-empty__description {
-  color: var(--text-secondary) !important;
-}
-
-// Dark theme overrides for Element Plus
-:root.dark {
-  // Inputs
-  .el-input__inner {
-    color: var(--text-primary) !important;
+  .el-button--success {
+    --el-button-bg-color: var(--success);
+    --el-button-border-color: var(--success);
+    --el-button-hover-bg-color: var(--success-light);
+    --el-button-hover-border-color: var(--success-light);
+    --el-button-active-bg-color: var(--success-dark);
+    --el-button-active-border-color: var(--success-dark);
   }
 
-  .el-input__wrapper {
-    background-color: var(--bg-secondary) !important;
-    box-shadow: 0 0 0 1px var(--border) inset !important;
-
-    &:hover {
-      box-shadow: 0 0 0 1px var(--border-dark) inset !important;
-    }
+  .el-button--warning {
+    --el-button-bg-color: var(--warning);
+    --el-button-border-color: var(--warning);
+    --el-button-hover-bg-color: var(--warning-light);
+    --el-button-hover-border-color: var(--warning-light);
+    --el-button-active-bg-color: var(--warning-dark);
+    --el-button-active-border-color: var(--warning-dark);
   }
 
-  .el-input.is-focus .el-input__wrapper {
-    box-shadow: 0 0 0 1px var(--primary) inset !important;
+  .el-button--danger {
+    --el-button-bg-color: var(--danger);
+    --el-button-border-color: var(--danger);
+    --el-button-hover-bg-color: var(--danger-light);
+    --el-button-hover-border-color: var(--danger-light);
+    --el-button-active-bg-color: var(--danger-dark);
+    --el-button-active-border-color: var(--danger-dark);
   }
 
-  // Tables
-  .el-table th.el-table__cell {
-    background-color: var(--bg-secondary) !important;
-    color: var(--text-secondary) !important;
+  .el-button--info {
+    --el-button-bg-color: var(--info);
+    --el-button-border-color: var(--info);
+    --el-button-hover-bg-color: var(--info-light);
+    --el-button-hover-border-color: var(--info-light);
+    --el-button-active-bg-color: var(--info-dark);
+    --el-button-active-border-color: var(--info-dark);
   }
 
-  .el-table td.el-table__cell {
-    background-color: var(--bg-card) !important;
-  }
-
-  .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-    background-color: var(--bg-secondary) !important;
-  }
-
-  .el-table tr:hover > td.el-table__cell {
-    background-color: var(--bg-hover) !important;
-  }
-
-  // Dialogs
+  // Dialogs/Modals
   .el-dialog {
-    background-color: var(--bg-card) !important;
+    border-radius: var(--radius-lg);
+    background-color: var(--bg-card);
   }
 
   .el-dialog__header {
-    border-bottom-color: var(--border) !important;
+    border-bottom: 1px solid var(--border);
   }
 
+  .el-dialog__title {
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .el-dialog__body {
+    color: var(--text-primary);
+  }
+
+  // Message boxes
   .el-message-box {
-    background-color: var(--bg-card) !important;
+    border-radius: var(--radius-lg);
+    background-color: var(--bg-card);
+  }
+
+  // Tooltips/poppers（文字色必须随主题走，否则暗色下深底深字）
+  .el-popper {
+    border-radius: var(--radius-md);
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+  }
+
+  .el-tooltip__popper,
+  .el-popper.is-light,
+  .el-popper.is-dark {
+    color: var(--text-primary);
   }
 
   // Dropdowns
-  .el-dropdown-menu,
+  .el-dropdown-menu {
+    border-radius: var(--radius-md);
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .el-dropdown-menu__item {
+    color: var(--text-primary);
+    transition: all var(--duration-fast) var(--ease-in-out);
+
+    &:hover {
+      background-color: var(--bg-hover);
+      color: var(--primary);
+    }
+  }
+
+  // Select dropdown
   .el-select-dropdown {
-    background-color: var(--bg-card) !important;
-    border-color: var(--border) !important;
+    border-radius: var(--radius-md);
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
   }
 
-  // Skeleton
-  .el-skeleton__item {
-    background-color: var(--bg-tertiary) !important;
+  .el-select-dropdown__item {
+    color: var(--text-primary);
+    transition: all var(--duration-fast) var(--ease-in-out);
+
+    &:hover {
+      background-color: var(--bg-hover);
+    }
+
+    &.selected {
+      color: var(--primary);
+      font-weight: var(--font-weight-medium);
+    }
   }
 
-  // Progress
-  .el-progress-bar__outer {
-    background-color: var(--bg-tertiary) !important;
+  // Loading spinner
+  .el-loading-mask {
+    background-color: rgba(255, 255, 255, 0.9);
   }
 }
 
-/* === Element Plus 暗色主题覆盖 === */
+/* === Element Plus 暗色主题覆盖 ===
+   合并原两套 :root.dark 覆盖，统一走 --el-* 变量注入 + #app/body 作用域，
+   暗色下重复的样式无需再加 !important（:root.dark 前缀优先级已足够）。 */
 :root.dark {
+  // 基础变量覆盖
   --el-color-primary: #4f7fc8;
   --el-bg-color: #161f33;
   --el-bg-color-page: #0e1525;
@@ -850,36 +780,72 @@ pre {
   --el-fill-color-blank: #161f33;
   --el-mask-color: rgba(0, 0, 0, 0.6);
 
-  .el-table {
-    background: var(--el-bg-color);
-    --el-table-bg-color: #161f33;
-    --el-table-tr-bg-color: #161f33;
-    --el-table-header-bg-color: #1f2a40;
-    --el-table-border-color: #243049;
+  #app {
+    .el-input__wrapper,
+    .el-select__wrapper {
+      background-color: var(--bg-secondary);
+      box-shadow: 0 0 0 1px var(--border-dark) inset;
+    }
+
+    .el-input.is-focus .el-input__wrapper {
+      box-shadow: 0 0 0 1px var(--primary) inset;
+    }
+
+    .el-input__inner {
+      color: var(--text-primary);
+    }
+
+    .el-skeleton__item {
+      background-color: var(--bg-tertiary);
+    }
+
+    .el-progress-bar__outer {
+      background-color: var(--bg-tertiary);
+    }
   }
 
-  .el-card {
-    background: var(--el-bg-color);
-    border-color: var(--el-border-color);
-  }
+  body {
+    .el-table {
+      --el-table-bg-color: #161f33;
+      --el-table-tr-bg-color: #161f33;
+      --el-table-header-bg-color: #1f2a40;
+      --el-table-border-color: #243049;
+    }
 
-  .el-dialog {
-    background: var(--el-bg-color-overlay);
-  }
+    .el-button--default {
+      background: var(--el-fill-color);
+      border-color: var(--el-border-color);
+      color: var(--el-text-color-regular);
+    }
 
-  .el-input__wrapper,
-  .el-select__wrapper {
-    background: var(--el-fill-color);
-    box-shadow: 0 0 0 1px var(--el-border-color) inset;
-  }
+    .el-dialog {
+      background-color: var(--bg-card);
+    }
 
-  .el-button--default {
-    background: var(--el-fill-color);
-    border-color: var(--el-border-color);
-    color: var(--el-text-color-regular);
+    .el-dialog__header {
+      border-bottom-color: var(--border);
+    }
+
+    .el-message-box {
+      background-color: var(--bg-card);
+    }
+
+    .el-dropdown-menu,
+    .el-select-dropdown {
+      background-color: var(--bg-card);
+      border-color: var(--border);
+    }
+
+    .el-popper,
+    .el-tooltip__popper {
+      color: var(--text-primary);
+    }
+
+    .el-loading-mask {
+      background-color: rgba(15, 23, 42, 0.9);
+    }
   }
 }
-
 
 /* ===== 增强动画效果 ===== */
 

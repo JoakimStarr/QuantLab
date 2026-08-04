@@ -14,6 +14,33 @@
       </div>
     </header>
 
+    <!-- 指标概览条 -->
+    <section class="factor-overview">
+      <div class="factor-overview__item">
+        <div class="factor-overview__num">{{ factors.length }}</div>
+        <div class="factor-overview__label">因子总数</div>
+      </div>
+      <div class="factor-overview__item factor-overview__item--decay">
+        <div class="factor-overview__num">{{ decayCount }}</div>
+        <div class="factor-overview__label">衰减因子</div>
+      </div>
+      <div class="factor-overview__item">
+        <div class="factor-overview__num">{{ avgIc.toFixed(3) }}</div>
+        <div class="factor-overview__label">平均 IC</div>
+      </div>
+      <div class="factor-overview__cats">
+        <span
+          v-for="c in categoryCounts"
+          :key="c.key"
+          class="factor-overview__cat"
+          :title="`${c.label} ${c.count}`"
+        >
+          <span class="badge" :class="`badge--${c.badge}`">{{ c.label }}</span>
+          <span class="factor-overview__cat-count">{{ c.count }}</span>
+        </span>
+      </div>
+    </section>
+
     <!-- 过滤工具栏 -->
     <section class="filter-toolbar">
       <el-select v-model="filterCategory" class="filter-toolbar__select" placeholder="因子类别">
@@ -25,11 +52,19 @@
         <el-option label="AutoML" value="automl" />
         <el-option label="Alpha158" value="alpha158" />
       </el-select>
-      <el-select v-model="sortByOption" class="filter-toolbar__select">
-        <el-option label="按IC" value="ic" />
-        <el-option label="按RankIC" value="rank_ic" />
-        <el-option label="按ICIR" value="icir" />
+      <el-select v-model="filterStatus" class="filter-toolbar__select filter-toolbar__select--mid" placeholder="因子状态">
+        <el-option label="全部状态" value="" />
+        <el-option label="仅启用" value="active" />
+        <el-option label="仅禁用" value="disabled" />
+        <el-option label="仅衰减" value="decaying" />
       </el-select>
+      <el-input
+        v-model="searchQuery"
+        class="filter-toolbar__search"
+        :prefix-icon="Search"
+        placeholder="搜索名称 / 表达式 / 描述"
+        clearable
+      />
       <div class="filter-toolbar__spacer" />
       <el-button
         type="primary"
@@ -95,9 +130,9 @@
       <div v-loading="neutralizeLoading" style="min-height:200px">
         <el-form-item label="中性化方法" v-if="!neutralizeLoading">
           <el-radio-group v-model="neutralizeMethod" @change="onNeutralizeMethodChange">
-            <el-radio label="market_cap">市值中性化</el-radio>
-            <el-radio label="industry">行业+市值中性化</el-radio>
-            <el-radio label="both">两者</el-radio>
+            <el-radio value="market_cap">市值中性化</el-radio>
+            <el-radio value="industry">行业+市值中性化</el-radio>
+            <el-radio value="both">两者</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-table v-if="neutralizeResult" :data="neutralizeTableData" border style="width:100%">
@@ -109,23 +144,39 @@
         <el-empty v-else-if="!neutralizeLoading" description="暂无中性化结果" :image-size="64" />
       </div>
     </el-dialog>
+
+    <!-- 完整表达式对话框 -->
+    <el-dialog v-model="showExpr" :title="`因子表达式 — ${exprFactor?.name ?? ''}`" width="640px">
+      <div class="expr-viewer">
+        <el-descriptions :column="1" border size="small" class="expr-viewer__meta">
+          <el-descriptions-item label="名称">{{ exprFactor?.name }}</el-descriptions-item>
+          <el-descriptions-item label="类别">{{ categoryLabel(exprFactor?.category) }}</el-descriptions-item>
+        </el-descriptions>
+        <pre class="expr-viewer__code">{{ exprFactor?.expression }}</pre>
+        <p v-if="exprFactor?.description" class="expr-viewer__desc">{{ exprFactor.description }}</p>
+      </div>
+    </el-dialog>
   </PageContainer>
 </template>
 
 <script setup>
 defineOptions({ name: 'FactorLibrary' })
-import { h, ref, computed, onMounted, watch } from 'vue'
+import { h, ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElCheckbox } from 'element-plus/es/components/checkbox/index'
 import { ElButton } from 'element-plus/es/components/button/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
-import { Plus, Refresh, Download, Warning, MagicStick } from '@element-plus/icons-vue'
+import { Plus, Refresh, Download, Warning, MagicStick, Search } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import VChart from 'vue-echarts'
 import { useFactorStore } from '@/stores/factor'
 import { syncQuantData } from '@/api/quant'
 import { seedAlpha158, backfillAlpha158Metrics, getQuantileAnalysis, neutralizeFactor, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
+import { chartTheme, echartPalette as C } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 
 const router = useRouter()
 const factorStore = useFactorStore()
@@ -295,6 +346,7 @@ async function onQuantile(row) {
 }
 
 const quantileChartOption = computed(() => {
+  void themeRev.value
   const r = quantileResult.value
   if (!r) return {}
   const dates = r.dates || []
@@ -319,58 +371,71 @@ const quantileChartOption = computed(() => {
     data: r.long_short_nav || [],
     smooth: true,
     showSymbol: false,
-    lineStyle: { width: 2.5, color: '#8e44ad', type: 'dashed' },
-    itemStyle: { color: '#8e44ad' }
+    lineStyle: { width: 2.5, color: C.grape, type: 'dashed' },
+    itemStyle: { color: C.grape }
   })
   return {
     grid: { top: 40, right: 24, bottom: 30, left: 50 },
     tooltip: { trigger: 'axis' },
-    legend: { top: 4, textStyle: { fontSize: 11 } },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10, hideOverlap: true } },
-    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, formatter: v => Number(v).toFixed(2) } },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 4, textStyle: { fontSize: 11, color: chartTheme.axisText() } },
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10, hideOverlap: true, color: chartTheme.axisText() } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10, formatter: v => Number(v).toFixed(2), color: chartTheme.axisText() } },
     series
   }
 })
 
 // === 前端筛选与排序 ===
 const filterCategory = ref('')
-const sortByOption = ref('ic')   // 下拉框值（ic / rank_ic / icir）
+const filterStatus = ref('')
+const searchQuery = ref('')
 const tableSortBy = ref({ key: 'ic', order: 'desc' })  // el-table-v2 排序状态
 
-// 排序下拉框 <-> 列排序映射
-const sortByMap = {
-  ic: { key: 'ic', order: 'desc' },
-  rank_ic: { key: 'rank_ic', order: 'desc' },
-  icir: { key: 'icir', order: 'desc' },
+// 列头点击排序
+function onColumnSort({ key, order }) {
+  tableSortBy.value = { key: key || '', order: order || 'asc' }
 }
 
-// 下拉框变化 → 驱动 el-table-v2 排序
-watch(sortByOption, (val) => {
-  const cfg = sortByMap[val]
-  if (cfg) {
-    tableSortBy.value = { key: cfg.key, order: cfg.order }
-  }
+// 概览条：衰减数量 / 平均 IC / 各类别计数
+const decayCount = computed(() => Object.values(decayMap.value).filter(Boolean).length)
+const avgIc = computed(() => {
+  const vals = factors.value.map(f => Number(f.ic)).filter(v => !Number.isNaN(v))
+  if (!vals.length) return 0
+  return vals.reduce((a, b) => a + b, 0) / vals.length
+})
+const categoryCounts = computed(() => {
+  const order = ['builtin', 'llm', 'symbolic', 'text', 'automl', 'alpha158']
+  return order
+    .filter(k => categoryMap[k])
+    .map(k => ({
+      key: k,
+      label: categoryMap[k].label,
+      badge: categoryMap[k].badge,
+      count: factors.value.filter(f => f.category === k).length,
+    }))
+    .filter(c => c.count > 0)
 })
 
-// 列头点击排序 → 同步下拉框
-function onColumnSort({ key, order }) {
-  if (!order) {
-    sortByOption.value = ''
-    tableSortBy.value = { key: '', order: 'asc' }
-  } else {
-    const entry = Object.entries(sortByMap).find(
-      ([, v]) => v.key === key && v.order === order
-    )
-    sortByOption.value = entry ? entry[0] : ''
-    tableSortBy.value = { key, order }
-  }
-}
-
-// 筛选 + 排序后的数据
+// 筛选 + 搜索 + 排序后的数据
 const sortedData = computed(() => {
   let list = factors.value
   if (filterCategory.value) {
     list = list.filter((f) => f.category === filterCategory.value)
+  }
+  if (filterStatus.value) {
+    list = list.filter((f) => {
+      if (filterStatus.value === 'active') return f.status === 'active'
+      if (filterStatus.value === 'disabled') return f.status !== 'active'
+      if (filterStatus.value === 'decaying') return !!decayMap.value[f.id]
+      return true
+    })
+  }
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((f) =>
+      [f.name, f.expression, f.description]
+        .some((v) => (v != null ? String(v).toLowerCase().includes(q) : false))
+    )
   }
   const { key, order } = tableSortBy.value
   if (key) {
@@ -386,21 +451,16 @@ const sortedData = computed(() => {
   return list
 })
 
-// === 表达式展开（点击省略的表达式 → 列扩宽显示全文，再点收起）===
-const expandedExprIds = ref(new Set())  // 已展开的因子 id 集合
-
-function toggleExprExpand(rowId) {
-  const next = new Set(expandedExprIds.value)
-  if (next.has(rowId)) {
-    next.delete(rowId)
-  } else {
-    next.add(rowId)
-  }
-  expandedExprIds.value = next
-}
-
 // === 行选择（el-table-v2 无内置 selection，用自定义 checkbox 列）===
 const selectedKeys = ref([])  // 选中行的 id 列表
+
+// === 完整表达式查看（点击省略的表达式 → 弹窗展示全文，列宽保持稳定）===
+const showExpr = ref(false)
+const exprFactor = ref(null)
+function openExpr(row) {
+  exprFactor.value = row
+  showExpr.value = true
+}
 
 function toggleRowSelection(rowData) {
   const idx = selectedKeys.value.indexOf(rowData.id)
@@ -456,6 +516,20 @@ function numClass(val) {
   return n > 0 ? 'is-positive' : 'is-negative'
 }
 
+// 换手率：小数 → 百分比；阈值着色（过低稳定性存疑 success，过高区分度存疑 warning）
+function turnoverPct(val) {
+  const n = Number(val)
+  if (val == null || Number.isNaN(n)) return '—'
+  return (n * 100).toFixed(1) + '%'
+}
+function turnoverClass(val) {
+  const n = Number(val)
+  if (val == null || Number.isNaN(n)) return ''
+  if (n > 0.5) return 'is-warning'
+  if (n < 0.2) return 'is-success'
+  return ''
+}
+
 // === el-table-v2 列定义 ===
 const columns = computed(() => [
   {
@@ -509,16 +583,24 @@ const columns = computed(() => [
   },
   {
     key: 'expression',
-    title: '表达式（点击展开）',
+    title: '表达式',
     dataKey: 'expression',
-    width: expandedExprIds.value.size > 0 ? 560 : 220,
+    width: 220,
     cellRenderer: ({ cellData, rowData }) => {
-      const expanded = expandedExprIds.value.has(rowData.id)
-      return h('span', {
-        class: ['cell-expr', expanded ? 'cell-expr--expanded' : 'cell-expr--collapsed'].join(' '),
-        title: cellData,
-        onClick: () => toggleExprExpand(rowData.id),
-      }, cellData)
+      const text = cellData || '—'
+      return h(ElTooltip, {
+        placement: 'top-start',
+        effect: 'dark',
+        showArrow: false,
+        content: text,
+        disabled: text.length < 40,
+      }, {
+        default: () => h('span', {
+          class: 'cell-expr',
+          title: '点击查看完整表达式',
+          onClick: () => openExpr(rowData),
+        }, text),
+      })
     },
   },
   {
@@ -562,7 +644,10 @@ const columns = computed(() => [
     width: 100,
     align: 'right',
     sortable: true,
-    cellRenderer: ({ cellData }) => h('span', { class: 'num' }, fmt(cellData, 2)),
+    cellRenderer: ({ cellData }) => {
+      const cls = numClass(cellData)
+      return h('span', { class: ['num', cls].filter(Boolean).join(' ') }, fmt(cellData, 2))
+    },
     headerCellRenderer: () => {
       return h(ElTooltip, { content: METRIC_TIPS.icir, placement: 'top', effect: 'dark' }, {
         default: () => h('span', { class: 'th-tip' }, 'ICIR'),
@@ -576,7 +661,10 @@ const columns = computed(() => [
     width: 100,
     align: 'right',
     sortable: true,
-    cellRenderer: ({ cellData }) => h('span', { class: 'num' }, fmt(cellData, 2)),
+    cellRenderer: ({ cellData }) => {
+      const cls = turnoverClass(cellData)
+      return h('span', { class: ['num', cls].filter(Boolean).join(' ') }, turnoverPct(cellData))
+    },
     headerCellRenderer: () => {
       return h(ElTooltip, { content: METRIC_TIPS.turnover, placement: 'top', effect: 'dark' }, {
         default: () => h('span', { class: 'th-tip' }, '换手'),
@@ -715,6 +803,60 @@ onMounted(loadFactors)
   gap: var(--space-sm);
 }
 
+// 指标概览条
+.factor-overview {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: var(--space-md);
+  flex-wrap: wrap;
+}
+.factor-overview__item {
+  min-width: 120px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  &.factor-overview__item--decay .factor-overview__num { color: var(--danger); }
+}
+.factor-overview__num {
+  font-size: 24px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.factor-overview__label {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+.factor-overview__cats {
+  flex: 1;
+  min-width: 260px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.factor-overview__cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.factor-overview__cat-count {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 // 过滤工具栏
 .filter-toolbar {
   display: flex;
@@ -729,12 +871,19 @@ onMounted(loadFactors)
 .filter-toolbar__select {
   width: 140px;
 }
+.filter-toolbar__select--mid {
+  width: 120px;
+}
+.filter-toolbar__search {
+  width: 260px;
+}
 .filter-toolbar__spacer {
   flex: 1;
 }
 .filter-toolbar__count {
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 // 因子表格卡片
@@ -743,8 +892,8 @@ onMounted(loadFactors)
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  height: calc(100vh - 320px);
-  min-height: 400px;
+  height: calc(100vh - 400px);
+  min-height: 380px;
 }
 .factor-table__skeleton {
   padding: 16px;
@@ -767,18 +916,15 @@ onMounted(loadFactors)
   max-width: 100%;
   min-width: 0;
   cursor: pointer;
-  transition: color 0.15s;
-  &:hover {
-    color: var(--text-primary);
-  }
-}
-// 过长表达式一律单行省略（点击可扩宽列看更多，全文在 hover 提示里）
-.cell-expr--collapsed,
-.cell-expr--expanded {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   word-break: keep-all;
+  transition: color 0.15s, background-color 0.15s;
+  &:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-hover);
+  }
 }
 .cell-desc {
   font-size: var(--font-size-sm);
@@ -796,6 +942,33 @@ onMounted(loadFactors)
 
   &.is-positive { color: var(--success); }
   &.is-negative { color: var(--danger); }
+  &.is-warning { color: var(--warning); }
+}
+
+// 完整表达式查看弹窗
+.expr-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.expr-viewer__code {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow: auto;
+}
+.expr-viewer__desc {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 
 // Badge

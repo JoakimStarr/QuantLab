@@ -17,13 +17,6 @@
         <div class="kpi-value">{{ currentStatus.latest_date || '--' }}</div>
         <div class="kpi-sub">{{ daysSinceUpdate }} 天前更新</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-label">同步状态</div>
-        <div class="kpi-value">
-          <span class="status-badge" :class="statusClass">{{ statusLabel }}</span>
-        </div>
-        <div class="kpi-sub">{{ qlib.available ? 'qlib 已就绪' : 'qlib 未就绪' }}</div>
-      </div>
         <div class="kpi-card">
           <div class="kpi-label">数据时间范围</div>
           <div class="kpi-value" style="font-size: 15px; line-height: 1.6;">
@@ -407,6 +400,86 @@
         <el-button type="primary" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="integrityChecking">重新校验</el-button>
       </template>
     </el-dialog>
+
+    <!-- 一键补齐确认弹窗 -->
+    <el-dialog v-model="showRepairDialog" width="540px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <template #header>
+        <div class="repair-dialog-header">
+          <div class="repair-dialog-icon">
+            <el-icon><WarnTriangleFilled /></el-icon>
+          </div>
+          <div class="repair-dialog-title-group">
+            <div class="repair-dialog-title">确认执行一键补齐</div>
+            <div class="repair-dialog-sub">检测到数据存在 {{ repairItems.length }} 类问题，补齐后将自动修复</div>
+          </div>
+        </div>
+      </template>
+      <div class="repair-dialog-body">
+        <div class="repair-item-list">
+          <div v-for="item in repairItems" :key="item.key" class="repair-item">
+            <span class="repair-item-badge" :class="'is-' + item.level">{{ item.label }}</span>
+            <span class="repair-item-desc">{{ item.desc }}</span>
+          </div>
+        </div>
+        <el-alert
+          v-if="repairNeedsBaostock"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="repair-baostock-alert"
+        >
+          <template #title>需从 baostock 补拉 {{ repairBaostockDays }} 个缺失交易日</template>
+          将消耗网络请求与 baostock 每日配额（≤50k 次/天），耗时较长，请耐心等待。
+        </el-alert>
+        <p class="repair-tip">
+          <el-icon><InfoFilled /></el-icon>
+          任务提交后在独立进程后台运行，可随时关闭本窗口，进度会在页面上方实时显示。
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="showRepairDialog = false">取消</el-button>
+        <el-button type="primary" :loading="repairing" :disabled="repairing" @click="confirmRepair">
+          {{ repairing ? '提交中...' : '确认补齐' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 补齐进度弹窗 -->
+    <el-dialog v-model="showRepairProgressDialog" width="480px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <template #header>
+        <div class="repair-progress-header">
+          <div class="repair-progress-icon" :class="{ 'is-done': repairProgressDone, 'is-failed': repairProgressFailed }">
+            <el-icon v-if="!repairProgressDone && !repairProgressFailed" class="is-loading"><Loading /></el-icon>
+            <el-icon v-else-if="repairProgressDone"><CircleCheckFilled /></el-icon>
+            <el-icon v-else><CircleCloseFilled /></el-icon>
+          </div>
+          <div class="repair-progress-title-group">
+            <div class="repair-progress-title">{{ repairProgressTitle }}</div>
+            <div class="repair-progress-sub">{{ repairProgressMessage }}</div>
+          </div>
+        </div>
+      </template>
+      <div class="repair-progress-body">
+        <el-progress
+          :percentage="repairProgressPct"
+          :status="repairProgressStatus"
+          :stroke-width="12"
+          :show-text="false"
+        />
+        <div class="repair-progress-meta">
+          <span>任务: {{ repairProgressTaskLabel }}</span>
+          <span v-if="syncProgress?.started_at">开始: {{ syncProgress.started_at.slice(11, 19) }}</span>
+          <span>{{ repairProgressPct }}%</span>
+        </div>
+        <p class="repair-progress-tip">
+          <el-icon><InfoFilled /></el-icon>
+          任务在后台运行，关闭窗口不影响执行，可稍后回到本页查看。
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="showRepairProgressDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </PageContainer>
 </template>
 
@@ -415,10 +488,13 @@ defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { ElMessageBox } from 'element-plus'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, getSyncStats, eodSync, getEodResult, syncIndices, syncIndustry, getSyncProgress, validateData, repairData } from '@/api/quant'
+import { chartTheme } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 
 const statusList = ref([])
 const route = useRoute()
@@ -448,6 +524,9 @@ const industrySyncing = ref(false)
   const integrityResult = ref(null)
   const validationReport = ref(null)
   const repairing = ref(false)
+  const showRepairDialog = ref(false)
+  const repairItems = ref([])
+  const showRepairProgressDialog = ref(false)
 const currentStatus = computed(() => statusList.value[0] || {})
 
 // 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
@@ -456,22 +535,6 @@ const isDataCorrupt = computed(() => {
   return currentStatus.value.latest_date === null
     && !!currentStatus.value.last_error
     && currentStatus.value.last_error.includes('数据损坏')
-})
-
-const statusLabel = computed(() => {
-  const s = currentStatus.value.status
-  if (s === 'ok') return '正常'
-  if (s === 'syncing') return '同步中'
-  if (s === 'failed') return '失败'
-  return '--'
-})
-
-const statusClass = computed(() => {
-  const s = currentStatus.value.status
-  if (s === 'ok') return 'success'
-  if (s === 'syncing') return 'warning'
-  if (s === 'failed') return 'danger'
-  return ''
 })
 
 const daysSinceUpdate = computed(() => {
@@ -509,11 +572,12 @@ const coveragePercent = computed(() => {
 })
 
 const coverageColor = computed(() => {
+  void themeRev.value
   const p = coveragePercent.value
-  if (p >= 90) return '#67c23a'
-  if (p >= 70) return '#e6a23c'
-  if (p >= 50) return '#f56c6c'
-  return '#909399'
+  if (p >= 90) return chartTheme.success()
+  if (p >= 70) return chartTheme.warning()
+  if (p >= 50) return chartTheme.danger()
+  return chartTheme.neutral()
 })
 
 function getStatusClass(status) {
@@ -648,6 +712,10 @@ async function pollSyncProgress() {
         if (data?.data_source === 'repair' && showIntegrityDialog.value) {
           doIntegrityCheck()
         }
+        // 补齐进度弹窗：成功后 2.5s 自动关闭；失败保持打开展示错误
+        if (showRepairProgressDialog.value && data?.data_source === 'repair') {
+          setTimeout(() => { showRepairProgressDialog.value = false }, 2500)
+        }
       } else {
         ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
       }
@@ -661,6 +729,7 @@ async function pollSyncProgress() {
         if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
         nullPollCount = 0
         syncing.value = false
+        if (showRepairProgressDialog.value) showRepairProgressDialog.value = false
       }
     } else {
       nullPollCount = 0
@@ -764,38 +833,60 @@ const checkName = (n) => ({
   qlib: 'qlib 可读性',
 }[n] || n)
 
-async function doRepair() {
+const repairNeedsBaostock = computed(() => !!validationReport.value?.drift?.needs_baostock)
+const repairBaostockDays = computed(() => validationReport.value?.drift?.pg_missing_dates || 0)
+
+const repairProgressPct = computed(() => syncProgress.value?.progress_pct || 0)
+const repairProgressStatus = computed(() => {
+  const s = syncProgress.value?.status
+  if (s === 'done') return 'success'
+  if (s === 'failed') return 'exception'
+  return ''
+})
+const repairProgressDone = computed(() => syncProgress.value?.status === 'done')
+const repairProgressFailed = computed(() => syncProgress.value?.status === 'failed')
+const repairProgressTitle = computed(() => {
+  if (repairProgressDone.value) return '补齐完成'
+  if (repairProgressFailed.value) return '补齐失败'
+  return '数据补齐进行中'
+})
+const repairProgressMessage = computed(() => {
+  const s = syncProgress.value
+  if (s?.message) return s.message
+  if (s?.status === 'done') return '数据已补齐，正在刷新状态...'
+  if (s?.status === 'failed') return s?.error || '任务执行出错，请查看后台日志'
+  return '正在提交补齐任务，请稍候...'
+})
+const repairProgressTaskLabel = computed(() => taskLabel(syncProgress.value?.data_source) || '数据补齐')
+
+function doRepair() {
   const d = validationReport.value?.drift
   if (!d) return
   const f = validationReport.value?.checks?.fields || {}
-  const parts = [
-    d.missing_calendar_days ? `day.txt 缺 ${d.missing_calendar_days} 天` : '',
-    f.bad_size_stocks ? `bin 长度异常 ${f.bad_size_stocks} 只` : '',
-    d.stocks_with_gaps ? `疑似损坏 ${d.stocks_with_gaps} 只` : '',
-    d.missing_field_files ? `字段文件缺 ${d.missing_field_files} 个` : '',
-    d.db_without_bin ? `DB 无 bin ${d.db_without_bin} 只` : '',
-    d.range_mismatch ? `区间错位 ${d.range_mismatch} 只` : '',
-  ].filter(Boolean)
-  let msg = '将修复：' + (parts.join('、') || 'bin 数据不一致')
-  if (d.needs_baostock) msg += `<br>另需从 baostock 补拉 ${d.pg_missing_dates} 个缺失交易日（消耗网络与请求配额）。`
-  try {
-    await ElMessageBox.confirm(msg + '<br>确认执行？', '一键补齐', {
-      confirmButtonText: '执行',
-      cancelButtonText: '取消',
-      type: 'warning',
-      dangerouslyUseHTMLString: true,
-    })
-  } catch {
-    return
-  }
+  const items = []
+  if (d.missing_calendar_days) items.push({ key: 'calendar', level: 'warn', label: '日历缺失', desc: `day.txt 缺 ${d.missing_calendar_days} 天` })
+  if (f.bad_size_stocks) items.push({ key: 'size', level: 'error', label: '长度异常', desc: `bin 长度异常 ${f.bad_size_stocks} 只` })
+  if (d.stocks_with_gaps) items.push({ key: 'gaps', level: 'error', label: '疑似损坏', desc: `疑似损坏 ${d.stocks_with_gaps} 只` })
+  if (d.missing_field_files) items.push({ key: 'fields', level: 'warn', label: '字段缺失', desc: `字段文件缺 ${d.missing_field_files} 个` })
+  if (d.db_without_bin) items.push({ key: 'db2bin', level: 'warn', label: 'DB 无 bin', desc: `DB 有记录但 bin 缺失 ${d.db_without_bin} 只` })
+  if (d.range_mismatch) items.push({ key: 'range', level: 'error', label: '区间错位', desc: `区间错位 ${d.range_mismatch} 只` })
+  if (!items.length) items.push({ key: 'misc', level: 'warn', label: '数据不一致', desc: 'bin 数据存在不一致' })
+  repairItems.value = items
+  showRepairDialog.value = true
+}
+
+async function confirmRepair() {
   repairing.value = true
   syncing.value = true
   syncProgress.value = null
+  showRepairDialog.value = false
+  showRepairProgressDialog.value = true
   try {
-    await repairData({ include_baostock: !!d.needs_baostock, universe: 'all' })
+    await repairData({ include_baostock: repairNeedsBaostock.value, universe: 'all' })
     ElMessage.success('补齐任务已提交（独立进程后台执行）')
     startProgressPolling()
   } catch (e) {
+    showRepairProgressDialog.value = false
     if (e?.code !== 'SYNC_IN_PROGRESS') {
       // 非 409 冲突才重复提示（拦截器已弹过"正在同步/修复中"）
       if (e !== 'cancel') ElMessage.error('补齐提交失败: ' + (e?.message || e))
@@ -894,20 +985,20 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   gap: 8px;
   margin-bottom: 8px;
   padding: 6px 12px;
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--bg-secondary, #f6f8fb);
   border-radius: 6px;
   font-size: var(--font-size-sm, 13px);
 }
 .path-prediction .path-reason {
-  color: var(--text-secondary, #909399);
+  color: var(--text-secondary, #5b6b85);
 }
 .source-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 .source-error {
   margin-top: 10px;
   padding: 8px 12px;
-  background: rgba(210, 69, 69, 0.06);
-  border: 1px solid rgba(210, 69, 69, 0.2);
+  background: var(--danger-soft-faint);
+  border: 1px solid var(--danger-soft-border);
   border-radius: 6px;
   font-size: 13px;
   color: var(--danger);
@@ -938,13 +1029,13 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   font-size: 11px;
   font-weight: 600;
   flex-shrink: 0;
-  background: rgba(210, 69, 69, 0.15);
+  background: var(--danger-soft-strong);
   color: var(--danger);
 }
-.error-category.network { background: rgba(200, 128, 28, 0.15); color: var(--warning); }
-.error-category.disk_full { background: rgba(210, 69, 69, 0.15); color: var(--danger); }
-.error-category.data_corrupt { background: rgba(31, 75, 160, 0.12); color: var(--primary); }
-.error-category.interrupted { background: rgba(200, 128, 28, 0.15); color: var(--warning); }
+.error-category.network { background: var(--warning-soft-strong); color: var(--warning); }
+.error-category.disk_full { background: var(--danger-soft-strong); color: var(--danger); }
+.error-category.data_corrupt { background: var(--primary-soft-strong); color: var(--primary); }
+.error-category.interrupted { background: var(--warning-soft-strong); color: var(--warning); }
 .error-msg { font-size: 13px; color: var(--danger); word-break: break-word; }
 .error-suggestion { margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
 .error-actions { margin-top: 8px; }
@@ -986,9 +1077,9 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   font-size: 12px;
   font-weight: 500;
   &.sm { padding: 2px 8px; font-size: 11px; }
-  &.success { background: rgba(31, 157, 107, 0.1); color: var(--success); }
-  &.warning { background: rgba(200, 128, 28, 0.1); color: var(--warning); }
-  &.danger { background: rgba(210, 69, 69, 0.1); color: var(--danger); }
+  &.success { background: var(--success-soft); color: var(--success); }
+  &.warning { background: var(--warning-soft); color: var(--warning); }
+  &.danger { background: var(--danger-soft); color: var(--danger); }
 }
 
 .badge {
@@ -997,7 +1088,7 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   border-radius: 4px;
   font-size: 12px;
   font-weight: 500;
-  &.badge-info { background: rgba(31, 75, 160, 0.08); color: var(--primary); }
+  &.badge-info { background: var(--primary-soft); color: var(--primary); }
 }
 
 .font-mono { font-family: var(--font-mono, monospace); font-size: 13px; }
@@ -1067,9 +1158,9 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
 .sync-stats-grid .stat-value { font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .sync-stats-grid .stat-sub { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
 .path-chips, .reason-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.text-success { color: var(--success, #67c23a); }
-.text-warning { color: var(--warning, #e6a23c); }
-.text-danger { color: var(--danger, #f56c6c); }
+.text-success { color: var(--success, #1f9d6b); }
+.text-warning { color: var(--warning, #c8801c); }
+.text-danger { color: var(--danger, #d24545); }
 .mr-1 { margin-right: 4px; }
 .mt-3 { margin-top: 12px; }
 .mb-1 { margin-bottom: 4px; }
@@ -1113,4 +1204,128 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   align-items: center;
 }
 .drift-box .drift-title { font-size: 13px; font-weight: 600; color: var(--warning); margin-right: 4px; }
+
+.repair-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.repair-dialog-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(200, 128, 28, 0.14);
+  color: var(--warning);
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.repair-dialog-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.repair-dialog-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.repair-dialog-body { padding: 4px 4px 0; }
+.repair-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.repair-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary, #f5f7fa);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+.repair-item-badge {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  &.is-error { background: rgba(210, 69, 69, 0.12); color: var(--danger); }
+  &.is-warn { background: rgba(200, 128, 28, 0.12); color: var(--warning); }
+}
+.repair-item-desc {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.repair-baostock-alert { margin-bottom: 12px; }
+.repair-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  .el-icon { flex-shrink: 0; }
+}
+
+.repair-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.repair-progress-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(31, 75, 160, 0.1);
+  color: var(--primary);
+  font-size: 22px;
+  flex-shrink: 0;
+  &.is-done { background: rgba(31, 157, 107, 0.12); color: var(--success); }
+  &.is-failed { background: rgba(210, 69, 69, 0.12); color: var(--danger); }
+}
+.repair-progress-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.repair-progress-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.repair-progress-body { padding: 8px 4px 0; }
+.repair-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.repair-progress-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-tertiary, #f5f7fa);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  .el-icon { flex-shrink: 0; }
+}
 </style>

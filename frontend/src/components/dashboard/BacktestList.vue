@@ -1,5 +1,5 @@
 <template>
-  <SectionCard title="最近回测结果">
+  <SectionCard title="最近回测结果" collapsible>
     <template #extra>
       <router-link to="/quant/strategy" class="link">查看全部</router-link>
     </template>

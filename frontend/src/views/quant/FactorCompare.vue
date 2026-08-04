@@ -152,6 +152,10 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { chartTheme } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 import { compareFactors, getFactorDecay } from '@/api/quant'
 import { useFactorStore } from '@/stores/factor'
 
@@ -167,7 +171,16 @@ const decayData = ref({})
 const seriesData = ref({})
 
 // 配色（深靛蓝为主色）
-const colors = ['#1f4ba0', '#1f9d6b', '#d24545', '#c8801c', '#2f7dc2', '#9333ea', '#0891b2', '#be185d']
+const colors = [
+  chartTheme.primary(),
+  chartTheme.success(),
+  chartTheme.danger(),
+  chartTheme.warning(),
+  chartTheme.info(),
+  chartTheme.palette(6),
+  chartTheme.palette(7),
+  chartTheme.palette(8),
+]
 
 const decayEmpty = computed(() => Object.keys(decayData.value).length === 0)
 const seriesEmpty = computed(() => Object.keys(seriesData.value).length === 0)
@@ -199,6 +212,7 @@ const categoryBadgeClass = (c) => `badge--${categoryMap[c]?.badge || 'muted'}`
 
 // IC 衰减曲线图配置
 const decayOption = computed(() => {
+  void themeRev.value
   const factors = factorList.value
   const series = Object.entries(decayData.value).map(([fid, points], idx) => {
     const factor = factors.find(f => String(f.id) === String(fid))
@@ -225,16 +239,18 @@ const decayOption = computed(() => {
         return html
       }
     },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
+    textStyle: { color: chartTheme.axisText() },
     grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
-    xAxis: { type: 'value', name: 'Lag', nameLocation: 'middle', nameGap: 30 },
-    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40 },
+    xAxis: { type: 'value', name: 'Lag', nameLocation: 'middle', nameGap: 30, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
     series
   }
 })
 
 // IC 时序图配置
 const seriesOption = computed(() => {
+  void themeRev.value
   const factors = factorList.value
   // 收集所有日期并排序
   const allDates = new Set()
@@ -264,11 +280,12 @@ const seriesOption = computed(() => {
 
   return {
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false },
-    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40 },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series
   }
 })

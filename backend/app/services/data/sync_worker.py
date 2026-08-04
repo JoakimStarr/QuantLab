@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,19 @@ def spawn_sync_worker(
         raise
     logger.info("sync_worker 已启动 kind=%s universe=%s pid=%s log=%s",
                 kind, universe, proc.pid, log_path)
+
+    # 回收线程（reaper）：worker 退出后若无人 waitpid，会残留僵尸进程，
+    # 使 sync_progress._pid_alive 无法区分"在跑"与"已死"，进而导致
+    # sync_is_active 误判活跃、阻塞后续同步。后台 wait 不阻塞调用方。
+    def _reap(process: subprocess.Popen) -> None:
+        try:
+            code = process.wait()
+            logger.info("sync_worker 退出 kind=%s universe=%s pid=%s code=%s",
+                        kind, universe, process.pid, code)
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=_reap, args=(proc,), daemon=True).start()
     return proc
 
 
@@ -88,56 +102,112 @@ async def _run(args: argparse.Namespace) -> None:
     from app.services.data.sync_progress import (
         clear_progress, finish_progress, init_progress, set_worker_pid,
     )
+    from app.services.data.sync_lock import SyncLock
 
-    # 记录 worker PID，web 进程据此判断同步是否真的在跑
-    init_progress(args.universe, "baostock")
+    # 关键：先抢单实例爬取锁。抢不到说明已有爬取进程在跑 → 直接退出，什么都不碰
+    # （不写进度/不写 DB，避免覆盖活跃 worker 的状态）。flock 由内核持有，
+    # 进程死亡(含 kill -9)自动释放，因此锁永远不会卡住。
+    lock = SyncLock()
+    if not lock.try_acquire():
+        logger.info("已有爬取进程在运行(sync.lock 被占用)，同步 worker 直接退出，避免并发连接 baostock")
+        return
+    logger.info("sync_worker 获取爬取锁成功 pid=%s", os.getpid())
+
+    try:
+        logger.info("sync_worker 开始: kind=%s universe=%s", args.kind, args.universe)
+        await _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear_progress)
+        logger.info("sync_worker 完成: kind=%s universe=%s", args.kind, args.universe)
+    finally:
+        # 无论正常/异常，都要退出爬取锁（幂等）
+        lock.release()
+
+
+async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear_progress) -> None:
+    from app.services.data.baostock_client import baostock_session
+
+    # 记录 worker PID，web 进程据此判断同步是否真的在跑。
+    # data_source 按任务类型区分（baostock 特指全量回填，其余用 kind 名），
+    # 前端据此显示任务标签。
+    data_source = "baostock" if args.kind == "backfill" else args.kind
+    init_progress(args.universe, data_source)
     set_worker_pid(os.getpid())
 
-    if args.kind == "backfill":
-        from app.schemas.quant import SyncDataRequest
-        from app.services.data.baostock_backfill import run_baostock_backfill_task
+    # 仅数据源用到 baostock 时才 login/logout（保证退出前必然登出）：
+    # - backfill / indices / eod(source=baostock) / repair(include_baostock) 需要
+    # - repair(仅从 PG 重建) / eod(source=akshare) 不需要 baostock，
+    #   即使 baostock 被风控拉黑也不受影响（离线重建路径保持可用）。
+    need_bst = (
+        args.kind == "backfill"
+        or args.kind == "indices"
+        or (args.kind == "repair" and args.include_baostock)
+        or (args.kind == "eod" and (args.source or "baostock") == "baostock")
+    )
 
-        req = SyncDataRequest(universe=args.universe, years=args.years)
-        await run_baostock_backfill_task(req)
-    elif args.kind == "eod":
-        from app.core.config import settings
-        from app.services.data.eod_incremental import incremental_sync_eod
-        import json
+    from contextlib import nullcontext
+    from app.services.data.baostock_client import baostock_session
 
-        result_path = os.path.join(
-            str(settings.PROJECT_ROOT / "data"), "eod_last_result.json",
-        )
-        result = {"ok": False, "error": "unknown"}
+    session = baostock_session() if need_bst else nullcontext()
+    try:
+        with session:
+            if args.kind == "backfill":
+                from app.schemas.quant import SyncDataRequest
+                from app.services.data.baostock_backfill import run_baostock_backfill_task
+
+                req = SyncDataRequest(universe=args.universe, years=args.years)
+                await run_baostock_backfill_task(req)
+            elif args.kind == "eod":
+                from app.core.config import settings
+                from app.services.data.eod_incremental import incremental_sync_eod
+                import json
+
+                result_path = os.path.join(
+                    str(settings.PROJECT_ROOT / "data"), "eod_last_result.json",
+                )
+                result = {"ok": False, "error": "unknown"}
+                try:
+                    result = await incremental_sync_eod(
+                        universe=args.universe, days=args.days or 5, overwrite=args.overwrite,
+                        source=args.source or "baostock",
+                    )
+                    finish_progress(bool(result.get("ok")), result.get("error"))
+                finally:
+                    try:
+                        os.makedirs(os.path.dirname(result_path), exist_ok=True)
+                        with open(result_path, "w", encoding="utf-8") as f:
+                            json.dump(result, f, ensure_ascii=False, default=str)
+                    except Exception:
+                        pass
+            elif args.kind == "repair":
+                from app.services.data.repair import run_repair
+
+                await run_repair(args.include_baostock, args.universe)
+            elif args.kind == "indices":
+                from app.core.config import settings
+                from app.services.data.index_sync import sync_indices_to_qlib
+
+                result = sync_indices_to_qlib(settings.qlib_provider_path, days=365)
+                if result.get("ok"):
+                    logger.info("指数同步完成: %s", result)
+                else:
+                    logger.error("指数同步返回错误: %s", result)
+
+        # 留出前端轮询读取 done/failed 状态的窗口
+        await asyncio.sleep(3)
+        clear_progress()
+    except Exception as e:
+        # 登录/初始化阶段的异常（如 baostock 拉黑）发生在各任务内部错误处理之前，
+        # 若直接崩溃退出，进度文件停在 downloading、DB 只会显示"[worker 退出]"通用提示。
+        # 这里把真实错误写进进度文件并标记 DB，前端即可直接看到原因而非靠猜。
         try:
-            result = await incremental_sync_eod(
-                universe=args.universe, days=args.days or 5, overwrite=args.overwrite,
-                source=args.source or "baostock",
-            )
-            finish_progress(bool(result.get("ok")), result.get("error"))
-        finally:
-            try:
-                os.makedirs(os.path.dirname(result_path), exist_ok=True)
-                with open(result_path, "w", encoding="utf-8") as f:
-                    json.dump(result, f, ensure_ascii=False, default=str)
-            except Exception:
-                pass
-    elif args.kind == "repair":
-        from app.services.data.repair import run_repair
-
-        await run_repair(args.include_baostock, args.universe)
-    elif args.kind == "indices":
-        from app.core.config import settings
-        from app.services.data.index_sync import sync_indices_to_qlib
-
-        result = sync_indices_to_qlib(settings.qlib_provider_path, days=365)
-        if result.get("ok"):
-            logger.info("指数同步完成: %s", result)
-        else:
-            logger.error("指数同步返回错误: %s", result)
-
-    # 留出前端轮询读取 done/failed 状态的窗口
-    await asyncio.sleep(3)
-    clear_progress()
+            finish_progress(False, str(e))
+        except Exception:
+            pass
+        try:
+            from app.services.data.baostock_backfill import mark_sync_failed
+            await mark_sync_failed(args.universe, str(e))
+        except Exception:
+            pass
+        raise
 
 
 def main() -> None:

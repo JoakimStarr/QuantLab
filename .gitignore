@@ -45,6 +45,9 @@ data/models/
 # 数据备份（可重新生成，避免提交大文件）
 data/backup/
 
+# 第三方 quant-wiki 文档（嵌套 git 仓库，可重克隆，不纳入版本控制）
+docs/quant-wiki/
+
 # Python 缓存
 __pycache__/
 *.py[cod]
@@ -74,3 +77,7 @@ htmlcov/
 # SQLite runtime files
 data/*.db-shm
 data/*.db-wal
+
+# 同步运行时文件（爬取锁/进度，瞬态）
+data/sync.lock
+data/sync_progress.json

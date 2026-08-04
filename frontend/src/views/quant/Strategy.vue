@@ -133,9 +133,9 @@
         </div>
         <div class="trades-filters">
           <el-radio-group v-model="tradeType" size="small">
-            <el-radio-button label="all">全部</el-radio-button>
-            <el-radio-button label="BUY">买入</el-radio-button>
-            <el-radio-button label="SELL">卖出</el-radio-button>
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="BUY">买入</el-radio-button>
+            <el-radio-button value="SELL">卖出</el-radio-button>
           </el-radio-group>
           <el-input
             v-model="tradeCode"
@@ -313,6 +313,10 @@ import { ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import { chartTheme, withAlpha } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 import {
   listStrategies, createStrategy, runBacktest,
   listBacktestResults, getBacktestResult,
@@ -488,15 +492,16 @@ const hasChart = computed(() => {
 })
 
 const chartOption = computed(() => {
+  void themeRev.value
   const c = currentResult.value?.nav_curve || {}
   return {
     grid: { top: 20, right: 24, bottom: 30, left: 50 },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'line', snap: true },
-      backgroundColor: 'var(--bg-card)',
-      borderColor: 'var(--border)',
-      textStyle: { color: 'var(--text-primary)' },
+      backgroundColor: chartTheme.bgCard(),
+      borderColor: chartTheme.border(),
+      textStyle: { color: chartTheme.textPrimary() },
       formatter: (params) => {
         const lines = params.map(p => `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(3)}</b>`)
         return `${params[0].axisValue}<br/>${lines.join('<br/>')}`
@@ -506,9 +511,9 @@ const chartOption = computed(() => {
       type: 'category',
       data: c.dates || [],
       boundaryGap: false,
-      axisLine: { lineStyle: { color: 'var(--border)' } },
+      axisLine: { lineStyle: { color: chartTheme.border() } },
       axisTick: { show: false },
-      axisLabel: { color: 'var(--text-tertiary)', fontSize: 11, hideOverlap: true }
+      axisLabel: { color: chartTheme.axisText(), fontSize: 11, hideOverlap: true }
     },
     yAxis: {
       type: 'value',
@@ -516,11 +521,11 @@ const chartOption = computed(() => {
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: {
-        color: 'var(--text-tertiary)',
+        color: chartTheme.axisText(),
         fontSize: 11,
         formatter: v => Number(v).toFixed(1)
       },
-      splitLine: { lineStyle: { color: 'var(--border)', type: 'dashed' } }
+      splitLine: { lineStyle: { color: chartTheme.border(), type: 'dashed' } }
     },
     series: [
       {
@@ -531,9 +536,9 @@ const chartOption = computed(() => {
         showSymbol: false,
         connectNulls: true,
         emphasis: { disabled: true },
-        lineStyle: { color: 'var(--primary)', width: 2 },
-        areaStyle: { color: 'rgba(31, 75, 160, 0.08)' },
-        itemStyle: { color: 'var(--primary)' }
+        lineStyle: { color: chartTheme.primary(), width: 2 },
+        areaStyle: { color: withAlpha(chartTheme.primary(), 0.08) },
+        itemStyle: { color: chartTheme.primary() }
       },
       {
         name: '基准净值',
@@ -543,8 +548,8 @@ const chartOption = computed(() => {
         showSymbol: false,
         connectNulls: true,
         emphasis: { disabled: true },
-        lineStyle: { color: 'var(--text-tertiary)', width: 1.5, type: 'dashed' },
-        itemStyle: { color: 'var(--text-tertiary)' }
+        lineStyle: { color: chartTheme.axisText(), width: 1.5, type: 'dashed' },
+        itemStyle: { color: chartTheme.axisText() }
       }
     ]
   }

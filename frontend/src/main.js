@@ -14,7 +14,7 @@ import './styles/global.scss'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart, PieChart, CandlestickChart, RadarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent, TitleComponent, DataZoomComponent, AxisPointerComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, LegendComponent, TitleComponent, DataZoomComponent, AxisPointerComponent, MarkLineComponent, MarkAreaComponent, MarkPointComponent } from 'echarts/components'
 
 // Register ECharts components globally
 use([
@@ -29,7 +29,10 @@ use([
   LegendComponent,
   TitleComponent,
   DataZoomComponent,
-  AxisPointerComponent
+  AxisPointerComponent,
+  MarkLineComponent,
+  MarkAreaComponent,
+  MarkPointComponent
 ])
 
 const app = createApp(App)

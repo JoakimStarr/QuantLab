@@ -13,6 +13,15 @@
     <!-- 顶部工具栏 -->
     <div class="docs-toolbar">
       <el-select
+        v-model="categoryFilter"
+        size="default"
+        class="docs-cat-select"
+        placeholder="分类筛选"
+      >
+        <el-option label="全部分类" value="all" />
+        <el-option v-for="g in groupNames" :key="g" :label="g" :value="g" />
+      </el-select>
+      <el-select
         v-model="currentSlug"
         filterable
         placeholder="选择文档"
@@ -21,7 +30,7 @@
         @change="onDocChange"
       >
         <el-option-group
-          v-for="group in groupedDocs"
+          v-for="group in filteredGroupedDocs"
           :key="group.name"
           :label="group.name"
         >
@@ -113,6 +122,7 @@ const contentRef = ref(null)
 const toc = ref([])
 const activeHeading = ref('')
 const loading = ref(false)
+const categoryFilter = ref('all')
 
 // markdown-it 实例（带 highlight.js 代码高亮）
 const md = new MarkdownIt({
@@ -198,6 +208,27 @@ const groupedDocs = computed(() => {
     name,
     docs: list.sort((a, b) => a.order - b.order),
   }))
+})
+
+// 分类筛选：全部 / 按分组（百科·基础 / 百科·AI / 架构 / ...）
+const groupNames = computed(() => groupedDocs.value.map(g => g.name))
+const filteredGroupedDocs = computed(() =>
+  categoryFilter.value === 'all'
+    ? groupedDocs.value
+    : groupedDocs.value.filter(g => g.name === categoryFilter.value)
+)
+
+// 切换分类时，若当前文档不在该分类下，跳到该分类第一篇
+watch(categoryFilter, () => {
+  const groups = filteredGroupedDocs.value
+  if (!groups.length) return
+  const first = groups[0]?.docs?.[0]
+  const inSet = groups.some(g => g.docs.some(d => d.slug === currentSlug.value))
+  if (!inSet && first) {
+    currentSlug.value = first.slug
+    router.replace({ query: { slug: first.slug } })
+    loadDoc(first.slug)
+  }
 })
 
 const renderedHtml = computed(() => {
@@ -502,6 +533,7 @@ html.dark .markdown-body blockquote {
   flex-shrink: 0;
 }
 
+.docs-cat-select { width: 170px; }
 .docs-select {
   width: 360px;
 }

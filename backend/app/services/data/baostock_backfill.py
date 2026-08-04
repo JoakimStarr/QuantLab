@@ -747,6 +747,12 @@ def classify_sync_error(error: str) -> dict:
             "category": "interrupted", "category_label": "同步被中断",
             "suggestion": "同步过程被中断，建议重试同步（可开启自动重试：config.quant.auto_retry_sync=true）。",
         }
+    if any(k in err for k in ("黑名单", "blacklist", "限流", "rate limit", "访问频率",
+                              "请求过于频繁", "10001011", "频率限制", "频繁访问")):
+        return {
+            "category": "rate_limited", "category_label": "接口限流",
+            "suggestion": "数据源接口限流/黑名单（10001011），请间隔 10 分钟以上再试，或降低同步频率；纯 PG 重建的 repair 不受影响。",
+        }
     if any(k in err for k in ("login", "认证", "auth")):
         return {
             "category": "auth_failed", "category_label": "认证失败",

@@ -1,6 +1,11 @@
 <template>
-  <SectionCard title="市场概览">
-    <div class="market-overview-grid" v-if="items.length">
+  <SectionCard title="市场概览" collapsible>
+    <div v-if="loading" class="market-overview-grid">
+      <div class="market-overview-card" v-for="i in 8" :key="i">
+        <el-skeleton :rows="2" animated />
+      </div>
+    </div>
+    <div class="market-overview-grid" v-else-if="items.length">
       <div
         class="market-overview-card"
         v-for="item in items"
@@ -9,9 +14,9 @@
         @click="$emit('update:selected', item.code)"
       >
         <div class="market-overview-card__name">{{ item.name }}</div>
-        <div class="market-overview-card__price">{{ item.price }}</div>
-        <div class="market-overview-card__pct" :class="item.pct_change >= 0 ? 'is-up' : 'is-down'">
-          {{ item.pct_change >= 0 ? '+' : '' }}{{ item.pct_change }}%
+        <div class="market-overview-card__price">{{ fmtPrice(item.price) }}</div>
+        <div class="market-overview-card__pct" :class="pctClass(item.pct_change)">
+          {{ fmtPct(item.pct_change) }}
         </div>
       </div>
     </div>
@@ -24,9 +29,34 @@ import SectionCard from '@/components/common/SectionCard.vue'
 
 defineProps({
   items: { type: Array, default: () => [] },
-  selected: { type: String, default: '' }
+  selected: { type: String, default: '' },
+  loading: { type: Boolean, default: false }
 })
 defineEmits(['update:selected'])
+
+function toNumber(v) {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isNaN(n) ? null : n
+}
+
+function fmtPrice(v) {
+  const n = toNumber(v)
+  if (n === null) return '--'
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function fmtPct(v) {
+  const n = toNumber(v)
+  if (n === null) return '--'
+  return `${n > 0 ? '+' : ''}${n}%`
+}
+
+function pctClass(v) {
+  const n = toNumber(v)
+  if (n === null || n === 0) return ''
+  return n > 0 ? 'is-up' : 'is-down'
+}
 </script>
 
 <style scoped lang="scss">
@@ -52,7 +82,7 @@ defineEmits(['update:selected'])
 }
 .market-overview-card__pct {
   font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px;
-  &.is-up { color: #ef232a; }
-  &.is-down { color: #14b143; }
+  &.is-up { color: var(--chart-up); }
+  &.is-down { color: var(--chart-down); }
 }
 </style>

@@ -21,6 +21,55 @@
   --info-light: #5a99d0;
   --info-dark: #246a9f;
 
+  // === Soft/Alpha 状态底色（badge、标签、渐变背景统一走 token）===
+  --primary-soft: rgba(31, 75, 160, 0.1);
+  --success-soft: rgba(31, 157, 107, 0.1);
+  --danger-soft: rgba(210, 69, 69, 0.1);
+  --warning-soft: rgba(200, 128, 28, 0.1);
+  --info-soft: rgba(47, 125, 194, 0.1);
+  // 更强/更淡的变体（错误卡片、错误分类标签等）
+  --primary-soft-strong: rgba(31, 75, 160, 0.12);
+  --success-soft-strong: rgba(31, 157, 107, 0.15);
+  --danger-soft-strong: rgba(210, 69, 69, 0.15);
+  --warning-soft-strong: rgba(200, 128, 28, 0.15);
+  --danger-soft-border: rgba(210, 69, 69, 0.2);
+  --danger-soft-faint: rgba(210, 69, 69, 0.06);
+
+  // === Chart Colors（ECharts 统一配色，JS 侧经 utils/chartTheme 读取）===
+  // 涨跌语义与 --danger(涨)/--success(跌) 对齐，仅取图表可读性更好的色值
+  --chart-up: #ef232a;
+  --chart-down: #14b143;
+  --chart-volume: #7fbbea;
+  // 指标线
+  --chart-ma5: #ffaa00;
+  --chart-ma10: #ff55ff;
+  --chart-ma20: #00bfff;
+  --chart-ma60: #a5a9b5;
+  --chart-ema12: #e6a23c;
+  --chart-ema26: #a23ce6;
+  --chart-dif: #ffaa00;
+  --chart-dea: #ff55ff;
+  --chart-k: #ffaa00;
+  --chart-d: #ff55ff;
+  --chart-j: #00bfff;
+  // 图例/轴线/辅助线文字色
+  --chart-axis-text: #5b6b85;
+  --chart-neutral: #909399;
+  --chart-line: #9db4d4;
+  // 类别序列调色板（PMI/CPI/PPI/GDP 等多序列）
+  --chart-p1: #5470c6;
+  --chart-p2: #fa8c16;
+  --chart-p3: #722ed1;
+  --chart-p4: #13c2c2;
+  --chart-p5: #52c41a;
+  --chart-p6: #9333ea;
+  --chart-p7: #0891b2;
+  --chart-p8: #be185d;
+  // 基准线（如 PMI 荣枯线）与扩张/收缩背景分区
+  --chart-baseline: #d4380d;
+  --chart-area-above: rgba(82, 196, 26, 0.08);
+  --chart-area-below: rgba(245, 34, 45, 0.06);
+
   // === Text Colors（对齐设计稿墨色）===
   --text-primary: #16213a;
   --text-secondary: #5b6b85;
@@ -43,8 +92,10 @@
   --border-dark: #cbd5e1;
 
   // === Spacing Scale ===
+  --space-2xs: 2px;
   --space-xs: 4px;
   --space-sm: 8px;
+  --space-12: 12px;
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
@@ -132,6 +183,32 @@
   --border: #1a2540;
   --border-light: #161f33;
   --border-dark: #2a3855;
+
+  // Soft/Alpha 状态底色（暗色下略加深，保证可读）
+  --primary-soft: rgba(79, 127, 200, 0.16);
+  --success-soft: rgba(63, 184, 138, 0.16);
+  --danger-soft: rgba(224, 106, 106, 0.16);
+  --warning-soft: rgba(217, 154, 63, 0.16);
+  --info-soft: rgba(90, 153, 208, 0.16);
+
+  // Chart Colors（暗色下提亮指标线，保证深底对比度）
+  --chart-up: #ff4d4f;
+  --chart-down: #36cf6b;
+  --chart-volume: #5a9bd0;
+  --chart-ma5: #ffaa00;
+  --chart-ma10: #ff77e5;
+  --chart-ma20: #33ccff;
+  --chart-ma60: #6b7a90;
+  --chart-ema12: #e6a23c;
+  --chart-ema26: #c084fc;
+  --chart-dif: #ffaa00;
+  --chart-dea: #ff77e5;
+  --chart-k: #ffaa00;
+  --chart-d: #ff77e5;
+  --chart-j: #33ccff;
+  --chart-axis-text: #8493ab;
+  --chart-neutral: #64748b;
+  --chart-line: #5b6b85;
 
   // Shadows (darker for dark theme)
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.3);

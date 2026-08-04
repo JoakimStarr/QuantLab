@@ -22,6 +22,20 @@ from typing import Optional
 # parents[0] = docs/  [1] = services/  [2] = app/  [3] = backend/  [4] = 项目根
 DOCS_DIR = Path(__file__).resolve().parents[4] / "docs"  # 项目根下的 docs/
 
+# ---- quant-wiki 集成 ----
+# 用户克隆的 quant-wiki 仓库位于 docs/quant-wiki/，内容在 docs/quant-wiki/docs/<分类>/
+# 只收录量化知识分类；job(求职)/repo(仓库导航)/顶层元页 不属于平台知识，不收录。
+_WIKI_ROOT_REL = "quant-wiki/docs"
+_WIKI_CATEGORIES: dict[str, str] = {
+    "basic": "百科·基础",
+    "ai": "百科·AI",
+    "start": "百科·入门",
+    "advanced": "百科·进阶",
+    "industry": "百科·行业",
+    "library": "百科·代码库",
+}
+_WIKI_ORDER = {cat: i for i, cat in enumerate(_WIKI_CATEGORIES)}
+
 # 内置文档元数据（frontmatter 不可用时的回退）
 _BUILTIN_META = {
     "DATA_LAYER.md": {
@@ -141,6 +155,50 @@ def _parse_meta(path: Path) -> dict:
     return {**base, "content": body}
 
 
+def _wiki_category(path: Path) -> str | None:
+    """判断是否为已收录的 quant-wiki 文档，返回分类名；否则 None。"""
+    try:
+        rel = path.relative_to(DOCS_DIR)
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) >= 3 and parts[0] == "quant-wiki" and parts[1] == "docs":
+        if parts[2] in _WIKI_CATEGORIES:
+            return parts[2]
+    return None
+
+
+def _parse_wiki_meta(path: Path, cat: str) -> dict:
+    """解析 quant-wiki 文档元数据：路径式 slug（防 425 篇撞名）+ 中文分类 group。"""
+    content = path.read_text(encoding="utf-8")
+    fm = _parse_frontmatter(content)
+    rel = path.relative_to(DOCS_DIR)
+    inner = "__".join(rel.parts[3:])  # quant-wiki/docs/<cat>/... 之后的子路径
+    slug = "quant-wiki__" + cat + ("__" + inner if inner else "")
+    if slug.endswith(".md"):
+        slug = slug[:-3]
+    return {
+        "title": fm.get("title") or path.stem,
+        "slug": slug,
+        "group": _WIKI_CATEGORIES[cat],
+        "order": 100 + _WIKI_ORDER[cat],
+        "summary": fm.get("summary", ""),
+        "content": _strip_frontmatter(content),
+    }
+
+
+def _wiki_doc_dict(path: Path, cat: str) -> dict:
+    meta = _parse_wiki_meta(path, cat)
+    return {
+        "slug": meta["slug"],
+        "title": meta["title"],
+        "order": meta["order"],
+        "group": meta["group"],
+        "summary": meta["summary"],
+        "file": str(path.relative_to(DOCS_DIR)),
+    }
+
+
 def list_docs() -> list:
     """列出所有文档（含元数据），按 order 排序。
 
@@ -150,6 +208,7 @@ def list_docs() -> list:
     if not DOCS_DIR.exists():
         return []
     docs = []
+    # 1) 顶层 QuantLab 自有文档
     for path in sorted(DOCS_DIR.glob("*.md")):
         meta = _parse_meta(path)
         docs.append({
@@ -160,7 +219,14 @@ def list_docs() -> list:
             "summary": meta["summary"],
             "file": path.name,
         })
-    docs.sort(key=lambda d: (d["order"], d["title"]))
+    # 2) quant-wiki 文档（按分类递归，只收录 _WIKI_CATEGORIES）
+    for cat in _WIKI_CATEGORIES:
+        cat_root = DOCS_DIR / _WIKI_ROOT_REL / cat
+        if not cat_root.exists():
+            continue
+        for path in sorted(cat_root.rglob("*.md")):
+            docs.append(_wiki_doc_dict(path, cat))
+    docs.sort(key=lambda d: (d["order"], d["group"], d["title"]))
     return docs
 
 
@@ -172,6 +238,16 @@ def get_doc(slug: str) -> Optional[dict]:
     """
     if not DOCS_DIR.exists():
         return None
+    # quant-wiki 文档
+    for cat in _WIKI_CATEGORIES:
+        cat_root = DOCS_DIR / _WIKI_ROOT_REL / cat
+        if not cat_root.exists():
+            continue
+        for path in cat_root.rglob("*.md"):
+            meta = _parse_wiki_meta(path, cat)
+            if meta["slug"] == slug:
+                return {**meta, "file": str(path.relative_to(DOCS_DIR))}
+    # QuantLab 自有文档
     for path in DOCS_DIR.glob("*.md"):
         meta = _parse_meta(path)
         if meta["slug"] == slug or _slugify(path.name) == slug:

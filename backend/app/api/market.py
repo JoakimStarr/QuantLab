@@ -4,6 +4,7 @@
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Query
 
@@ -46,19 +47,26 @@ async def get_index_kline(
     end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
     limit: int = Query(120, description="返回数据条数上限", ge=1, le=500),
 ):
-    """获取指数K线数据"""
+    """获取指数/个股K线数据"""
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
     idx = SUPPORTED_INDICES.get(index_code.upper())
-    if not idx:
-        return ApiResponse(ok=False, error={
-            "code": "UNSUPPORTED_INDEX",
-            "message": f"Unsupported index: {index_code}",
-            "status": 400,
-        })
-
-    qlib_code = idx["code"]
+    if idx:
+        qlib_code = idx["code"]
+        name = idx["name"]
+    else:
+        # 个股：qlib 代码形如 SH600000 / SZ000001
+        low = index_code.lower()
+        if re.fullmatch(r"(sh|sz)\d{6}", low):
+            qlib_code = low
+            name = index_code.upper()
+        else:
+            return ApiResponse(ok=False, error={
+                "code": "UNSUPPORTED_INDEX",
+                "message": f"Unsupported index/stock: {index_code}",
+                "status": 400,
+            })
 
     # 计算日期范围
     if not end_date:
@@ -123,7 +131,7 @@ async def get_index_kline(
         items = await loop.run_in_executor(None, _load)
         return ApiResponse(ok=True, data={
             "index_code": index_code,
-            "index_name": idx["name"],
+            "index_name": name,
             "period": period,
             "count": len(items),
             "items": items,

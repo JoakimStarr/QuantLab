@@ -16,7 +16,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,225 @@ MACRO_INDICATORS: dict[str, dict] = {
         "report_name": "RPT_ECONOMY_GDP",
         "fields": {
             "gdp": {"source": "SUM_SAME", "delay": 45, "label": "GDP同比", "unit": "%"},
+        },
+    },
+}
+
+# akshare 宏观指标注册表（国债/回购/Shibor/LPR/商品/汇率/货币供应/社融/贷款等）。
+# 与东财 datacenter 互补，扩展新指标只需在此加一条配置。
+# 配置项:
+#   ak_func   akshare 函数名
+#   ak_kwargs 调用参数，日期占位符 <today> / <5y> 在拉取时替换（YYYYMMDD 格式）
+#   date_col  日期/月份列名
+#   date_freq day=日频（date 列） / month=月频（月份列，如 "2026年06月份"、"202604"、"2026-06"）
+#   delay     发布延迟（天），PIT 对齐防 look-ahead
+#   fields    {field_name: {source: akshare 列名, label, unit}}
+AKSHARE_INDICATORS: dict[str, dict] = {
+    "TREASURY": {
+        "ak_func": "bond_zh_us_rate",
+        "ak_kwargs": {"start_date": "<5y>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "trsy2y": {"source": "中国国债收益率2年", "label": "中债2年期收益率", "unit": "%"},
+            "trsy5y": {"source": "中国国债收益率5年", "label": "中债5年期收益率", "unit": "%"},
+            "trsy10y": {"source": "中国国债收益率10年", "label": "中债10年期收益率", "unit": "%"},
+            "trsy30y": {"source": "中国国债收益率30年", "label": "中债30年期收益率", "unit": "%"},
+            "trsy_spread_10y2y": {"source": "中国国债收益率10年-2年", "label": "中债期限利差10Y-2Y", "unit": "%"},
+            "us_trsy2y": {"source": "美国国债收益率2年", "label": "美债2年期收益率", "unit": "%"},
+            "us_trsy10y": {"source": "美国国债收益率10年", "label": "美债10年期收益率", "unit": "%"},
+            "us_trsy_spread": {"source": "美国国债收益率10年-2年", "label": "美债期限利差10Y-2Y", "unit": "%"},
+        },
+    },
+    "REPO_FR": {
+        # 银行间回购定盘利率（FR001/FR007/FR014，近似 R 系列）。
+        # 走 repo_rate_query 的 Chinamoney CSV，全量历史；不用 repo_rate_hist
+        # （该函数传日期范围会触发 akshare KeyError 'frValueMap'）。
+        "ak_func": "repo_rate_query",
+        "ak_kwargs": {"symbol": "回购定盘利率"},
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "fr001": {"source": "FR001", "label": "回购定盘利率隔夜", "unit": "%"},
+            "fr007": {"source": "FR007", "label": "回购定盘利率7天(近似R007)", "unit": "%"},
+            "fr014": {"source": "FR014", "label": "回购定盘利率14天", "unit": "%"},
+        },
+    },
+    "REPO_FDR": {
+        # 银银间回购定盘利率（FDR001/FDR007/FDR014，存款类机构口径，近似 DR 系列）。
+        "ak_func": "repo_rate_query",
+        "ak_kwargs": {"symbol": "银银间回购定盘利率"},
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "fdr001": {"source": "FDR001", "label": "银银间回购定盘利率隔夜", "unit": "%"},
+            "fdr007": {"source": "FDR007", "label": "银银间回购定盘利率7天(近似DR007)", "unit": "%"},
+            "fdr014": {"source": "FDR014", "label": "银银间回购定盘利率14天", "unit": "%"},
+        },
+    },
+    "SHIBOR": {
+        "ak_func": "macro_china_shibor_all",
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "shibor_on": {"source": "O/N-定价", "label": "Shibor隔夜", "unit": "%"},
+            "shibor_1w": {"source": "1W-定价", "label": "Shibor1周", "unit": "%"},
+            "shibor_3m": {"source": "3M-定价", "label": "Shibor3月", "unit": "%"},
+            "shibor_1y": {"source": "1Y-定价", "label": "Shibor1年", "unit": "%"},
+        },
+    },
+    "LPR": {
+        "ak_func": "macro_china_lpr",
+        "date_col": "TRADE_DATE",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "lpr1y": {"source": "LPR1Y", "label": "LPR1年期", "unit": "%"},
+            "lpr5y": {"source": "LPR5Y", "label": "LPR5年期", "unit": "%"},
+        },
+    },
+    "COMMODITY": {
+        "ak_func": "macro_china_commodity_price_index",
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "commodity_idx": {"source": "最新值", "label": "中国大宗商品价格指数", "unit": ""},
+        },
+    },
+    "COPPER": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "CU0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "copper_close": {"source": "收盘价", "label": "沪铜主力收盘价", "unit": "元/吨"},
+        },
+    },
+    "FX": {
+        "ak_func": "currency_boc_sina",
+        "ak_kwargs": {"symbol": "美元", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "usdcny_mid": {"source": "央行中间价", "label": "美元兑人民币中间价", "unit": ""},
+        },
+    },
+    "MONEY_SUPPLY": {
+        "ak_func": "macro_china_money_supply",
+        "date_col": "月份",
+        "date_freq": "month",
+        "delay": 10,
+        "fields": {
+            "m2_yoy": {"source": "货币和准货币(M2)-同比增长", "label": "M2同比", "unit": "%"},
+            "m1_yoy": {"source": "货币(M1)-同比增长", "label": "M1同比", "unit": "%"},
+            "m0_yoy": {"source": "流通中的现金(M0)-同比增长", "label": "M0同比", "unit": "%"},
+        },
+    },
+    "SOCIAL_FINANCE": {
+        "ak_func": "macro_china_shrzgm",
+        "date_col": "月份",
+        "date_freq": "month",
+        "delay": 15,
+        "fields": {
+            "social_finance": {"source": "社会融资规模增量", "label": "社会融资规模增量", "unit": "亿元"},
+            "sf_rmb_loan": {"source": "其中-人民币贷款", "label": "社融中人民币贷款", "unit": "亿元"},
+        },
+    },
+    "LOAN": {
+        "ak_func": "macro_rmb_loan",
+        "date_col": "月份",
+        "date_freq": "month",
+        "delay": 10,
+        "fields": {
+            "new_loan": {"source": "新增人民币贷款-总额", "label": "新增人民币贷款", "unit": "亿元"},
+            "new_loan_yoy": {"source": "新增人民币贷款-同比", "label": "新增人民币贷款同比", "unit": "%"},
+        },
+    },
+    "CRUDE_OIL": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "SC0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "crude_close": {"source": "收盘价", "label": "原油SC主力收盘价", "unit": "元/桶"},
+        },
+    },
+    "MARGIN": {
+        "ak_func": "macro_china_market_margin_sh",
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            # 源单位为元（约 1.3 万亿），除以 1e8 存为亿元，展示更可读
+            "margin_balance": {"source": "融资融券余额", "label": "沪市两融余额", "unit": "亿元", "scale": 1e-8},
+        },
+    },
+    "MARGIN_SZ": {
+        "ak_func": "macro_china_market_margin_sz",
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "margin_balance_sz": {"source": "融资融券余额", "label": "深市两融余额", "unit": "亿元", "scale": 1e-8},
+        },
+    },
+    "IVIX": {
+        "ak_func": "index_option_50etf_qvix",
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "ivix": {"source": "close", "label": "50ETF期权波动率指数iVIX", "unit": ""},
+        },
+    },
+    "FUTURES_IF": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "IF0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "if_close": {"source": "收盘价", "label": "沪深300期货IF主力收盘价", "unit": ""},
+            "if_hold": {"source": "持仓量", "label": "IF主力持仓量", "unit": "手"},
+        },
+    },
+    "FUTURES_IC": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "IC0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "ic_close": {"source": "收盘价", "label": "中证500期货IC主力收盘价", "unit": ""},
+            "ic_hold": {"source": "持仓量", "label": "IC主力持仓量", "unit": "手"},
+        },
+    },
+    "FUTURES_TF": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "TF0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "tf_close": {"source": "收盘价", "label": "国债期货TF主力收盘价", "unit": ""},
+        },
+    },
+    "GOLD": {
+        "ak_func": "futures_main_sina",
+        "ak_kwargs": {"symbol": "AU0", "start_date": "<5y>", "end_date": "<today>"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "au_close": {"source": "收盘价", "label": "沪金AU主力收盘价", "unit": "元/克"},
         },
     },
 }
@@ -136,6 +356,113 @@ def _build_macro_rows(df: pd.DataFrame, indicator_key: str) -> list[dict]:
                 "available_date": report_date + timedelta(days=fcfg.get("delay", 0)),
                 "source": "eastmoney",
             })
+    return rows
+
+
+def _resolve_ak_kwargs(cfg: dict) -> dict:
+    """解析 akshare 调用 kwargs，替换日期占位符（<today>/<5y>）。"""
+    kwargs = dict(cfg.get("ak_kwargs") or {})
+    today = datetime.now()
+    if kwargs.get("end_date") == "<today>":
+        kwargs["end_date"] = today.strftime("%Y%m%d")
+    if kwargs.get("start_date") == "<5y>":
+        kwargs["start_date"] = (today - timedelta(days=5 * 365)).strftime("%Y%m%d")
+    return kwargs
+
+
+def _to_float(val) -> float | None:
+    """宽松转 float：容忍 %、千分位逗号、None、NaN。"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            return float(val) if not pd.isna(val) else None
+        except (TypeError, ValueError):
+            return None
+    s = str(val).strip().replace(",", "").replace("%", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _parse_macro_date(value, freq: str) -> date | None:
+    """解析 akshare 日期/月份列 → date。
+
+    day 频率: datetime.date / datetime / 'YYYY-MM-DD'
+    month 频率: '2026年06月份' / '202604' / '2026-06'（取当月 1 日）
+    """
+    if value is None:
+        return None
+    if freq == "month":
+        s = str(value).strip()
+        m = re.search(r"(\d{4})[年\-/]?(\d{1,2})", s)
+        if m:
+            try:
+                return date(int(m.group(1)), int(m.group(2)), 1)
+            except ValueError:
+                return None
+        m2 = re.search(r"(\d{4})(\d{2})", s)
+        if m2:
+            try:
+                return date(int(m2.group(1)), int(m2.group(2)), 1)
+            except ValueError:
+                return None
+        return None
+    try:
+        dt = pd.to_datetime(value)
+        return dt.date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _fetch_akshare_macro(indicator_key: str, cfg: dict) -> list[dict]:
+    """调用 akshare 拉取单个指标，归一化为 macro_indicator 窄表行。
+
+    同步阻塞函数（网络 IO），调用方必须经 run_io_cpu 放入线程池。
+    """
+    import akshare as ak
+
+    fn = getattr(ak, cfg["ak_func"], None)
+    if fn is None:
+        logger.warning("akshare 无函数 %s", cfg["ak_func"])
+        return []
+    try:
+        df = fn(**_resolve_ak_kwargs(cfg))
+    except Exception as e:
+        logger.warning("akshare %s 拉取失败: %s", cfg["ak_func"], e)
+        return []
+    if df is None or df.empty:
+        logger.warning("akshare %s 返回空", cfg["ak_func"])
+        return []
+
+    delay = cfg.get("delay", 0)
+    freq = cfg.get("date_freq", "day")
+    rows: list[dict] = []
+    for _, r in df.iterrows():
+        d = _parse_macro_date(r.get(cfg["date_col"]), freq)
+        if d is None:
+            continue
+        avail = d + timedelta(days=delay)
+        for field_name, fcfg in cfg["fields"].items():
+            src = fcfg["source"]
+            if src not in df.columns:
+                continue
+            val = _to_float(r.get(src))
+            if val is None:
+                continue
+            # scale: 单位换算（如 元 → 亿元，除以 1e8）
+            val = val * fcfg.get("scale", 1.0)
+            rows.append({
+                "indicator": indicator_key,
+                "report_date": d,
+                "field_name": field_name,
+                "value": val,
+                "unit": fcfg.get("unit"),
+                "available_date": avail,
+                "source": "akshare",
+            })
+    logger.info("akshare %s 归一化 %d 行", indicator_key, len(rows))
     return rows
 
 
@@ -240,34 +567,56 @@ async def sync_macro_indicators(provider_uri: str | None = None) -> dict:
     summary: dict[str, int] = {}
     try:
         all_rows: list[dict] = []
-        for indicator_key in MACRO_INDICATORS:
-            cfg = MACRO_INDICATORS[indicator_key]
-            df = await run_io_cpu(fetch_eastmoney_macro, cfg["report_name"])
-            rows = _build_macro_rows(df, indicator_key) if not df.empty else []
+        # 东财 + akshare 统一拉取（逐指标更新进度，方便前端显示）
+        ind_order = list(MACRO_INDICATORS) + list(AKSHARE_INDICATORS)
+        total_ind = len(ind_order)
+        for i, indicator_key in enumerate(ind_order):
+            update_progress(
+                pct=5 + int(35 * i / total_ind), status="running",
+                message=f"拉取宏观指标 {i + 1}/{total_ind}（{indicator_key}）...",
+            )
+            if indicator_key in MACRO_INDICATORS:
+                cfg = MACRO_INDICATORS[indicator_key]
+                df = await run_io_cpu(fetch_eastmoney_macro, cfg["report_name"])
+                rows = _build_macro_rows(df, indicator_key) if not df.empty else []
+            else:
+                rows = await run_io_cpu(_fetch_akshare_macro, indicator_key, AKSHARE_INDICATORS[indicator_key])
             all_rows.extend(rows)
             summary[indicator_key] = len(rows)
             logger.info("宏观 %s 拉取 %d 行", indicator_key, len(rows))
 
+        update_progress(pct=42, status="running", message="写入数据库...")
         inserted = await upsert_macro(all_rows)
         logger.info("宏观入库: 新增 %d 行", inserted)
 
-        # forward-fill + 广播写 bin（同步 IO 重活走线程池）
+        # forward-fill + 广播写 bin（东财 + akshare 全字段，同步 IO 重活走线程池）
+        all_field_specs = [
+            (ind, fname, fcfg)
+            for ind, cfg in MACRO_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
+        ] + [
+            (ind, fname, fcfg)
+            for ind, cfg in AKSHARE_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
+        ]
+        total_fields = len(all_field_specs)
         total_written = 0
-        for indicator_key, cfg in MACRO_INDICATORS.items():
-            for field_name, fcfg in cfg["fields"].items():
-                series = await _load_macro_series(indicator_key, field_name)
-                if series.empty:
-                    logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
-                    continue
-                values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)
-                n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
-                total_written += n
-                logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
+        for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
+            update_progress(
+                pct=45 + int(55 * (j + 1) / total_fields), status="running",
+                message=f"广播字段 {j + 1}/{total_fields}（{field_name}）...",
+            )
+            series = await _load_macro_series(indicator_key, field_name)
+            if series.empty:
+                logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
+                continue
+            values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)
+            n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
+            total_written += n
+            logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
 
         finish_progress(True)
         await asyncio.sleep(3)
         clear_progress()
-        return {"ok": True, "source": "eastmoney", "inserted": inserted,
+        return {"ok": True, "source": "eastmoney+akshare", "inserted": inserted,
                 "fields_written": total_written, "by_indicator": summary}
     except Exception as e:
         finish_progress(False, str(e))

@@ -1,28 +1,51 @@
 <template>
-  <section class="section-card" :class="{ 'section-card--compact': compact }">
+  <section class="section-card" :class="{ 'section-card--compact': compact, 'section-card--collapsed': collapsed }">
     <div v-if="$slots.header || title" class="section-card__header">
-      <slot name="header">
-        <div class="section-card__header-left">
+      <div
+        class="section-card__header-left"
+        :class="{ 'section-card__header-left--clickable': collapsible }"
+        @click="collapsible && toggle()"
+      >
+        <slot name="header">
           <h3 class="section-card__title">{{ title }}</h3>
           <span v-if="subtitle" class="section-card__subtitle">{{ subtitle }}</span>
-        </div>
-        <div v-if="$slots.extra" class="section-card__header-extra">
-          <slot name="extra" />
-        </div>
-      </slot>
+        </slot>
+      </div>
+      <div v-if="$slots.extra || collapsible" class="section-card__header-extra">
+        <slot name="extra" />
+        <el-icon v-if="collapsible" class="section-card__collapse-icon" @click.stop="toggle()">
+          <ArrowDown />
+        </el-icon>
+      </div>
     </div>
-    <div class="section-card__body">
-      <slot />
-    </div>
+    <el-collapse-transition>
+      <div v-show="!collapsed" class="section-card__body">
+        <slot />
+      </div>
+    </el-collapse-transition>
   </section>
 </template>
 
 <script setup>
-defineProps({
+import { ref, watch } from 'vue'
+import { ArrowDown } from '@element-plus/icons-vue'
+
+const props = defineProps({
   title: { type: String, default: '' },
   subtitle: { type: String, default: '' },
-  compact: { type: Boolean, default: false }
+  compact: { type: Boolean, default: false },
+  collapsible: { type: Boolean, default: false },
+  collapsed: { type: Boolean, default: false }
 })
+const emit = defineEmits(['update:collapsed'])
+
+const collapsed = ref(props.collapsed)
+watch(() => props.collapsed, (v) => { collapsed.value = v })
+
+function toggle() {
+  collapsed.value = !collapsed.value
+  emit('update:collapsed', collapsed.value)
+}
 </script>
 
 <style scoped lang="scss">
@@ -80,6 +103,16 @@ defineProps({
   gap: var(--space-sm);
   flex-shrink: 0;
 }
+
+.section-card__header-left--clickable { cursor: pointer; }
+
+.section-card__collapse-icon {
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-in-out);
+  cursor: pointer;
+}
+
+.section-card--collapsed .section-card__collapse-icon { transform: rotate(-90deg); }
 
 .section-card__body {
   padding: var(--space-lg);

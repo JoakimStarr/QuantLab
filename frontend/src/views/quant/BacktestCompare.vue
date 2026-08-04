@@ -174,6 +174,10 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { chartTheme, withAlpha } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+
+const themeRev = useThemeRev()
 import { compareBacktests } from '@/api/quant'
 import { listAllBacktestResults } from '@/api/strategy'
 
@@ -194,7 +198,16 @@ const selectorCollapsed = ref(false)
 const comparing = ref(false)
 
 // 配色
-const colors = ['#1f4ba0', '#1f9d6b', '#d24545', '#c8801c', '#2f7dc2', '#9333ea', '#0891b2', '#be185d']
+const colors = [
+  chartTheme.primary(),
+  chartTheme.success(),
+  chartTheme.danger(),
+  chartTheme.warning(),
+  chartTheme.info(),
+  chartTheme.palette(6),
+  chartTheme.palette(7),
+  chartTheme.palette(8),
+]
 
 const curveEmpty = computed(() => Object.keys(curveData.value).length === 0)
 
@@ -240,6 +253,7 @@ function cellClass({ column, row }) {
 
 // 净值曲线图配置
 const curveOption = computed(() => {
+  void themeRev.value
   const results = resultList.value
   // 收集所有日期并排序
   const allDates = new Set()
@@ -269,17 +283,19 @@ const curveOption = computed(() => {
 
   return {
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false },
-    yAxis: { type: 'value', name: '净值', scale: true, nameLocation: 'middle', nameGap: 40 },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '净值', scale: true, nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series
   }
 })
 
 // 月度收益分布图配置
 const monthlyOption = computed(() => {
+  void themeRev.value
   const allMonths = new Set()
   const perResult = []
   Object.entries(curveData.value).forEach(([rid, points], idx) => {
@@ -318,16 +334,18 @@ const monthlyOption = computed(() => {
         return s
       }
     },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
+    textStyle: { color: chartTheme.axisText() },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: sortedMonths },
-    yAxis: { type: 'value', name: '收益率%', axisLabel: { formatter: '{value}%' } },
+    xAxis: { type: 'category', data: sortedMonths, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '收益率%', axisLabel: { formatter: '{value}%', color: chartTheme.axisText() } },
     series,
   }
 })
 
 // 回撤对比图配置
 const drawdownOption = computed(() => {
+  void themeRev.value
   const allDates = new Set()
   Object.values(curveData.value).forEach(points => {
     points.forEach(p => allDates.add(p.date))
@@ -368,17 +386,19 @@ const drawdownOption = computed(() => {
         return s
       }
     },
-    legend: { top: 0, textStyle: { color: '#5b6b85' } },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
+    textStyle: { color: chartTheme.axisText() },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false },
-    yAxis: { type: 'value', name: '回撤%', axisLabel: { formatter: '{value}%' } },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: { type: 'value', name: '回撤%', axisLabel: { formatter: '{value}%', color: chartTheme.axisText() } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series,
   }
 })
 
 // 风险指标雷达图配置
 const radarOption = computed(() => {
+  void themeRev.value
   const indicators = [
     { name: '年化收益', max: 100 },
     { name: '夏普', max: 3 },
@@ -412,12 +432,14 @@ const radarOption = computed(() => {
   })
   return {
     tooltip: { trigger: 'item' },
-    legend: { top: 0, textStyle: { color: '#5b6b85' }, data: data.map(d => d.name) },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() }, data: data.map(d => d.name) },
     radar: {
       indicator: indicators,
       shape: 'polygon',
       splitNumber: 5,
-      splitArea: { areaStyle: { color: ['rgba(31,75,160,0.02)', 'rgba(31,75,160,0.04)'] } },
+      axisName: { color: chartTheme.textPrimary() },
+      splitArea: { areaStyle: { color: [withAlpha(chartTheme.primary(), 0.02), withAlpha(chartTheme.primary(), 0.04)] } },
     },
     series: [{ type: 'radar', data }],
   }
@@ -638,7 +660,7 @@ onMounted(loadData)
 }
 
 :deep(.best-cell) {
-  background-color: rgba(31, 75, 160, 0.08) !important;
+  background-color: var(--primary-soft);
   font-weight: 600;
 }
 

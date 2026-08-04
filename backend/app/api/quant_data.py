@@ -109,6 +109,9 @@ async def _detect_stale_sync(db) -> int:
         worker_dead = not _pid_alive(prog.get("worker_pid"))
 
     if worker_dead:
+        # worker 崩溃前若已通过 finish_progress(False, err) 写入真实错误，
+        # 直接透传，而不是用"[worker 退出]"通用提示（用户无需翻日志）。
+        real_error = (prog or {}).get("error")
         result2 = await db.execute(
             select(StockDataStatus).where(
                 StockDataStatus.status == "syncing",
@@ -118,10 +121,16 @@ async def _detect_stale_sync(db) -> int:
         for rec in result2.scalars().all():
             if rec.universe not in marked:
                 rec.status = "failed"
-                rec.last_error = (
-                    "[worker 退出] 同步进程已退出（可能被杀/崩溃），已标记失败\n"
-                    "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
-                )
+                if real_error:
+                    rec.last_error = (
+                        f"[worker 退出] {real_error}\n"
+                        "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
+                    )
+                else:
+                    rec.last_error = (
+                        "[worker 退出] 同步进程已退出（可能被杀/崩溃），已标记失败\n"
+                        "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
+                    )
                 rec.last_updated = datetime.now()
                 logger.warning("sync 超时: universe=%s 的 worker 进程已死，标记 failed", rec.universe)
                 marked.add(rec.universe)

@@ -5,6 +5,8 @@ export const useAppStore = defineStore('app', () => {
   const loading = ref(false)
   const sidebarCollapsed = ref(false)
   const theme = ref(localStorage.getItem('theme') || 'light')
+  // 主题版本号：每次主题切换 +1，供图表 computed 建立依赖以重读 CSS 变量刷新
+  const themeRev = ref(0)
 
   // Watch theme changes and apply to document
   watch(theme, (newTheme) => {
@@ -15,6 +17,7 @@ export const useAppStore = defineStore('app', () => {
       root.classList.remove('dark')
     }
     localStorage.setItem('theme', newTheme)
+    themeRev.value++
   }, { immediate: true })
 
   function toggleSidebar() {
@@ -33,6 +36,7 @@ export const useAppStore = defineStore('app', () => {
     loading,
     sidebarCollapsed,
     theme,
+    themeRev,
     toggleSidebar,
     toggleTheme,
     setTheme,

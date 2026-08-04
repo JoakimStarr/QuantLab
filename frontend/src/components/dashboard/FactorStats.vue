@@ -1,5 +1,5 @@
 <template>
-  <SectionCard title="因子统计">
+  <SectionCard title="因子统计" collapsible>
     <div class="factor-stats">
       <div class="factor-stats__total">
         <span class="factor-stats__total-label">因子总数</span>
@@ -71,11 +71,11 @@ const sourceBars = computed(() => {
   display: inline-block; padding: 2px 8px; border-radius: 4px;
   font-size: 12px; font-weight: 500; line-height: 1.5;
 }
-.badge--primary { background: rgba(31,75,160,0.1); color: var(--primary); }
-.badge--success { background: rgba(31,157,107,0.1); color: var(--success); }
-.badge--warning { background: rgba(200,128,28,0.1); color: var(--warning); }
-.badge--info { background: rgba(47,125,194,0.1); color: var(--info); }
-.badge--danger { background: rgba(210,69,69,0.1); color: var(--danger); }
+.badge--primary { background: var(--primary-soft); color: var(--primary); }
+.badge--success { background: var(--success-soft); color: var(--success); }
+.badge--warning { background: var(--warning-soft); color: var(--warning); }
+.badge--info { background: var(--info-soft); color: var(--info); }
+.badge--danger { background: var(--danger-soft); color: var(--danger); }
 .factor-stats__bar-fill.badge--primary { background: var(--primary); }
 .factor-stats__bar-fill.badge--success { background: var(--success); }
 .factor-stats__bar-fill.badge--warning { background: var(--warning); }

@@ -9,6 +9,7 @@ from app.api.auth import router as auth_router
 from app.api.data_ext import router as data_ext_router
 from app.api.factor_ext import router as factor_ext_router
 from app.api.strategy_ext import router as strategy_ext_router
+from app.api.strategy_rule import router as strategy_rule_router
 from app.api.mining_ext import router as mining_ext_router
 from app.api.market import router as market_router
 from app.api.macro import router as macro_router
@@ -26,6 +27,7 @@ api_router.include_router(auth_router)
 api_router.include_router(data_ext_router, dependencies=_auth)
 api_router.include_router(factor_ext_router, dependencies=_auth)
 api_router.include_router(strategy_ext_router, dependencies=_auth)
+api_router.include_router(strategy_rule_router, dependencies=_auth)
 api_router.include_router(mining_ext_router, dependencies=_auth)
 api_router.include_router(quant_data_router, dependencies=_auth)
 api_router.include_router(factor_router, dependencies=_auth)

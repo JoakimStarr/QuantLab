@@ -76,7 +76,7 @@ def _write_progress_file(progress: Optional[dict]) -> None:
 
 
 def _pid_alive(pid) -> bool:
-    """判断 PID 对应的进程是否存活。"""
+    """判断 PID 对应的进程是否存活（僵尸进程视为已死）。"""
     try:
         pid = int(pid)
     except (TypeError, ValueError):
@@ -85,13 +85,21 @@ def _pid_alive(pid) -> bool:
         return False
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        return True  # 存在但无权限探测（如其他用户进程），保守视为存活
     except OSError:
         return False
+    # kill(pid,0) 成功不代表进程真的在跑：僵尸进程（defunct）仍保留进程表项。
+    # 僵尸已不执行任何代码，若 worker 异常退出且无人 waitpid 回收，残留的进度
+    # 文件会让 sync_is_active 长期误判"正在同步"而阻塞后续同步/补齐（409）。
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="ascii") as f:
+            state = f.read().split()[2]
+        return state != "Z"
+    except (OSError, IndexError, ValueError):
+        return True  # /proc 不可用或解析失败时退化为仅靠 kill 探测
 
 
 class SyncProgressManager:
@@ -109,6 +117,17 @@ class SyncProgressManager:
     def init_progress(self, universe: str, data_source: str, total_mb: float = 0) -> None:
         """初始化进度跟踪"""
         with self._lock:
+            # 保留仍存活的 worker_pid：独立 worker 子进程内任务可能再次
+            # init_progress（如 run_repair / run_baostock_backfill），若丢失 pid，
+            # 进程被杀后 sync_is_active 将无法识别僵尸任务而长期阻塞重触发。
+            alive_pid = None
+            prev = self._progress
+            if prev is not None and _pid_alive(prev.worker_pid):
+                alive_pid = prev.worker_pid
+            elif prev is None:
+                f = _read_progress_file()
+                if f and _pid_alive(f.get("worker_pid")):
+                    alive_pid = f["worker_pid"]
             self._progress = SyncProgress(
                 universe=universe,
                 data_source=data_source,
@@ -116,6 +135,8 @@ class SyncProgressManager:
                 total_mb=total_mb,
                 started_at=datetime.now().isoformat(),
             )
+            if alive_pid:
+                self._progress.worker_pid = int(alive_pid)
             _write_progress_file(self._progress.to_dict())
 
     def update_progress(

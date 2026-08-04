@@ -1,20 +1,34 @@
 <template>
-  <SectionCard title="K线走势">
+  <SectionCard title="K线走势" collapsible>
     <template #extra>
       <div class="chart-controls">
         <div class="chart-stock-search">
-          <el-input
+          <el-autocomplete
             v-model="stockQuery"
-            size="small"
             class="chart-stock-search__input"
-            placeholder="股票名称/首字母/代码"
+            :fetch-suggestions="querySearch"
+            placeholder="搜索个股：名称 / 首字母 / 代码"
             clearable
-            @keyup.enter="runStockKline"
-          />
-          <el-button size="small" type="primary" :disabled="!stockQuery.trim()" @click="runStockKline">
+            size="small"
+            :debounce="300"
+            value-key="value"
+            @select="onStockSelect"
+          >
+            <template #default="{ item }">
+              <div class="stock-suggestion">
+                <span class="stock-suggestion__name">{{ item.name }}</span>
+                <span class="stock-suggestion__code">{{ item.code }}</span>
+                <span v-if="item.initials" class="stock-suggestion__initials">{{ item.initials }}</span>
+              </div>
+            </template>
+          </el-autocomplete>
+          <el-button size="small" type="primary" :disabled="!stockQuery.trim()" @click="searchFirst">
             个股K线
           </el-button>
         </div>
+        <el-tag v-if="stockTarget" closable size="small" class="chart-stock-tag" @close="$emit('clear-stock')">
+          {{ stockTarget.name }}
+        </el-tag>
         <el-select
           :model-value="selectedIndex"
           size="small"
@@ -44,13 +58,13 @@
           class="chart-timerange"
           @update:model-value="$emit('update:time-range', $event)"
         >
-          <el-radio-button label="1M">1月</el-radio-button>
-          <el-radio-button label="3M">3月</el-radio-button>
-          <el-radio-button label="6M">6月</el-radio-button>
-          <el-radio-button label="1Y">1年</el-radio-button>
-          <el-radio-button label="2Y">2年</el-radio-button>
-          <el-radio-button label="ALL">全部</el-radio-button>
-          <el-radio-button label="custom">自定义</el-radio-button>
+          <el-radio-button value="1M">1月</el-radio-button>
+          <el-radio-button value="3M">3月</el-radio-button>
+          <el-radio-button value="6M">6月</el-radio-button>
+          <el-radio-button value="1Y">1年</el-radio-button>
+          <el-radio-button value="2Y">2年</el-radio-button>
+          <el-radio-button value="ALL">全部</el-radio-button>
+          <el-radio-button value="custom">自定义</el-radio-button>
         </el-radio-group>
         <el-date-picker
           v-if="timeRange === 'custom'"
@@ -70,10 +84,10 @@
           class="chart-indicators"
           @update:model-value="$emit('update:active-indicators', $event)"
         >
-          <el-checkbox-button label="MA">MA</el-checkbox-button>
-          <el-checkbox-button label="EMA">EMA</el-checkbox-button>
-          <el-checkbox-button label="MACD">MACD</el-checkbox-button>
-          <el-checkbox-button label="KDJ">KDJ</el-checkbox-button>
+          <el-checkbox-button value="MA">MA</el-checkbox-button>
+          <el-checkbox-button value="EMA">EMA</el-checkbox-button>
+          <el-checkbox-button value="MACD">MACD</el-checkbox-button>
+          <el-checkbox-button value="KDJ">KDJ</el-checkbox-button>
         </el-checkbox-group>
       </div>
     </template>
@@ -92,7 +106,13 @@
 <script setup>
 import { computed, ref } from 'vue'
 import VChart from 'vue-echarts'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { chartTheme } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
+import { searchStocks } from '@/api/quant'
+
+const themeRev = useThemeRev()
 
 const props = defineProps({
   klineItems: { type: Array, default: () => [] },
@@ -104,6 +124,7 @@ const props = defineProps({
   klineLoading: { type: Boolean, default: false },
   timeRange: { type: String, default: '2Y' },
   customRange: { type: Array, default: () => null },
+  stockTarget: { type: Object, default: null },
 })
 
 const emit = defineEmits([
@@ -113,24 +134,61 @@ const emit = defineEmits([
   'update:time-range',
   'update:custom-range',
   'run-stock-kline',
+  'select-stock',
+  'clear-stock',
 ])
 
 const stockQuery = ref('')
 
-function runStockKline() {
-  const query = stockQuery.value.trim()
-  if (!query) return
-  emit('run-stock-kline', query)
+async function querySearch(query, cb) {
+  const q = (query || '').trim()
+  if (!q) return cb([])
+  try {
+    const res = await searchStocks(q, 10)
+    cb((res?.items ?? []).map(s => ({
+      value: `${s.name} ${s.code}`,
+      code: s.qlib_code || s.code,
+      name: s.name,
+      initials: s.initials || '',
+    })))
+  } catch {
+    cb([])
+  }
+}
+
+function onStockSelect(item) {
+  if (!item?.code) return
+  emit('select-stock', { code: item.code, name: item.name })
+  stockQuery.value = ''
+}
+
+async function searchFirst() {
+  const q = stockQuery.value.trim()
+  if (!q) return
+  try {
+    const res = await searchStocks(q, 1)
+    const s = res?.items?.[0]
+    if (s?.qlib_code) {
+      emit('select-stock', { code: s.qlib_code, name: s.name })
+      stockQuery.value = ''
+    } else {
+      ElMessage.warning('未找到匹配个股')
+    }
+  } catch {
+    ElMessage.error('个股搜索失败')
+  }
 }
 
 const klineDates = computed(() => props.klineItems.map(k => k.date))
 const klineOhlc = computed(() => props.klineItems.map(k => [k.open, k.close, k.low, k.high]))
-const klineVolumes = computed(() => props.klineItems.map(k => k.volume))
-const klineVolumesInYiGu = computed(() => klineVolumes.value.map(v => (Number(v) || 0) / 100000000))
+// 个股成交量单位按万股显示，指数按亿股显示
+const isStock = computed(() => !!props.stockTarget)
+const volumeUnit = computed(() => (isStock.value ? '万股' : '亿股'))
+const klineVolumes = computed(() => props.klineItems.map(k => (Number(k.volume) || 0) / (isStock.value ? 10000 : 100000000)))
 
-function formatYiGu(value) {
+function formatVolume(value) {
   const num = Number(value) || 0
-  return `${num.toFixed(num >= 100 ? 0 : 2)}亿股`
+  return `${num.toFixed(num >= 100 ? 0 : 2)}${volumeUnit.value}`
 }
 
 function calcMA(data, period) {
@@ -197,6 +255,7 @@ const klineChartHeight = computed(() => {
 })
 
 const klineOption = computed(() => {
+  void themeRev.value
   const inds = props.activeIndicators
   const showMA = inds.includes('MA')
   const showEMA = inds.includes('EMA')
@@ -208,47 +267,49 @@ const klineOption = computed(() => {
   if (!data.length) return {}
 
   const extraSubs = (showMACD ? 1 : 0) + (showKDJ ? 1 : 0)
-  let grids, xAxes, yAxes, zoomIndices, dataZoomTop
+  // 数据量少时（如 1 月）默认显示全部，避免被 dataZoom 裁成尾部一小段
+  const zoomStart = data.length <= 80 ? 0 : 60
+  let grids, xAxes, yAxes, zoomIndices
   if (extraSubs === 0) {
     grids = [
-      { left: '8%', right: '4%', top: '8%', height: '55%' },
-      { left: '8%', right: '4%', top: '70%', height: '18%' },
+      { left: '10%', right: '4%', top: '8%', height: '55%' },
+      { left: '10%', right: '4%', top: '70%', height: '18%' },
     ]
-    xAxes = [0, 1].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
+    xAxes = [0, 1].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
     yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }]
-    zoomIndices = [0, 1]; dataZoomTop = '92%'
+    zoomIndices = [0, 1]
   } else if (extraSubs === 1) {
     grids = [
-      { left: '8%', right: '4%', top: '6%', height: '46%' },
-      { left: '8%', right: '4%', top: '56%', height: '14%' },
-      { left: '8%', right: '4%', top: '74%', height: '14%' },
+      { left: '10%', right: '4%', top: '6%', height: '46%' },
+      { left: '10%', right: '4%', top: '56%', height: '14%' },
+      { left: '10%', right: '4%', top: '74%', height: '14%' },
     ]
-    xAxes = [0, 1, 2].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
+    xAxes = [0, 1, 2].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
     yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }, { gridIndex: 2, splitNumber: 2 }]
-    zoomIndices = [0, 1, 2]; dataZoomTop = '91%'
+    zoomIndices = [0, 1, 2]
   } else {
     grids = [
-      { left: '8%', right: '4%', top: '5%', height: '38%' },
-      { left: '8%', right: '4%', top: '47%', height: '12%' },
-      { left: '8%', right: '4%', top: '63%', height: '12%' },
-      { left: '8%', right: '4%', top: '79%', height: '12%' },
+      { left: '10%', right: '4%', top: '5%', height: '38%' },
+      { left: '10%', right: '4%', top: '47%', height: '12%' },
+      { left: '10%', right: '4%', top: '63%', height: '12%' },
+      { left: '10%', right: '4%', top: '79%', height: '12%' },
     ]
-    xAxes = [0, 1, 2, 3].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
+    xAxes = [0, 1, 2, 3].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
     yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }, { gridIndex: 2, splitNumber: 2 }, { gridIndex: 3, splitNumber: 2 }]
-    zoomIndices = [0, 1, 2, 3]; dataZoomTop = '93%'
+    zoomIndices = [0, 1, 2, 3]
   }
 
-  const legendData = ['日K', '成交量(亿股)']
+  const legendData = [`日K`, `成交量(${volumeUnit.value})`]
   const series = [
     {
       name: '日K', type: 'candlestick', data: klineOhlc.value,
-      itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' },
+      itemStyle: { color: chartTheme.up(), color0: chartTheme.down(), borderColor: chartTheme.up(), borderColor0: chartTheme.down() },
     },
-    { name: '成交量(亿股)', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: klineVolumesInYiGu.value, itemStyle: { color: '#7fbbea' } },
+    { name: `成交量(${volumeUnit.value})`, type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: klineVolumes.value, itemStyle: { color: chartTheme.volume() } },
   ]
 
   if (showMA) {
-    const maColors = { MA5: '#ffaa00', MA10: '#ff55ff', MA20: '#00bfff', MA60: '#cccccc' }
+    const maColors = { MA5: chartTheme.ma5(), MA10: chartTheme.ma10(), MA20: chartTheme.ma20(), MA60: chartTheme.ma60() }
     const maData = { MA5: calcMA(data, 5), MA10: calcMA(data, 10), MA20: calcMA(data, 20), MA60: calcMA(data, 60) }
     Object.entries(maData).forEach(([key, vals]) => {
       legendData.push(key)
@@ -257,7 +318,7 @@ const klineOption = computed(() => {
   }
 
   if (showEMA) {
-    const emaColors = { EMA12: '#e6a23c', EMA26: '#a23ce6' }
+    const emaColors = { EMA12: chartTheme.ema12(), EMA26: chartTheme.ema26() }
     const emaData = { EMA12: calcEMA(data, 12), EMA26: calcEMA(data, 26) }
     Object.entries(emaData).forEach(([key, vals]) => {
       legendData.push(key)
@@ -270,9 +331,9 @@ const klineOption = computed(() => {
     const { dif, dea, macd } = calcMACD(data)
     legendData.push('DIF', 'DEA', 'MACD')
     series.push(
-      { name: 'DIF', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dif, showSymbol: false, lineStyle: { width: 1, color: '#ffaa00' }, itemStyle: { color: '#ffaa00' } },
-      { name: 'DEA', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dea, showSymbol: false, lineStyle: { width: 1, color: '#ff55ff' }, itemStyle: { color: '#ff55ff' } },
-      { name: 'MACD', type: 'bar', xAxisIndex: gi, yAxisIndex: gi, data: macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#ef232a' : '#14b143' } })) }
+      { name: 'DIF', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dif, showSymbol: false, lineStyle: { width: 1, color: chartTheme.dif() }, itemStyle: { color: chartTheme.dif() } },
+      { name: 'DEA', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dea, showSymbol: false, lineStyle: { width: 1, color: chartTheme.dea() }, itemStyle: { color: chartTheme.dea() } },
+      { name: 'MACD', type: 'bar', xAxisIndex: gi, yAxisIndex: gi, data: macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? chartTheme.up() : chartTheme.down() } })) }
     )
   }
 
@@ -281,15 +342,16 @@ const klineOption = computed(() => {
     const { k, d, j } = calcKDJ(data)
     legendData.push('K', 'D', 'J')
     series.push(
-      { name: 'K', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: k, showSymbol: false, lineStyle: { width: 1, color: '#ffaa00' }, itemStyle: { color: '#ffaa00' } },
-      { name: 'D', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: d, showSymbol: false, lineStyle: { width: 1, color: '#ff55ff' }, itemStyle: { color: '#ff55ff' } },
-      { name: 'J', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: j, showSymbol: false, lineStyle: { width: 1, color: '#00bfff' }, itemStyle: { color: '#00bfff' } }
+      { name: 'K', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: k, showSymbol: false, lineStyle: { width: 1, color: chartTheme.k() }, itemStyle: { color: chartTheme.k() } },
+      { name: 'D', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: d, showSymbol: false, lineStyle: { width: 1, color: chartTheme.d() }, itemStyle: { color: chartTheme.d() } },
+      { name: 'J', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: j, showSymbol: false, lineStyle: { width: 1, color: chartTheme.j() }, itemStyle: { color: chartTheme.j() } }
     )
   }
 
   return {
     animation: true,
-    legend: { data: legendData, top: 0 },
+    textStyle: { color: chartTheme.axisText() },
+    legend: { data: legendData, top: 0, type: 'scroll', width: '100%', textStyle: { color: chartTheme.axisText() } },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross' },
@@ -301,13 +363,16 @@ const klineOption = computed(() => {
         for (const item of items) {
           if (item.seriesName === '日K' && Array.isArray(item.data)) {
             const [open, close, low, high] = item.data
-            lines.push(
-              `${item.marker}${item.seriesName}：开 ${open}，收 ${close}，低 ${low}，高 ${high}`,
-            )
+            const idx = item.dataIndex
+            const prev = props.klineItems[idx - 1]
+            const cur = props.klineItems[idx]
+            const pct = prev && cur ? ((Number(cur.close) - Number(prev.close)) / Number(prev.close) * 100) : null
+            const pctTxt = pct !== null ? `（${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%）` : ''
+            lines.push(`${item.marker}${item.seriesName}：开 ${open}，收 ${close}，低 ${low}，高 ${high}${pctTxt}`)
             continue
           }
-          if (item.seriesName === '成交量(亿股)') {
-            lines.push(`${item.marker}${item.seriesName}：${formatYiGu(item.data)}`)
+          if (item.seriesName.startsWith('成交量(')) {
+            lines.push(`${item.marker}${item.seriesName}：${formatVolume(item.data)}`)
             continue
           }
           lines.push(`${item.marker}${item.seriesName}：${item.data}`)
@@ -320,12 +385,12 @@ const klineOption = computed(() => {
     xAxis: xAxes,
     yAxis: yAxes.map((axis, index) => (
       index === 1
-        ? { ...axis, axisLabel: { formatter: (value) => `${value}亿股` } }
+        ? { ...axis, axisLabel: { formatter: (value) => `${value}${volumeUnit.value}` } }
         : axis
     )),
     dataZoom: [
-      { type: 'inside', xAxisIndex: zoomIndices, start: 60, end: 100 },
-      { show: true, type: 'slider', xAxisIndex: zoomIndices, top: dataZoomTop, start: 60, end: 100 },
+      { type: 'inside', xAxisIndex: zoomIndices, start: zoomStart, end: 100 },
+      { show: true, type: 'slider', xAxisIndex: zoomIndices, bottom: 6, height: 20, start: zoomStart, end: 100, textStyle: { color: chartTheme.axisText() } },
     ],
     series,
   }
@@ -342,8 +407,17 @@ const klineOption = computed(() => {
   gap: 8px;
 }
 .chart-stock-search__input {
-  width: 210px;
+  width: 230px;
 }
+.stock-suggestion {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+}
+.stock-suggestion__name { color: var(--text-primary); }
+.stock-suggestion__code { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 12px; }
+.stock-suggestion__initials {
+  margin-left: auto; color: var(--text-tertiary); font-size: 12px;
+}
+.chart-stock-tag { margin-left: 4px; }
 .chart-index-select { width: 130px; }
 .chart-range { display: flex; gap: 4px; }
 .chart-timerange { margin-left: 4px; }

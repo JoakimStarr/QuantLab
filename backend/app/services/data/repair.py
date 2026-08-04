@@ -73,11 +73,16 @@ def _rebuild_one_stock(code_upper: str, rows: list, calendar: list, qlib_dir: st
     _sync_stock_bin(feat_dir, out, calendar, BIN_FIELDS, overwrite=True)
 
 
-async def _fetch_stock_rows(code_upper: str) -> list:
-    """取某只股票在 stock_daily 的全部行（按日期升序），返回 dict 列表。"""
+async def _fetch_stock_rows(code: str) -> list:
+    """取某只股票在 stock_daily 的全部行（按日期升序），返回 dict 列表。
+
+    stock_daily.code 存大写（如 SH600000），而校验/修复目标的 repair_codes
+    来自 features 目录名（小写 sh600000），查询前必须归一化大小写，否则
+    所有目标都查不到行、bin 重建被静默跳过（表现为 bins(0ok/0failed)）。
+    """
     stmt = (
         select(*StockDaily.__table__.columns)
-        .where(StockDaily.code == code_upper)
+        .where(StockDaily.code == code.upper())
         .order_by(StockDaily.trade_date)
     )
     async with async_session() as session:

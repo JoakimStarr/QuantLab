@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def check_integrity(provider_uri: str, universe: str = None,
-                    start_time: str = "2020-01-01", end_time: str = None) -> dict:
+                    start_time: str = None, end_time: str = None) -> dict:
     """通过 qlib 直接加载验证 bin 数据完整性。
 
     对空数据/异常做友好返回（不抛 500），方便前端展示可操作的信息。
@@ -29,17 +29,22 @@ def check_integrity(provider_uri: str, universe: str = None,
         # 初始化 qlib
         init_qlib()
 
+        # 查询窗口默认取日历实际范围：数据可能只覆盖最近几天（如只回填了近期
+        # 交易日），若硬编码 2020-01-01 会把窗口扩到无数据区间，误报"加载为空"。
+        if start_time is None:
+            from app.services.data.eod_incremental import _get_calendar
+            calendar = _get_calendar(provider_uri)
+            start_time = calendar[0] if calendar else "2000-01-01"
+
         from qlib.data import D
-        # D.instruments 返回 dict（instrument -> 起止日期），转成代码列表传入 D.features
+        # D.instruments 返回的 inst 是特殊对象（dict.keys() 是 market/filter_pipe
+        # 等元信息而非股票代码），必须用 list_instruments 转成 code -> 起止日期映射。
         inst = D.instruments(market=universe or "all")
-        codes = list(inst.keys()) if isinstance(inst, dict) else []
-        if not codes:
-            # 尝试用 list_instruments 转换（某些 qlib 版本返回特殊对象）
-            try:
-                code_map = D.list_instruments(inst, freq="day")
-                codes = list(code_map.keys())
-            except Exception:
-                codes = []
+        try:
+            code_map = D.list_instruments(inst, freq="day")
+            codes = list(code_map.keys())
+        except Exception:
+            codes = []
         if not codes:
             return {
                 "ok": False, "rows": 0, "columns": [], "total_stocks": 0,

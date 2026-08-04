@@ -6,7 +6,11 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
-from app.services.data.macro_sync import MACRO_INDICATORS, run_macro_sync_task
+from app.services.data.macro_sync import (
+    AKSHARE_INDICATORS,
+    MACRO_INDICATORS,
+    run_macro_sync_task,
+)
 from app.models.macro import MacroIndicator
 
 logger = logging.getLogger(__name__)
@@ -16,11 +20,11 @@ router = APIRouter(prefix="/macro", tags=["macro"])
 
 @router.post("/sync")
 async def macro_sync_api(background_tasks: BackgroundTasks):
-    """手动触发宏观指标同步（东财 datacenter → PG → qlib bin 广播）。"""
+    """手动触发宏观指标同步（东财 datacenter + akshare → PG → qlib bin 广播）。"""
     background_tasks.add_task(run_macro_sync_task)
     return ApiResponse(ok=True, data={
         "message": "宏观指标同步已提交（后台执行）",
-        "indicators": sorted(MACRO_INDICATORS.keys()),
+        "indicators": sorted(MACRO_INDICATORS.keys()) + sorted(AKSHARE_INDICATORS.keys()),
     })
 
 

@@ -1,5 +1,5 @@
 <template>
-  <SectionCard title="最近挖掘任务">
+  <SectionCard title="最近挖掘任务" collapsible>
     <template #extra>
       <router-link to="/quant/mining" class="link">查看全部</router-link>
     </template>
@@ -53,11 +53,11 @@ defineProps({
   display: inline-block; padding: 2px 8px; border-radius: 4px;
   font-size: 12px; font-weight: 500; line-height: 1.5;
 }
-.badge--primary { color: var(--primary); background: rgba(31,75,160,0.1); }
-.badge--success { color: var(--success); background: rgba(31,157,107,0.1); }
-.badge--warning { color: var(--warning); background: rgba(200,128,28,0.1); }
-.badge--danger { color: var(--danger); background: rgba(210,69,69,0.1); }
-.badge--info { color: var(--info); background: rgba(47,125,194,0.1); }
+.badge--primary { color: var(--primary); background: var(--primary-soft); }
+.badge--success { color: var(--success); background: var(--success-soft); }
+.badge--warning { color: var(--warning); background: var(--warning-soft); }
+.badge--danger { color: var(--danger); background: var(--danger-soft); }
+.badge--info { color: var(--info); background: var(--info-soft); }
 .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .dashboard-table :deep(.el-table) {
   --el-table-bg-color: transparent;
