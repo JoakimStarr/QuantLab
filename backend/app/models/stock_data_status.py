@@ -19,6 +19,8 @@ class StockDataStatus(Base):
     qlib_dir = Column(String, nullable=True)
     # 智能同步走的路径：chenditc_full / baostock_incremental / baostock_today
     last_sync_path = Column(String, nullable=True)
+    # 同步触发来源：manual（手动点击开始同步，不限时）/ auto（自动重试，可限时回收）
+    sync_trigger = Column(String, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("universe", name="uq_stock_data_status_universe"),

@@ -4,10 +4,9 @@
   - 全量回填：POST /quant/data/sync?years=N，从最新交易日向旧逐日拉全市场，
     写 qlib bin + PG stock_daily 全字段（手动触发，无自动同步）。
 """
-from app.services.data.baostock_backfill import run_baostock_backfill_task as _run_sync_task
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 
 from app.core.config import settings
@@ -80,15 +79,17 @@ async def data_status_api(db=Depends(get_db)):
 async def _detect_stale_sync(db) -> int:
     """检测超时同步：上次更新超过 30 分钟仍为 syncing 的，自动标记为 failed。
 
-    仅对自动触发的同步（sync_trigger='auto'）生效——手动"开始同步"下载全市场
-    数据本来就慢，可能远超 30 分钟，不能被误杀；手动同步由任务自身的
-    120s 单日拉取超时 + 启动时 recover_stale_sync 兜底，不会永久卡死。
+    两类回收：
+    - auto 触发的同步：超过 30 分钟未完成即标记失败（手动全量回填本来就可能远超 30 分钟）。
+    - 手动/自动通用：独立 worker 子进程已死亡（worker_pid 无存活进程）但 DB 仍残留 syncing，
+      说明同步进程挂了，立即标记失败，避免永久卡 syncing 挡住后续同步。
 
     在状态查询时调用，避免容器重启后 syncing 状态长期残留。
     Returns:
         被标记为 failed 的记录数。
     """
     from datetime import timedelta
+    from app.services.data.sync_progress import get_progress
     threshold = datetime.now() - timedelta(minutes=30)
     result = await db.execute(
         select(StockDataStatus).where(
@@ -98,7 +99,36 @@ async def _detect_stale_sync(db) -> int:
         )
     )
     stale_recs = result.scalars().all()
+    marked = set()
+
+    # 手动触发的同步：若 worker 进程已死 → 也标记失败
+    prog = get_progress()
+    worker_dead = bool(prog and prog.get("worker_pid"))
+    if worker_dead:
+        from app.services.data.sync_progress import _pid_alive
+        worker_dead = not _pid_alive(prog.get("worker_pid"))
+
+    if worker_dead:
+        result2 = await db.execute(
+            select(StockDataStatus).where(
+                StockDataStatus.status == "syncing",
+                StockDataStatus.last_updated < datetime.now() - timedelta(minutes=1),
+            )
+        )
+        for rec in result2.scalars().all():
+            if rec.universe not in marked:
+                rec.status = "failed"
+                rec.last_error = (
+                    "[worker 退出] 同步进程已退出（可能被杀/崩溃），已标记失败\n"
+                    "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
+                )
+                rec.last_updated = datetime.now()
+                logger.warning("sync 超时: universe=%s 的 worker 进程已死，标记 failed", rec.universe)
+                marked.add(rec.universe)
+
     for rec in stale_recs:
+        if rec.universe in marked:
+            continue
         rec.status = "failed"
         rec.last_error = (
             "[同步超时] 同步超过 30 分钟未完成，已自动标记失败\n"
@@ -109,32 +139,35 @@ async def _detect_stale_sync(db) -> int:
             "sync 超时: universe=%s last_updated 超过 30 分钟，标记 failed",
             rec.universe,
         )
-    if stale_recs:
+    if stale_recs or marked:
         await db.commit()
-    return len(stale_recs)
+    return len(stale_recs) + len(marked)
 
 
 @router.post("/sync")
 async def sync_data_api(
     req: SyncDataRequest,
-    background_tasks: BackgroundTasks,
     db=Depends(get_db),
 ):
-    """触发 baostock 全量回填同步（后台执行，手动触发）。
+    """触发 baostock 全量回填同步（独立 worker 子进程执行，手动触发）。
 
     years 指定回填年数（从最新向旧）；不传默认 config.quant.backfill_years（默认5）。
+
+    同步在独立子进程（app.services.data.sync_worker）中运行，与 web 进程解耦：
+    uvicorn --reload 重启不会等它，也不会误杀它。状态写 DB、进度写共享文件，
+    前端通过 /quant/data/status 与 /quant/data/sync-progress 实时查看。
     """
     universe = req.universe or settings.quant.get("universe", "csi300")
     years = req.years or int(settings.quant.get("backfill_years", 5))
     data_source = "baostock"
-    # 若已有同步在真实执行（内存进度活跃），拒绝重复提交，避免并发重复下载：
+    # 若已有一个真实活跃的同步（内存或存活 worker），拒绝重复提交，避免并发下载：
     # baostock 禁止并发连接，两个回填并发会互相拖垮。
-    from app.services.data.sync_progress import get_progress
-    active = get_progress()
-    if active and active.get("status") not in ("done", "failed", "idle", None):
+    from app.services.data.sync_progress import get_progress, sync_is_active
+    if sync_is_active():
+        active = get_progress()
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": f"正在同步中，请稍候（当前 universe={active.get('universe')}）",
+            "message": f"正在同步中，请稍候（当前 universe={active.get('universe') if active else '?'}）",
             "status": 409,
         })
     existing = await db.execute(
@@ -142,8 +175,7 @@ async def sync_data_api(
     )
     rec = existing.scalar_one_or_none()
     if rec and rec.status == "syncing":
-        # 进程内无活跃同步但 DB 仍残留 syncing（如容器重启/进程被杀），
-        # 允许重新触发，由启动时 recover_stale_sync 统一收尾
+        # 无活跃 worker 但 DB 残留 syncing：允许重新触发，由 worker 状态覆盖
         logger.warning("universe=%s 残留 syncing 状态（%s），允许重新同步", universe, rec.last_updated)
 
     # 立即标记为 syncing 并更新 last_updated（手动触发，不限时）
@@ -157,12 +189,32 @@ async def sync_data_api(
     rec.last_updated = datetime.now()
     await db.commit()
 
-    background_tasks.add_task(_run_sync_task, req)
+    # 启动独立 worker 子进程（脱离 web 进程组，后台运行）
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("backfill", universe, years=years)
     return ApiResponse(ok=True, data={
-        "message": f"已触发 universe={universe} 数据同步（baostock 回填 {years} 年，后台执行）",
+        "message": f"已触发 universe={universe} 数据同步（baostock 回填 {years} 年，独立进程后台执行）",
         "universe": universe,
         "data_source": data_source,
         "years": years,
+    })
+
+
+@router.post("/sync-calendar")
+async def sync_calendar_api():
+    """以数据库 stock_daily 的交易日为准，重建 qlib 日历 day.txt。
+
+    不下载任何数据，只把 day.txt 与已落库日期对齐（数据库是权威）。
+    回填流程内部每批落库后也会自动更新日历；此端点用于手动修复
+    day.txt 与数据库不一致的情况（如历史残留、中断后的孤儿写入）。
+    """
+    from app.services.data.baostock_backfill import rebuild_calendar_from_db
+    dates = await rebuild_calendar_from_db()
+    return ApiResponse(ok=True, data={
+        "message": f"日历已与数据库同步，共 {len(dates)} 个交易日",
+        "calendar_count": len(dates),
+        "calendar_start": dates[0] if dates else None,
+        "calendar_end": dates[-1] if dates else None,
     })
 
 
@@ -171,12 +223,14 @@ async def fallback_sync_api(
     days: int = Query(5, ge=1, le=60, description="回溯天数"),
     source: str = Query("baostock", description="兜底源: baostock/akshare"),
 ):
-    """手动触发兜底同步（当定时同步失败时用）。
+    """手动触发兜底同步（独立 worker 后台执行）。
 
     - source='baostock': 用 baostock 一次拉全市场（推荐，快）
     - source='akshare': 用 akshare 逐只爬（慢，仅个股/指数）
 
-    依赖契约（并行开发中）: eod_incremental.incremental_sync_eod(days, universe, source) -> dict
+    同步在独立 worker 子进程（app.services.data.sync_worker --kind eod）中运行，
+    与 web 进程解耦，uvicorn --reload 重启不会等它。结果写 data/eod_last_result.json，
+    前端通过 /quant/data/eod-result 轮询。
     """
     if source not in ("baostock", "akshare"):
         return ApiResponse(ok=False, error={
@@ -184,14 +238,15 @@ async def fallback_sync_api(
             "message": f"不支持的兜底源: {source}，仅支持 baostock/akshare",
             "status": 400,
         })
-    from app.services.data.eod_incremental import incremental_sync_eod
-    from app.core.executor import run_cpu
-    # baostock/akshare 均以全市场为口径拉取；在 CPU 进程池中执行同步函数
-    result = await run_cpu(incremental_sync_eod, days=days, universe="all", source=source)
-    if not result.get("ok"):
+    from app.services.data.sync_progress import sync_is_active
+    if sync_is_active():
         return ApiResponse(ok=False, error={
-            "code": "FALLBACK_SYNC_FAILED",
-            "message": result.get("error", "兜底同步失败"),
-            "status": 500,
+            "code": "SYNC_IN_PROGRESS",
+            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "status": 409,
         })
-    return ApiResponse(ok=True, data=result)
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("eod", "all", days=days, source=source)
+    return ApiResponse(ok=True, data={
+        "message": f"兜底同步已提交（source={source}, days={days}），独立进程后台执行中",
+    })

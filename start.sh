@@ -46,12 +46,72 @@ port_pid() {
     lsof -ti :"$1" 2>/dev/null || true
 }
 
-# 杀掉进程及其子进程（使用进程组）
+# 杀掉进程及其子进程（先按进程组，再逐个兜底）
+# 注意：当 PGID 组长已死（僵尸）时 kill -- -PGID 无效（孤儿进程组），
+# 必须逐个 kill 目标进程本身。
 kill_tree() {
     local pid=$1
     if [ -z "$pid" ]; then return; fi
-    # 杀进程组（负 PID），确保子进程也被清理
-    kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    local pgid
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$pgid" ] && [ "$pgid" -gt 1 ]; then
+        # 先尝试按进程组杀（覆盖 uvicorn/vite/npm/tee 整个启动链）
+        kill -- -"$pgid" 2>/dev/null || true
+    fi
+    # 再逐个杀目标进程本身（兜底：孤儿进程组 / 组长已死的情况）
+    kill "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
+}
+
+# 端口冲突处理：显示占用进程并询问用户是否杀掉重启。
+# 返回 0=已杀掉并释放端口；返回 1=用户选择不杀（由调用方决定退出）。
+ask_kill_port() {
+    local port=$1
+    local name=$2
+    local pids
+    pids=$(port_pid "$port")
+    [ -z "$pids" ] && return 0
+
+    echo ""
+    yellow "端口 $port ($name) 已被以下进程占用:"
+    for p in $pids; do
+        ps -w -o pid=,cmd= -p "$p" 2>/dev/null | sed 's/^/    /' || echo "    PID $p (进程不存在?)"
+    done
+
+    while true; do
+        printf "\033[33m是否杀掉这些进程并重新启动 $name？[y/N] \033[0m"
+        if ! read -r answer; then
+            # 非交互环境（stdin 非 TTY/EOF），无法确认 → 安全起见不杀
+            red "非交互环境无法确认，请手动释放端口 $port 后重试。"
+            return 1
+        fi
+        case "${answer:-N}" in
+            y|Y|yes|YES)
+                for p in $pids; do
+                    kill_tree "$p"
+                done
+                # 等待端口真正释放（最多 10s）
+                local i=0
+                while [ -n "$(port_pid "$port")" ] && [ $i -lt 10 ]; do
+                    sleep 1
+                    i=$((i + 1))
+                done
+                if [ -n "$(port_pid "$port")" ]; then
+                    red "端口 $port 未能释放（仍有进程占用），请手动处理后再试。"
+                    return 1
+                fi
+                green "端口 $port 已释放"
+                return 0
+                ;;
+            n|N|no|NO|"")
+                yellow "已跳过，端口 $port ($name) 保持占用。"
+                return 1
+                ;;
+            *)
+                echo "请输入 y 或 n"
+                ;;
+        esac
+    done
 }
 
 # 等待端口真正就绪：端口有进程 + HTTP 探测（仅 backend）
@@ -113,14 +173,18 @@ if [ "$MODE" = "dev" ]; then
     blue "Python: $PYTHON_BIN"
     echo ""
 
-    # 端口占用检查（必须在 trap 之前）
+    # 端口占用检查：冲突时询问用户是否杀掉重启
     if [ -n "$(port_pid "$BACKEND_PORT")" ]; then
-        red "端口 $BACKEND_PORT 已被占用 (PID: $(port_pid "$BACKEND_PORT"))，请先释放"
-        exit 1
+        if ! ask_kill_port "$BACKEND_PORT" "后端"; then
+            red "已取消启动，请先释放端口 $BACKEND_PORT"
+            exit 1
+        fi
     fi
     if [ -n "$(port_pid "$FRONTEND_PORT")" ]; then
-        red "端口 $FRONTEND_PORT 已被占用 (PID: $(port_pid "$FRONTEND_PORT"))，请先释放"
-        exit 1
+        if ! ask_kill_port "$FRONTEND_PORT" "前端"; then
+            red "已取消启动，请先释放端口 $FRONTEND_PORT"
+            exit 1
+        fi
     fi
 
     # 后端依赖检查
@@ -144,6 +208,9 @@ if [ "$MODE" = "dev" ]; then
 
     # 启动后端（tee 同时输出到终端和日志文件，dev 模式可见实时日志；
     # set -m 创建进程组使 kill -- -PID 能工作）
+    # 注：长同步任务（baostock 全量回填/EOD/repair）已迁移到独立 worker 子进程
+    # （.venv/bin/python -m app.services.data.sync_worker，start_new_session 脱离本进程组），
+    # 因此 --reload 触发重启时会立即退出，不会像以前那样"等待后台任务完成"而卡死。
     blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
     mkdir -p "$SCRIPT_DIR/logs"
     set -m

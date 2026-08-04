@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from fastapi import APIRouter, Query, Depends, BackgroundTasks
+from fastapi import APIRouter, Query, Depends
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -11,14 +11,30 @@ from app.core.database import get_db
 from app.core.errors import AppError
 from app.models.sync_history import SyncHistory
 from app.schemas.common import ApiResponse
-from app.services.data.sync_progress import get_progress
-from app.services.data.eod_incremental import incremental_sync_eod
+from app.schemas.quant import RepairRequest
+from app.services.data.sync_progress import get_progress, sync_is_active
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
 _stock_catalog_cache: list[dict] | None = None
 _stock_catalog_updated_at: datetime | None = None
+
+
+def _read_eod_result() -> dict | None:
+    """从共享结果文件读取最近一次 EOD 同步的真实结果。
+
+    结果由独立 worker 子进程写 data/eod_last_result.json，
+    web 进程（含 reload 后）都能读到，不再依赖进程内存。
+    """
+    path = os.path.join(str(settings.PROJECT_ROOT / "data"), "eod_last_result.json")
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
 
 
 def _normalize_search_text(text: str) -> str:
@@ -378,48 +394,54 @@ async def sync_stats_api(
 
 @router.post("/eod-sync")
 async def eod_sync_api(
-    background_tasks: BackgroundTasks,
     universe: str = Query("csi300", description="股票池: csi300/csi500/all"),
     days: int = Query(5, ge=1, le=30, description="同步最近N天数据"),
     overwrite: bool = Query(False, description="是否覆盖已有日期数据"),
 ):
-    """增量同步EOD数据（基于akshare国内源，拉取最近N天日K数据）- 后台执行
+    """增量同步EOD数据（基于akshare国内源，拉取最近N天日K数据）- 独立 worker 后台执行
 
-    与 chenditc 全量同步互补：akshare 国内源访问快，
+    与 baostock 全量同步互补：akshare 国内源访问快，
     适合日常增量更新最近几个交易日的 OHLCV 数据。
 
-    立即返回提交确认，同步在后台执行。可通过 /quant/data/sync-progress 查询进度。
+    同步在独立 worker 子进程（.venv/bin/python -m app.services.data.sync_worker）
+    中运行，与 web 进程解耦：uvicorn --reload 重启不会等它、也不会误杀它。
+    结果写 data/eod_last_result.json，前端通过 /quant/data/eod-result 轮询。
     """
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    background_tasks.add_task(_run_eod_sync, universe, days, overwrite)
+    if sync_is_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "status": 409,
+        })
+
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("eod", universe, days=days, overwrite=overwrite)
     return ApiResponse(ok=True, data={
-        "message": f"EOD增量同步已提交（universe={universe}, days={days}），后台执行中",
+        "message": f"EOD增量同步已提交（universe={universe}, days={days}），独立进程后台执行中",
         "universe": universe,
         "days": days,
         "overwrite": overwrite,
     })
 
 
-async def _run_eod_sync(universe: str, days: int, overwrite: bool):
-    """后台执行EOD增量同步"""
-    try:
-        result = await incremental_sync_eod(
-            universe=universe, days=days, overwrite=overwrite,
-        )
-        if result.get("ok"):
-            logger.info("EOD同步完成: %s", result)
-        else:
-            logger.error("EOD同步返回错误: %s", result)
-    except Exception as e:
-        logger.error("EOD同步失败: %s", e)
+@router.get("/eod-result")
+async def eod_result_api():
+    """获取最近一次 EOD 增量同步的真实结果（独立 worker 完成后写入文件）。
+
+    EOD 同步在独立 worker 子进程执行，提交接口立即返回，无法携带实际结果；
+    前端通过本接口（读取 data/eod_last_result.json）轮询拿到 success/total_stocks/
+    new_dates 等真实数据。
+    """
+    return ApiResponse(ok=True, data=_read_eod_result())
 
 
 @router.post("/sync-indices")
-async def sync_indices_api(background_tasks: BackgroundTasks):
-    """同步指数数据到 qlib bin（后台执行）
+async def sync_indices_api():
+    """同步指数数据到 qlib bin（独立 worker 后台执行）
 
     通过 akshare 拉取主要指数（上证、沪深300、中证500等）的日K行情，
     写入 qlib bin 格式。如遇日历中不存在的新日期会自动扩展日历。
@@ -428,19 +450,16 @@ async def sync_indices_api(background_tasks: BackgroundTasks):
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    async def _run():
-        try:
-            from app.services.data.index_sync import sync_indices_to_qlib
-            result = sync_indices_to_qlib(settings.qlib_provider_path, days=365)
-            if result.get("ok"):
-                logger.info("指数同步完成: %s", result)
-            else:
-                logger.error("指数同步返回错误: %s", result)
-        except Exception as e:
-            logger.error("指数同步失败: %s", e)
+    if sync_is_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "status": 409,
+        })
 
-    background_tasks.add_task(_run)
-    return ApiResponse(ok=True, data={"message": "指数同步已提交，后台执行中"})
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("indices", "indices")
+    return ApiResponse(ok=True, data={"message": "指数同步已提交，独立进程后台执行中"})
 
 
 @router.get("/integrity-check")
@@ -453,6 +472,66 @@ async def integrity_check_api(universe: str = Query(None)):
         None, check_integrity, settings.qlib_provider_path, universe
     )
     return ApiResponse(ok=True, data=result)
+
+
+@router.get("/validate")
+async def validate_api(universe: str = Query("all")):
+    """全市场数据校验：bin 字段完整性 + DB/qlib 字段与覆盖一致性 + 日历同步。
+
+    返回结构化报告（checks/calendar/drift），前端据此展示差异并决定是否修复。
+    """
+    from app.services.data.validation import run_validation
+
+    report = await run_validation(provider_uri=settings.qlib_provider_path, universe=universe)
+    return ApiResponse(ok=True, data=report)
+
+
+@router.post("/repair")
+async def repair_api(
+    req: RepairRequest,
+    db=Depends(get_db),
+):
+    """一键补齐：按校验差异修复 DB 与 qlib 不一致（独立 worker 后台执行）。
+
+    前 3 步（day.txt / bin / instruments）从 PG 重建，不消耗 baostock 配额；
+    仅当 include_baostock=true 且 PG 缺失交易日时，才从 baostock 增量补拉。
+
+    同步在独立 worker 子进程（app.services.data.sync_worker --kind repair）中运行，
+    与 web 进程解耦，uvicorn --reload 重启不会等它。
+    """
+    from app.models.stock_data_status import StockDataStatus
+
+    universe = req.universe or settings.quant.get("universe", "csi300")
+    if sync_is_active():
+        active = get_progress()
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": f"正在同步/修复中，请稍候（当前 universe={active.get('universe') if active else '?'}）",
+            "status": 409,
+        })
+
+    existing = await db.execute(
+        select(StockDataStatus).where(StockDataStatus.universe == universe)
+    )
+    rec = existing.scalar_one_or_none()
+    if rec is None:
+        rec = StockDataStatus(universe=universe, status="syncing")
+        db.add(rec)
+    else:
+        rec.status = "syncing"
+        rec.last_error = None
+    rec.sync_trigger = "manual"
+    rec.last_updated = datetime.now()
+    await db.commit()
+
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("repair", universe, include_baostock=req.include_baostock)
+    return ApiResponse(ok=True, data={
+        "message": f"已触发数据补齐（universe={universe}"
+                   + ("，含 baostock 增量" if req.include_baostock else "，仅从 PG 重建") + "）",
+        "universe": universe,
+        "include_baostock": req.include_baostock,
+    })
 
 
 @router.post("/sync-industry")

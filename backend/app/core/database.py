@@ -79,7 +79,10 @@ async def _ensure_columns() -> None:
     """
     from sqlalchemy import text, inspect
     pending = {
-        "stock_data_status": [("last_sync_path", "VARCHAR")],
+        "stock_data_status": [
+            ("last_sync_path", "VARCHAR"),
+            ("sync_trigger", "VARCHAR"),
+        ],
         "sync_history": [("sync_path", "VARCHAR")],
     }
 

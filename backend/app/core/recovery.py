@@ -110,22 +110,39 @@ async def recover_stale_mining():
 
 
 async def _auto_retry_sync(universes: list):
-    """对被中断的 universe 列表自动触发后台重试同步（baostock 回填）。"""
-    import asyncio
-    from app.schemas.quant import SyncDataRequest
-    from app.services.data.baostock_backfill import run_baostock_backfill_task
+    """对被中断的 universe 列表自动触发后台重试同步（baostock 回填）。
 
-    pending = []
+    自动重试标记为 sync_trigger='auto'，允许 30 分钟超时回收，
+    避免手动同步与自动重试混为一谈导致误杀。
+
+    同步通过独立 worker 子进程执行（app.services.data.sync_worker），
+    与 web 进程解耦：进程重启不会中断正在进行的回填。
+    """
+    import asyncio
+    from datetime import datetime
+    from app.core.database import async_session
+    from app.models.stock_data_status import StockDataStatus
+
+    # 先统一标记为 syncing（auto 触发），供 _detect_stale_sync 超时回收
+    async with async_session() as session:
+        for universe in universes:
+            existing = await session.execute(
+                select(StockDataStatus).where(StockDataStatus.universe == universe)
+            )
+            rec = existing.scalar_one_or_none()
+            if rec is None:
+                rec = StockDataStatus(universe=universe)
+                session.add(rec)
+            rec.status = "syncing"
+            rec.sync_trigger = "auto"
+            rec.last_error = None
+            rec.last_updated = datetime.now()
+        await session.commit()
+
+    from app.services.data.sync_worker import spawn_sync_worker
     for universe in universes:
         logger.info("recover: 自动重试 universe=%s", universe)
-        req = SyncDataRequest(universe=universe)
-        t = asyncio.create_task(run_baostock_backfill_task(req))
-        # 保留引用并记录异常，避免任务异常被静默吞没
-        t.add_done_callback(
-            lambda fut: fut.exception() and logger.error("recover: 自动重试失败: %s", fut.exception())
-        )
-        pending.append(t)
-    return pending
+        spawn_sync_worker("backfill", universe)
 
 
 async def reap_stale_mining():
