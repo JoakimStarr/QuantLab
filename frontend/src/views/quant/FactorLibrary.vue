@@ -9,7 +9,7 @@
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
-        <el-button type="primary" :icon="Plus" @click="onAdd">新增因子</el-button>
+        <el-button type="primary" :icon="Plus" @click="openAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
     </header>
@@ -268,6 +268,42 @@
 
       <template #footer>
         <el-button @click="showAiExplain = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新增因子弹窗 -->
+    <el-dialog v-model="showAdd" title="新增因子" width="640px" destroy-on-close>
+      <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-width="88px">
+        <el-form-item label="因子名称" prop="name">
+          <el-input v-model="addForm.name" placeholder="如 momentum_20d" maxlength="100" show-word-limit />
+        </el-form-item>
+        <el-form-item label="表达式" prop="expression">
+          <el-input
+            v-model="addForm.expression"
+            type="textarea"
+            :rows="4"
+            placeholder="qlib 表达式，如 $close / Ref($close, 20) - 1"
+          />
+          <div class="add-expr-hint">
+            支持字段 $close/$open/$volume/$pe_ttm… 与算子 Mean/Std/Ref/Rank…（负数 Ref = 未来数据会被拒绝）
+            <a class="add-expr-link" @click.prevent="openQlibDocs">QLib 表达式学习文档 →</a>
+          </div>
+        </el-form-item>
+        <el-form-item label="类别" prop="category">
+          <el-select v-model="addForm.category" style="width: 100%">
+            <el-option label="内置（自定义）" value="builtin" />
+            <el-option label="LLM" value="llm" />
+            <el-option label="符号回归" value="symbolic" />
+            <el-option label="文本" value="text" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="描述" prop="description">
+          <el-input v-model="addForm.description" type="textarea" :rows="2" maxlength="500" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAdd = false">取消</el-button>
+        <el-button type="primary" :loading="adding" @click="submitAdd">保存</el-button>
       </template>
     </el-dialog>
 
@@ -716,6 +752,45 @@ function openExpr(row) {
   showExpr.value = true
 }
 
+// === 新增因子弹窗 ===
+const showAdd = ref(false)
+const adding = ref(false)
+const addFormRef = ref(null)
+const addForm = ref({ name: '', expression: '', category: 'builtin', description: '' })
+const addRules = {
+  name: [{ required: true, message: '请输入因子名称', trigger: 'blur' }],
+  expression: [{ required: true, message: '请输入因子表达式', trigger: 'blur' }],
+}
+
+function openAdd() {
+  addForm.value = { name: '', expression: '', category: 'builtin', description: '' }
+  showAdd.value = true
+}
+
+async function submitAdd() {
+  if (!addFormRef.value) return
+  try {
+    await addFormRef.value.validate()
+  } catch {
+    return
+  }
+  adding.value = true
+  try {
+    const item = await factorStore.create({ ...addForm.value })
+    ElMessage.success(`因子「${item?.name || addForm.value.name}」已添加`)
+    showAdd.value = false
+  } catch {
+    /* 拦截器已提示（如表达式不安全/字段不允许） */
+  } finally {
+    adding.value = false
+  }
+}
+
+// 跳转 QLib 表达式学习文档（技术文档页）
+function openQlibDocs() {
+  router.push({ path: '/docs', query: { slug: 'qlib-expression' } })
+}
+
 // === 禁用因子确认弹窗 ===
 const disableDialog = ref({ visible: false, target: null })
 const disabling = ref(false)
@@ -1073,9 +1148,6 @@ async function syncData() {
 }
 
 // 操作占位提示
-function onAdd() {
-  ElMessage.info('新增因子功能开发中')
-}
 function onEvaluate() {
   ElMessage.info('评价功能开发中')
 }
@@ -1535,6 +1607,23 @@ onMounted(loadFactors)
   cursor: help;
   border-bottom: 1px dashed var(--text-tertiary);
   padding-bottom: 1px;
+}
+
+// 新增因子弹窗：表达式提示
+.add-expr-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.add-expr-link {
+  margin-left: 8px;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 // 禁用确认弹窗：目标因子展示

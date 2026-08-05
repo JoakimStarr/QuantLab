@@ -5,8 +5,9 @@ export function listFactors(params) {
   return request.get('/factors', { params })
 }
 
-export function addFactor(params) {
-  return request.post('/factors', null, { params })
+// 新增因子：{name, expression, category, description}，JSON body（表达式可能很长，避免塞 URL）
+export function addFactor(data) {
+  return request.post('/factors', data)
 }
 
 export function disableFactor(id) {

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query, BackgroundTasks
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
+from app.schemas.factor import FactorCreate
 from app.services.factor.library import (
     list_factors, get_factor, add_factor, disable_factor,
 )
@@ -34,18 +35,16 @@ async def get_factor_api(factor_id: int):
 
 
 @router.post("")
-async def add_factor_api(
-    name: str = Query(...),
-    expression: str = Query(...),
-    category: str = Query("builtin"),
-    description: str = Query(None),
-):
+async def add_factor_api(body: FactorCreate):
+    """新增因子（表达式经 AST 沙箱安全校验）。"""
     try:
-        validate_expression(expression)
+        validate_expression(body.expression)
     except ExpressionValidationError as e:
         raise AppError("EXPR_INVALID", str(e), 422)
-    item = await add_factor(name=name, expression=expression, category=category,
-                            description=description)
+    item = await add_factor(
+        name=body.name, expression=body.expression, category=body.category,
+        description=body.description or None,
+    )
     return ApiResponse(ok=True, data=item)
 
 
