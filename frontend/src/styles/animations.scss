@@ -3,8 +3,12 @@
 
 // Fade animations (most common)
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeInUp {
@@ -43,14 +47,23 @@
 
 // Pulse (for loading states)
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 // Skeleton loading (common)
 @keyframes skeletonLoading {
-  0% { background-position: -200px 0; }
-  100% { background-position: calc(200px + 100%) 0; }
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
 }
 
 // === Core Animation Classes ===
@@ -77,29 +90,40 @@
 
 .skeleton-loading {
   animation: skeletonLoading 1.5s ease-in-out infinite;
-  background: linear-gradient(
-    90deg,
-    var(--bg-secondary) 0%,
-    var(--bg-tertiary) 50%,
-    var(--bg-secondary) 100%
-  );
+  background: linear-gradient(90deg, var(--bg-secondary) 0%, var(--bg-tertiary) 50%, var(--bg-secondary) 100%);
   background-size: 200px 100%;
   background-repeat: no-repeat;
 }
 
 // === Animation Delay Classes ===
 
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
-.delay-300 { animation-delay: 300ms; }
-.delay-400 { animation-delay: 400ms; }
-.delay-500 { animation-delay: 500ms; }
+.delay-100 {
+  animation-delay: 100ms;
+}
+.delay-200 {
+  animation-delay: 200ms;
+}
+.delay-300 {
+  animation-delay: 300ms;
+}
+.delay-400 {
+  animation-delay: 400ms;
+}
+.delay-500 {
+  animation-delay: 500ms;
+}
 
 // === Animation Duration Classes ===
 
-.duration-fast { animation-duration: var(--duration-fast); }
-.duration-normal { animation-duration: var(--duration-normal); }
-.duration-slow { animation-duration: var(--duration-slow); }
+.duration-fast {
+  animation-duration: var(--duration-fast);
+}
+.duration-normal {
+  animation-duration: var(--duration-normal);
+}
+.duration-slow {
+  animation-duration: var(--duration-slow);
+}
 
 // === Transition Utilities ===
 
@@ -116,7 +140,8 @@
 }
 
 .transition-colors {
-  transition: color var(--duration-normal) var(--ease-in-out),
-              background-color var(--duration-normal) var(--ease-in-out),
-              border-color var(--duration-normal) var(--ease-in-out);
+  transition:
+    color var(--duration-normal) var(--ease-in-out),
+    background-color var(--duration-normal) var(--ease-in-out),
+    border-color var(--duration-normal) var(--ease-in-out);
 }

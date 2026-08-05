@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
@@ -19,12 +19,21 @@ router = APIRouter(prefix="/macro", tags=["macro"])
 
 
 @router.post("/sync")
-async def macro_sync_api(background_tasks: BackgroundTasks):
-    """手动触发宏观指标同步（东财 datacenter + akshare → PG → qlib bin 广播）。"""
-    background_tasks.add_task(run_macro_sync_task)
+async def macro_sync_api(
+    background_tasks: BackgroundTasks,
+    broadcast: bool = Query(False, description="是否同时广播写 qlib bin（建议数据校验/补齐阶段执行；默认只拉数据入库）"),
+):
+    """手动触发宏观指标同步（东财 datacenter + akshare → PG）。
+
+    broadcast=False（默认）只拉数据入库 PG，不写 bin——回填期间点也安全；
+    bin 广播放在数据校验/补齐阶段（日历对齐后）触发。
+    """
+    background_tasks.add_task(run_macro_sync_task, broadcast)
     return ApiResponse(ok=True, data={
-        "message": "宏观指标同步已提交（后台执行）",
+        "message": "宏观指标同步已提交（后台执行）"
+                   + ("" if not broadcast else "，含 bin 广播"),
         "indicators": sorted(MACRO_INDICATORS.keys()) + sorted(AKSHARE_INDICATORS.keys()),
+        "broadcast": broadcast,
     })
 
 
@@ -81,4 +90,41 @@ async def macro_status_api(db=Depends(get_db)):
         "count": r.cnt,
         "latest_date": r.latest.isoformat() if r.latest else None,
     } for r in result]
+    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+
+
+@router.get("/snapshot")
+async def macro_snapshot_api(db=Depends(get_db)):
+    """宏观快照：每个 (indicator, field_name) 返回最新一条 + 环比所需的上一条。
+
+    供前端"最新值"卡片使用，替代全量拉历史数据只为取最新值的做法。
+    """
+    rows = await db.execute(text("""
+        SELECT indicator, field_name,
+               MAX(CASE WHEN rn = 1 THEN unit END) AS unit,
+               MAX(CASE WHEN rn = 1 THEN available_date END) AS latest_date,
+               MAX(CASE WHEN rn = 1 THEN value END) AS latest_value,
+               MAX(CASE WHEN rn = 2 THEN available_date END) AS prev_date,
+               MAX(CASE WHEN rn = 2 THEN value END) AS prev_value
+        FROM (
+            SELECT indicator, field_name, unit, available_date, value,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY indicator, field_name
+                       ORDER BY available_date DESC
+                   ) AS rn
+            FROM macro_indicator
+        ) t
+        WHERE rn <= 2
+        GROUP BY indicator, field_name
+        ORDER BY indicator, field_name
+    """))
+    items = [{
+        "indicator": r.indicator,
+        "field_name": r.field_name,
+        "unit": r.unit,
+        "latest_date": r.latest_date.isoformat() if r.latest_date else None,
+        "latest_value": r.latest_value,
+        "prev_date": r.prev_date.isoformat() if r.prev_date else None,
+        "prev_value": r.prev_value,
+    } for r in rows]
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})

@@ -4,13 +4,7 @@
       <router-link to="/quant/strategy" class="link">查看全部</router-link>
     </template>
     <el-skeleton v-if="loading" :rows="5" animated />
-    <el-table
-      v-else
-      :data="backtests"
-      class="dashboard-table"
-      empty-text="暂无回测"
-      size="default"
-    >
+    <el-table v-else :data="backtests" class="dashboard-table" empty-text="暂无回测" size="default">
       <el-table-column label="策略" min-width="100">
         <template #default="{ row }">{{ row.strategy_name || row.strategy_id }}</template>
       </el-table-column>
@@ -30,7 +24,9 @@
         </template>
       </el-table-column>
       <el-table-column label="卡玛" width="70" align="right">
-        <template #default="{ row }"><span class="num">{{ formatNum(row.calmar) }}</span></template>
+        <template #default="{ row }"
+          ><span class="num">{{ formatNum(row.calmar) }}</span></template
+        >
       </el-table-column>
       <el-table-column label="区间" min-width="160">
         <template #default="{ row }">{{ row.start_date }}~{{ row.end_date }}</template>
@@ -45,16 +41,28 @@ import { formatNum, formatPercent, numClass } from './utils'
 
 defineProps({
   backtests: { type: Array, default: () => [] },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
 })
 </script>
 
 <style scoped lang="scss">
-.link { color: var(--primary); font-size: 13px; text-decoration: none; &:hover { text-decoration: underline; } }
+.link {
+  color: var(--primary);
+  font-size: 13px;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
+}
 .num {
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-  &.num--success { color: var(--success); }
-  &.num--danger { color: var(--danger); }
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  &.num--success {
+    color: var(--success);
+  }
+  &.num--danger {
+    color: var(--danger);
+  }
 }
 .dashboard-table :deep(.el-table) {
   --el-table-bg-color: transparent;
@@ -68,14 +76,20 @@ defineProps({
   background: transparent;
 }
 .dashboard-table :deep(.el-table__header-wrapper) th.el-table__cell {
-  font-size: 12px; color: var(--text-tertiary); background: var(--bg-tertiary); font-weight: 500;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  font-weight: 500;
 }
 .dashboard-table :deep(.el-table__row) td.el-table__cell {
-  font-size: 13px; color: var(--text-primary);
+  font-size: 13px;
+  color: var(--text-primary);
 }
 .dashboard-table :deep(.el-table__row:hover > td.el-table__cell) {
   background: var(--bg-hover) !important;
 }
 .dashboard-table :deep(.el-table__inner-wrapper::before),
-.dashboard-table :deep(.el-table__border-left-patch) { display: none; }
+.dashboard-table :deep(.el-table__border-left-patch) {
+  display: none;
+}
 </style>

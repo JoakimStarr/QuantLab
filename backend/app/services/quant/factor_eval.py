@@ -16,7 +16,20 @@ logger = logging.getLogger(__name__)
 
 # 前向收益标签：t 日收盘到 t+1 日收盘的收益（与回测引擎 shift(-1) 口径一致）
 # 注意：Ref 负数=未来，label 用未来收益是正确的（预测目标）
-_DEFAULT_LABEL = "Ref($close, -1) / $close - 1"
+# 用 $change（官方 pctChg/100，按除权后昨收算的日收益）替代 close 比值，
+# 避免未复权 close 在除权日的虚假收益跳变污染 IC 评价。
+_DEFAULT_LABEL = "Ref($change, -1)"
+
+
+def forward_return_label(horizon: int = 1) -> str:
+    """构造 horizon 日前向收益标签表达式（复权正确）。
+
+    $change = baostock pctChg/100 = 当日 close / 除权后昨收 - 1，
+    分红/送股/除权日收益正确。t 日标签 = (1+r_{t+1})...(1+r_{t+horizon}) - 1，
+    替代未复权 close 比值（除权日会产生虚假跳变）。
+    """
+    terms = [f"(1 + Ref($change, -{i}))" for i in range(1, horizon + 1)]
+    return " * ".join(terms) + " - 1"
 
 # AutoML 因子表达式：AutoML(method,task_id)，回测时加载 bundle 重建特征预测
 # method 支持 lightgbm/linear（单模型）与 walk_forward（滚动重训，直接读持久化打分）
@@ -52,6 +65,26 @@ def _load_instruments(market: str) -> list:
     内部走 _load_instruments_cached 实现进程级缓存。
     """
     return list(_load_instruments_cached(market))
+
+
+def _load_instrument_spans(market: str) -> dict:
+    """加载股票池点按时点成员区间 {code: [(start, end), ...]}，去掉未复权的北交所。
+
+    与 _load_instruments_cached 不同，这里保留每只股票的历史成员区间（span），
+    传给 D.features 后 qlib 会按区间对特征做掩码（inst_calculator），
+    从而实现"动态成分股"：只有当时在指数内的股票才参与因子计算/回测，
+    消除股票池幸存者偏差。
+
+    注意：alphas / all 等全量股票池本质就是"全部股票全时段有效"的
+    单区间，此处同样适用。
+    """
+    from qlib.data import D
+    inst_list = D.instruments(market=market)
+    code_spans = D.list_instruments(inst_list, freq="day")
+    include_bj = settings.quant.get("include_bj", False)
+    if not include_bj:
+        code_spans = {c: s for c, s in code_spans.items() if not c.lower().startswith("bj")}
+    return code_spans
 
 
 def _resolve_task_id_from_factor_ids(method: str, factor_ids: list):
@@ -184,7 +217,7 @@ def load_factor_values(
         from app.services.factor.expression import check_lookahead
         check_lookahead(factor_expr)
         market = universe or settings.quant.get("universe", "csi300")
-        instruments = _load_instruments(market)
+        instruments = _load_instrument_spans(market)
         df = D.features(instruments, [factor_expr], start_time=start, end_time=end, freq="day")
         if df is None or df.empty:
             raise ValueError(f"因子 {factor_expr} 在 {start}~{end} 无数据")
@@ -209,7 +242,7 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
     init_qlib()
     from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = _load_instruments(market)
+    instruments = _load_instrument_spans(market)
     expr = label_expr or _DEFAULT_LABEL
     df = D.features(instruments, [expr], start_time=start, end_time=end, freq="day")
     if df is None or df.empty:
@@ -334,7 +367,7 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
         init_qlib()
         from qlib.data import D
         market = settings.quant.get("universe", "csi300")
-        instruments = _load_instruments(market)
+        instruments = _load_instrument_spans(market)
 
         try:
             close_df = D.features(instruments, ["$close"],
@@ -397,7 +430,7 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
     """
     if horizon is None:
         horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    label_expr = forward_return_label(horizon)
     factor_df = load_factor_values(factor_expr, start, end, universe)
     if preloaded_label_df is not None:
         label_df = preloaded_label_df
@@ -427,7 +460,7 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
                 if ic_metrics.get("ic") is not None:
                     signs.append(1 if ic_metrics["ic"] > 0 else -1)
                 continue
-            h_label = f"Ref($close, -{h}) / $close - 1"
+            h_label = forward_return_label(h)
             h_df = load_label(start, end, label_expr=h_label, universe=universe)
             h_ic = compute_ic(factor_df, h_df).get("ic")
             ic_by_horizon[str(h)] = h_ic
@@ -848,18 +881,18 @@ def deep_analyze_factor(
     """因子深度分析聚合：一次性返回所有分析数据。
 
     内部复用 load_factor_values/load_label + 上述 5 个函数 + compute_decay。
-    label 使用 horizon 周期前向收益（Ref($close,-horizon)/$close-1），区别于默认 1 日标签。
+    label 使用 horizon 周期前向收益（forward_return_label，$change 复权正确累计）。
     """
     factor_df = load_factor_values(factor_expr, start, end, universe)
     # horizon 周期前向收益标签（预测目标），区别于默认 1 日标签
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    label_expr = forward_return_label(horizon)
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
 
     # $close 转 wide（datetime × instrument）用于 horizon 调仓分层净值
     init_qlib()
     from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = _load_instruments(market)
+    instruments = _load_instrument_spans(market)
     close_df = D.features(instruments, ["$close"], start_time=start, end_time=end, freq="day")
     if close_df is None or close_df.empty:
         raise ValueError("$close 价格数据为空，无法计算分层净值")

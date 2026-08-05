@@ -36,12 +36,7 @@
           placeholder="选择指数"
           @update:model-value="$emit('update:selected-index', $event)"
         >
-          <el-option
-            v-for="idx in indices"
-            :key="idx.code"
-            :label="idx.name"
-            :value="idx.code"
-          />
+          <el-option v-for="idx in indices" :key="idx.code" :label="idx.name" :value="idx.code" />
         </el-select>
         <div class="chart-range">
           <button
@@ -50,7 +45,9 @@
             class="chart-range-btn"
             :class="{ 'is-active': selectedPeriod === p.key }"
             @click="$emit('update:selected-period', p.key)"
-          >{{ p.label }}</button>
+          >
+            {{ p.label }}
+          </button>
         </div>
         <el-radio-group
           :model-value="timeRange"
@@ -106,6 +103,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme } from '@/utils/chartTheme'
@@ -145,12 +143,14 @@ async function querySearch(query, cb) {
   if (!q) return cb([])
   try {
     const res = await searchStocks(q, 10)
-    cb((res?.items ?? []).map(s => ({
-      value: `${s.name} ${s.code}`,
-      code: s.qlib_code || s.code,
-      name: s.name,
-      initials: s.initials || '',
-    })))
+    cb(
+      (res?.items ?? []).map((s) => ({
+        value: `${s.name} ${s.code}`,
+        code: s.qlib_code || s.code,
+        name: s.name,
+        initials: s.initials || '',
+      }))
+    )
   } catch {
     cb([])
   }
@@ -179,12 +179,14 @@ async function searchFirst() {
   }
 }
 
-const klineDates = computed(() => props.klineItems.map(k => k.date))
-const klineOhlc = computed(() => props.klineItems.map(k => [k.open, k.close, k.low, k.high]))
+const klineDates = computed(() => props.klineItems.map((k) => k.date))
+const klineOhlc = computed(() => props.klineItems.map((k) => [k.open, k.close, k.low, k.high]))
 // 个股成交量单位按万股显示，指数按亿股显示
 const isStock = computed(() => !!props.stockTarget)
 const volumeUnit = computed(() => (isStock.value ? '万股' : '亿股'))
-const klineVolumes = computed(() => props.klineItems.map(k => (Number(k.volume) || 0) / (isStock.value ? 10000 : 100000000)))
+const klineVolumes = computed(() =>
+  props.klineItems.map((k) => (Number(k.volume) || 0) / (isStock.value ? 10000 : 100000000))
+)
 
 function formatVolume(value) {
   const num = Number(value) || 0
@@ -194,7 +196,10 @@ function formatVolume(value) {
 function calcMA(data, period) {
   const result = []
   for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) { result.push(null); continue }
+    if (i < period - 1) {
+      result.push(null)
+      continue
+    }
     let sum = 0
     for (let j = 0; j < period; j++) sum += data[i - j].close
     result.push(sum / period)
@@ -229,20 +234,27 @@ function calcMACD(data, short = 12, long = 26, signal = 9) {
 }
 
 function calcKDJ(data, n = 9, m1 = 3, m2 = 3) {
-  let prevK = 50, prevD = 50
-  const k = [], d = [], j = []
+  let prevK = 50,
+    prevD = 50
+  const k = [],
+    d = [],
+    j = []
   for (let i = 0; i < data.length; i++) {
-    let hn = -Infinity, ln = Infinity
+    let hn = -Infinity,
+      ln = Infinity
     for (let p = Math.max(0, i - n + 1); p <= i; p++) {
       if (data[p].high > hn) hn = data[p].high
       if (data[p].low < ln) ln = data[p].low
     }
-    const rsv = hn === ln ? 0 : (data[i].close - ln) / (hn - ln) * 100
-    const curK = (m1 - 1) / m1 * prevK + 1 / m1 * rsv
-    const curD = (m2 - 1) / m2 * prevD + 1 / m2 * curK
+    const rsv = hn === ln ? 0 : ((data[i].close - ln) / (hn - ln)) * 100
+    const curK = ((m1 - 1) / m1) * prevK + (1 / m1) * rsv
+    const curD = ((m2 - 1) / m2) * prevD + (1 / m2) * curK
     const curJ = 3 * curK - 2 * curD
-    k.push(curK); d.push(curD); j.push(curJ)
-    prevK = curK; prevD = curD
+    k.push(curK)
+    d.push(curD)
+    j.push(curJ)
+    prevK = curK
+    prevD = curD
   }
   return { k, d, j }
 }
@@ -275,8 +287,21 @@ const klineOption = computed(() => {
       { left: '10%', right: '4%', top: '8%', height: '55%' },
       { left: '10%', right: '4%', top: '70%', height: '18%' },
     ]
-    xAxes = [0, 1].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
-    yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }]
+    xAxes = [0, 1].map((i) => ({
+      type: 'category',
+      gridIndex: i,
+      data: dates,
+      scale: true,
+      boundaryGap: true,
+      axisLine: { onZero: false },
+      splitLine: { show: false },
+      min: 'dataMin',
+      max: 'dataMax',
+    }))
+    yAxes = [
+      { scale: true, splitArea: { show: true } },
+      { gridIndex: 1, splitNumber: 2 },
+    ]
     zoomIndices = [0, 1]
   } else if (extraSubs === 1) {
     grids = [
@@ -284,8 +309,22 @@ const klineOption = computed(() => {
       { left: '10%', right: '4%', top: '56%', height: '14%' },
       { left: '10%', right: '4%', top: '74%', height: '14%' },
     ]
-    xAxes = [0, 1, 2].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
-    yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }, { gridIndex: 2, splitNumber: 2 }]
+    xAxes = [0, 1, 2].map((i) => ({
+      type: 'category',
+      gridIndex: i,
+      data: dates,
+      scale: true,
+      boundaryGap: true,
+      axisLine: { onZero: false },
+      splitLine: { show: false },
+      min: 'dataMin',
+      max: 'dataMax',
+    }))
+    yAxes = [
+      { scale: true, splitArea: { show: true } },
+      { gridIndex: 1, splitNumber: 2 },
+      { gridIndex: 2, splitNumber: 2 },
+    ]
     zoomIndices = [0, 1, 2]
   } else {
     grids = [
@@ -294,26 +333,68 @@ const klineOption = computed(() => {
       { left: '10%', right: '4%', top: '63%', height: '12%' },
       { left: '10%', right: '4%', top: '79%', height: '12%' },
     ]
-    xAxes = [0, 1, 2, 3].map(i => ({ type: 'category', gridIndex: i, data: dates, scale: true, boundaryGap: true, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' }))
-    yAxes = [{ scale: true, splitArea: { show: true } }, { gridIndex: 1, splitNumber: 2 }, { gridIndex: 2, splitNumber: 2 }, { gridIndex: 3, splitNumber: 2 }]
+    xAxes = [0, 1, 2, 3].map((i) => ({
+      type: 'category',
+      gridIndex: i,
+      data: dates,
+      scale: true,
+      boundaryGap: true,
+      axisLine: { onZero: false },
+      splitLine: { show: false },
+      min: 'dataMin',
+      max: 'dataMax',
+    }))
+    yAxes = [
+      { scale: true, splitArea: { show: true } },
+      { gridIndex: 1, splitNumber: 2 },
+      { gridIndex: 2, splitNumber: 2 },
+      { gridIndex: 3, splitNumber: 2 },
+    ]
     zoomIndices = [0, 1, 2, 3]
   }
 
   const legendData = [`日K`, `成交量(${volumeUnit.value})`]
   const series = [
     {
-      name: '日K', type: 'candlestick', data: klineOhlc.value,
-      itemStyle: { color: chartTheme.up(), color0: chartTheme.down(), borderColor: chartTheme.up(), borderColor0: chartTheme.down() },
+      name: '日K',
+      type: 'candlestick',
+      data: klineOhlc.value,
+      itemStyle: {
+        color: chartTheme.up(),
+        color0: chartTheme.down(),
+        borderColor: chartTheme.up(),
+        borderColor0: chartTheme.down(),
+      },
     },
-    { name: `成交量(${volumeUnit.value})`, type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: klineVolumes.value, itemStyle: { color: chartTheme.volume() } },
+    {
+      name: `成交量(${volumeUnit.value})`,
+      type: 'bar',
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      data: klineVolumes.value,
+      itemStyle: { color: chartTheme.volume() },
+    },
   ]
 
   if (showMA) {
-    const maColors = { MA5: chartTheme.ma5(), MA10: chartTheme.ma10(), MA20: chartTheme.ma20(), MA60: chartTheme.ma60() }
+    const maColors = {
+      MA5: chartTheme.ma5(),
+      MA10: chartTheme.ma10(),
+      MA20: chartTheme.ma20(),
+      MA60: chartTheme.ma60(),
+    }
     const maData = { MA5: calcMA(data, 5), MA10: calcMA(data, 10), MA20: calcMA(data, 20), MA60: calcMA(data, 60) }
     Object.entries(maData).forEach(([key, vals]) => {
       legendData.push(key)
-      series.push({ name: key, type: 'line', data: vals, smooth: true, showSymbol: false, lineStyle: { width: 1, color: maColors[key] }, itemStyle: { color: maColors[key] } })
+      series.push({
+        name: key,
+        type: 'line',
+        data: vals,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1, color: maColors[key] },
+        itemStyle: { color: maColors[key] },
+      })
     })
   }
 
@@ -322,7 +403,15 @@ const klineOption = computed(() => {
     const emaData = { EMA12: calcEMA(data, 12), EMA26: calcEMA(data, 26) }
     Object.entries(emaData).forEach(([key, vals]) => {
       legendData.push(key)
-      series.push({ name: key, type: 'line', data: vals, smooth: true, showSymbol: false, lineStyle: { width: 1, color: emaColors[key] }, itemStyle: { color: emaColors[key] } })
+      series.push({
+        name: key,
+        type: 'line',
+        data: vals,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1, color: emaColors[key] },
+        itemStyle: { color: emaColors[key] },
+      })
     })
   }
 
@@ -331,9 +420,33 @@ const klineOption = computed(() => {
     const { dif, dea, macd } = calcMACD(data)
     legendData.push('DIF', 'DEA', 'MACD')
     series.push(
-      { name: 'DIF', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dif, showSymbol: false, lineStyle: { width: 1, color: chartTheme.dif() }, itemStyle: { color: chartTheme.dif() } },
-      { name: 'DEA', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: dea, showSymbol: false, lineStyle: { width: 1, color: chartTheme.dea() }, itemStyle: { color: chartTheme.dea() } },
-      { name: 'MACD', type: 'bar', xAxisIndex: gi, yAxisIndex: gi, data: macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? chartTheme.up() : chartTheme.down() } })) }
+      {
+        name: 'DIF',
+        type: 'line',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: dif,
+        showSymbol: false,
+        lineStyle: { width: 1, color: chartTheme.dif() },
+        itemStyle: { color: chartTheme.dif() },
+      },
+      {
+        name: 'DEA',
+        type: 'line',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: dea,
+        showSymbol: false,
+        lineStyle: { width: 1, color: chartTheme.dea() },
+        itemStyle: { color: chartTheme.dea() },
+      },
+      {
+        name: 'MACD',
+        type: 'bar',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: macd.map((v) => ({ value: v, itemStyle: { color: v >= 0 ? chartTheme.up() : chartTheme.down() } })),
+      }
     )
   }
 
@@ -342,9 +455,36 @@ const klineOption = computed(() => {
     const { k, d, j } = calcKDJ(data)
     legendData.push('K', 'D', 'J')
     series.push(
-      { name: 'K', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: k, showSymbol: false, lineStyle: { width: 1, color: chartTheme.k() }, itemStyle: { color: chartTheme.k() } },
-      { name: 'D', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: d, showSymbol: false, lineStyle: { width: 1, color: chartTheme.d() }, itemStyle: { color: chartTheme.d() } },
-      { name: 'J', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: j, showSymbol: false, lineStyle: { width: 1, color: chartTheme.j() }, itemStyle: { color: chartTheme.j() } }
+      {
+        name: 'K',
+        type: 'line',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: k,
+        showSymbol: false,
+        lineStyle: { width: 1, color: chartTheme.k() },
+        itemStyle: { color: chartTheme.k() },
+      },
+      {
+        name: 'D',
+        type: 'line',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: d,
+        showSymbol: false,
+        lineStyle: { width: 1, color: chartTheme.d() },
+        itemStyle: { color: chartTheme.d() },
+      },
+      {
+        name: 'J',
+        type: 'line',
+        xAxisIndex: gi,
+        yAxisIndex: gi,
+        data: j,
+        showSymbol: false,
+        lineStyle: { width: 1, color: chartTheme.j() },
+        itemStyle: { color: chartTheme.j() },
+      }
     )
   }
 
@@ -366,7 +506,7 @@ const klineOption = computed(() => {
             const idx = item.dataIndex
             const prev = props.klineItems[idx - 1]
             const cur = props.klineItems[idx]
-            const pct = prev && cur ? ((Number(cur.close) - Number(prev.close)) / Number(prev.close) * 100) : null
+            const pct = prev && cur ? ((Number(cur.close) - Number(prev.close)) / Number(prev.close)) * 100 : null
             const pctTxt = pct !== null ? `（${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%）` : ''
             lines.push(`${item.marker}${item.seriesName}：开 ${open}，收 ${close}，低 ${low}，高 ${high}${pctTxt}`)
             continue
@@ -383,14 +523,21 @@ const klineOption = computed(() => {
     axisPointer: { link: { xAxisIndex: 'all' } },
     grid: grids,
     xAxis: xAxes,
-    yAxis: yAxes.map((axis, index) => (
-      index === 1
-        ? { ...axis, axisLabel: { formatter: (value) => `${value}${volumeUnit.value}` } }
-        : axis
-    )),
+    yAxis: yAxes.map((axis, index) =>
+      index === 1 ? { ...axis, axisLabel: { formatter: (value) => `${value}${volumeUnit.value}` } } : axis
+    ),
     dataZoom: [
       { type: 'inside', xAxisIndex: zoomIndices, start: zoomStart, end: 100 },
-      { show: true, type: 'slider', xAxisIndex: zoomIndices, bottom: 6, height: 20, start: zoomStart, end: 100, textStyle: { color: chartTheme.axisText() } },
+      {
+        show: true,
+        type: 'slider',
+        xAxisIndex: zoomIndices,
+        bottom: 6,
+        height: 20,
+        start: zoomStart,
+        end: 100,
+        textStyle: { color: chartTheme.axisText() },
+      },
     ],
     series,
   }
@@ -399,7 +546,10 @@ const klineOption = computed(() => {
 
 <style scoped lang="scss">
 .chart-controls {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .chart-stock-search {
   display: flex;
@@ -410,25 +560,64 @@ const klineOption = computed(() => {
   width: 230px;
 }
 .stock-suggestion {
-  display: flex; align-items: center; gap: 10px; width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
 }
-.stock-suggestion__name { color: var(--text-primary); }
-.stock-suggestion__code { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 12px; }
+.stock-suggestion__name {
+  color: var(--text-primary);
+}
+.stock-suggestion__code {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .stock-suggestion__initials {
-  margin-left: auto; color: var(--text-tertiary); font-size: 12px;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
-.chart-stock-tag { margin-left: 4px; }
-.chart-index-select { width: 130px; }
-.chart-range { display: flex; gap: 4px; }
-.chart-timerange { margin-left: 4px; }
-.chart-daterange { width: 240px !important; margin-left: 4px; }
-.chart-indicators { margin-left: 4px; }
+.chart-stock-tag {
+  margin-left: 4px;
+}
+.chart-index-select {
+  width: 130px;
+}
+.chart-range {
+  display: flex;
+  gap: 4px;
+}
+.chart-timerange {
+  margin-left: 4px;
+}
+.chart-daterange {
+  width: 240px !important;
+  margin-left: 4px;
+}
+.chart-indicators {
+  margin-left: 4px;
+}
 .chart-range-btn {
-  border: none; background: transparent; color: var(--text-tertiary);
-  font-size: 13px; padding: 4px 12px; border-radius: 4px; cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-in-out); font-family: var(--font-family);
-  &.is-active { background: var(--primary); color: #fff; }
-  &:hover:not(.is-active) { color: var(--text-primary); background: var(--bg-hover); }
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-in-out);
+  font-family: var(--font-family);
+  &.is-active {
+    background: var(--primary);
+    color: #fff;
+  }
+  &:hover:not(.is-active) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
 }
-.chart-kline { width: 100%; }
+.chart-kline {
+  width: 100%;
+}
 </style>

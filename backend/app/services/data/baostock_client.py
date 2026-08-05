@@ -20,16 +20,74 @@ baostock 优势:
 """
 import asyncio
 import atexit
+import json
 import logging
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# baostock 官方访问约束（https://www.baostock.com/blacklist）：
+#   - 每日 API 请求不超过 5 万次，超过后进入黑名单
+#   - 禁止并发连接访问
+# 这里用每日请求计数（跨进程文件锁）+ 单线程执行器做硬保护。
+# ============================================================
+DAILY_REQUEST_LIMIT = 50_000
+
+
+class BaostockQuotaError(RuntimeError):
+    """当日 baostock 请求数已达上限，应中止本次爬取（避免无谓重试）。"""
+
+
 _login_lock = threading.Lock()
 _logged_in = False
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="baostock")
+# 单 worker：baostock 禁止并发连接，即使未来有人误调 async 版 fetch 也不会并发
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="baostock")
+
+_request_count_lock = threading.Lock()
+
+
+def _request_count_file() -> Path:
+    """请求计数文件（与 sync.lock 同目录，跨进程共享）。"""
+    from app.core.config import settings
+    return Path(settings.PROJECT_ROOT) / "data" / "baostock_requests.json"
+
+
+def _consume_request_slot() -> None:
+    """消耗一个当日请求配额；已达上限则抛 BaostockQuotaError。
+
+    用 ``fcntl.flock`` 保证跨进程读写安全（爬取在独立 worker 子进程运行）。
+    """
+    import fcntl
+
+    today = time.strftime("%Y-%m-%d")
+    path = _request_count_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _request_count_lock:
+        with open(path, "a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                content = f.read().strip()
+                data = json.loads(content) if content else {}
+                if data.get("date") != today:
+                    data = {"date": today, "count": 0}
+                if data["count"] >= DAILY_REQUEST_LIMIT:
+                    raise BaostockQuotaError(
+                        f"baostock 当日请求数已达上限 {DAILY_REQUEST_LIMIT}，"
+                        "请明天再试或降低同步频率"
+                    )
+                data["count"] += 1
+                f.seek(0)
+                f.truncate()
+                json.dump(data, f)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _ensure_login():
@@ -119,6 +177,7 @@ async def fetch_daily_all_a_stock(date: str) -> pd.DataFrame:
     import baostock as bs
 
     def fetch():
+        _consume_request_slot()
         rs = bs.query_daily_history_k_AStock(date=date)
         if rs.error_code != '0':
             raise RuntimeError(f"query_daily_history_k_AStock failed: {rs.error_code} {rs.error_msg}")
@@ -143,6 +202,7 @@ async def fetch_stock_history(code: str, start_date: str, end_date: str,
     import baostock as bs
 
     def fetch():
+        _consume_request_slot()
         rs = bs.query_history_k_data_plus(
             code=code,
             fields="date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",  # noqa: E501
@@ -175,6 +235,7 @@ def from_baostock_code(bs_code: str) -> str:
 # 同步便捷接口
 def fetch_daily_all_a_stock_sync(date: str) -> pd.DataFrame:
     """同步版（给 sync_runner 等同步代码用）。"""
+    _consume_request_slot()
     _ensure_login()
     import baostock as bs
     rs = bs.query_daily_history_k_AStock(date=date)
@@ -189,6 +250,7 @@ def fetch_daily_all_a_stock_sync(date: str) -> pd.DataFrame:
 def fetch_stock_history_sync(code: str, start_date: str, end_date: str,
                              frequency: str = "d", adjustflag: str = "3") -> pd.DataFrame:
     """同步版。"""
+    _consume_request_slot()
     _ensure_login()
     import baostock as bs
     rs = bs.query_history_k_data_plus(

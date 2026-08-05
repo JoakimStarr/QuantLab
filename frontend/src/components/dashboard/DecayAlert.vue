@@ -22,10 +22,14 @@
       <el-table :data="factors" size="small" max-height="240" class="decay-table">
         <el-table-column label="因子" min-width="140" prop="factor_name" show-overflow-tooltip />
         <el-table-column label="历史IC" width="90" align="right">
-          <template #default="{ row }"><span class="num">{{ fmt(row.historical_ic) }}</span></template>
+          <template #default="{ row }"
+            ><span class="num">{{ fmt(row.historical_ic) }}</span></template
+          >
         </el-table-column>
         <el-table-column label="近期IC" width="90" align="right">
-          <template #default="{ row }"><span class="num">{{ fmt(row.recent_ic) }}</span></template>
+          <template #default="{ row }"
+            ><span class="num">{{ fmt(row.recent_ic) }}</span></template
+          >
         </el-table-column>
         <el-table-column label="衰减比" width="90" align="right">
           <template #default="{ row }">
@@ -92,7 +96,7 @@ onMounted(() => {
     applyResult({
       decaying: payload?.decaying_count ?? 0,
       total: payload?.total ?? 0,
-      decaying_factors: payload?.decaying_factors || []
+      decaying_factors: payload?.decaying_factors || [],
     })
     if ((payload?.decaying_count ?? 0) > 0) {
       ElMessage.warning(`因子衰减告警：${payload.decaying_count} 个因子衰减`)
@@ -106,28 +110,60 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
-.decay-loading { padding: 8px 0; }
-.decay-hint, .decay-empty {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 20px 0; color: var(--text-tertiary); font-size: 13px;
+.decay-loading {
+  padding: 8px 0;
 }
-.decay-body { display: flex; flex-direction: column; gap: 10px; }
+.decay-hint,
+.decay-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.decay-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .decay-summary {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px; color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .decay-badge {
-  display: inline-block; min-width: 24px; padding: 2px 8px;
-  border-radius: 10px; background: var(--danger-soft); color: var(--danger);
-  font-weight: 600; text-align: center; font-size: 13px;
+  display: inline-block;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+  text-align: center;
+  font-size: 13px;
 }
-.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.is-low { color: var(--danger); }
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.is-low {
+  color: var(--danger);
+}
 .badge {
-  display: inline-block; padding: 2px 8px; border-radius: 4px;
-  font-size: 12px; font-weight: 500;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
 }
-.badge--danger { color: var(--danger); background: var(--danger-soft); }
+.badge--danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
 .decay-table :deep(.el-table) {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
@@ -138,9 +174,13 @@ onUnmounted(() => {
   background: transparent;
 }
 .decay-table :deep(.el-table__header-wrapper) th.el-table__cell {
-  font-size: 12px; background: var(--bg-tertiary); font-weight: 500;
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  font-weight: 500;
 }
-.decay-table :deep(.el-table__row) td.el-table__cell { font-size: 13px; }
+.decay-table :deep(.el-table__row) td.el-table__cell {
+  font-size: 13px;
+}
 .decay-table :deep(.el-table__row:hover > td.el-table__cell) {
   background: var(--bg-hover) !important;
 }

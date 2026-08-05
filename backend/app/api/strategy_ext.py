@@ -210,7 +210,8 @@ async def portfolio_report_api(
         if not results:
             return ApiResponse(ok=False, error={"code": "NOT_FOUND",
                                                 "message": "该策略暂无回测结果", "status": 404})
-        r = results[0]
+        # 列表接口返回轻量摘要（不含 nav_curve），组合报告需完整净值曲线，按 id 拉全量。
+        r = await get_backtest_result(results[0].get("id")) or results[0]
     else:
         r = await get_backtest_result(result_id)
         if r is None:
@@ -367,6 +368,9 @@ async def ai_generate_strategy_api(
     start: str = Query(None, description="回测起始日期"),
     end: str = Query(None, description="回测结束日期"),
     factor_ids: list[int] = Query(None, description="偏好因子 ID 子集"),
+    style: str = Query(None, description="偏好风格: momentum/reversal/lowvol/value/growth/volprice"),
+    risk_tolerance: str = Query(None, description="风险偏好: conservative/balanced/aggressive"),
+    rebalance_pref: str = Query(None, description="调仓频率偏好: day/week/month"),
 ):
     """AI 生成策略：参考因子库评价自动推荐因子组合与参数，创建策略。"""
     from app.services.strategy.ai_strategy import generate_strategy_with_ai
@@ -374,6 +378,7 @@ async def ai_generate_strategy_api(
         result = await generate_strategy_with_ai(
             universe=universe, start=start, end=end,
             prefer_factor_ids=factor_ids,
+            style=style, risk_tolerance=risk_tolerance, rebalance_pref=rebalance_pref,
         )
         return ApiResponse(ok=True, data=result)
     except ValueError as e:

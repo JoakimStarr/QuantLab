@@ -16,18 +16,12 @@
             show-password
             @keyup.enter="onLogin"
           >
-            <template #prefix><el-icon><Lock /></el-icon></template>
+            <template #prefix
+              ><el-icon><Lock /></el-icon
+            ></template>
           </el-input>
         </el-form-item>
-        <el-button
-          type="primary"
-          size="large"
-          class="login-btn"
-          :loading="loading"
-          @click="onLogin"
-        >
-          登 录
-        </el-button>
+        <el-button type="primary" size="large" class="login-btn" :loading="loading" @click="onLogin"> 登 录 </el-button>
       </el-form>
     </div>
   </div>

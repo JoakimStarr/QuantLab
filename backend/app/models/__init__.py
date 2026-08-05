@@ -1,12 +1,13 @@
 from .user import User
 from .stock_data_status import StockDataStatus
+from .stock_index import StockIndex
 from .factor import Factor
 from .strategy import Strategy
 from .backtest_result import BacktestResult
 from .mining_task import MiningTask
 from .sync_history import SyncHistory
 from .task_result import TaskResult
-from .fundamental import FundamentalPIT
+from .fundamental import FinancialIndicator, FundamentalPIT
 from .macro import MacroIndicator
 from .baostock import (
     StockDaily,
@@ -25,6 +26,7 @@ from .baostock import (
 __all__ = [
     "User",
     "StockDataStatus",
+    "StockIndex",
     "Factor",
     "Strategy",
     "BacktestResult",
@@ -32,6 +34,7 @@ __all__ = [
     "SyncHistory",
     "TaskResult",
     "FundamentalPIT",
+    "FinancialIndicator",
     "MacroIndicator",
     "StockDaily",
     "StockBasic",

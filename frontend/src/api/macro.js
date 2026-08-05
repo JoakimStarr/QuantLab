@@ -16,3 +16,8 @@ export function getMacroIndicators(params = {}) {
 export function getMacroStatus() {
   return request.get('/macro/status')
 }
+
+// 宏观快照：每个指标字段最新一条 + 环比所需上一条
+export function getMacroSnapshot() {
+  return request.get('/macro/snapshot')
+}

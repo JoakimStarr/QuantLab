@@ -107,6 +107,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { deepAnalysis } from '@/api/quant'
@@ -152,8 +153,8 @@ const icTimeseries = computed(() => {
   if (!d) return { dates: [], ic: [] }
   if (Array.isArray(d)) {
     return {
-      dates: d.map(x => x.date || x.ts || x.time || ''),
-      ic: d.map(x => Number(x.ic ?? x.value))
+      dates: d.map((x) => x.date || x.ts || x.time || ''),
+      ic: d.map((x) => Number(x.ic ?? x.value)),
     }
   }
   const dates = d.dates || d.x || []
@@ -166,8 +167,8 @@ const icDistribution = computed(() => {
   if (!d) return { bins: [], counts: [] }
   if (Array.isArray(d)) {
     return {
-      bins: d.map(x => x.bin ?? x.label ?? x.x ?? ''),
-      counts: d.map(x => Number(x.count ?? x.freq ?? x.y ?? 0))
+      bins: d.map((x) => x.bin ?? x.label ?? x.x ?? ''),
+      counts: d.map((x) => Number(x.count ?? x.freq ?? x.y ?? 0)),
     }
   }
   const bins = d.bins || d.edges || d.labels || d.x || []
@@ -189,8 +190,8 @@ const turnoverCurve = computed(() => {
   if (!d) return { dates: [], turnover: [] }
   if (Array.isArray(d)) {
     return {
-      dates: d.map(x => x.date || x.ts || ''),
-      turnover: d.map(x => Number(x.turnover ?? x.value ?? 0))
+      dates: d.map((x) => x.date || x.ts || ''),
+      turnover: d.map((x) => Number(x.turnover ?? x.value ?? 0)),
     }
   }
   const dates = d.dates || d.x || []
@@ -203,8 +204,8 @@ const decay = computed(() => {
   if (!d) return { lags: [], ic: [] }
   if (Array.isArray(d)) {
     return {
-      lags: d.map(x => Number(x.lag ?? x.lag_days ?? x.x ?? 0)),
-      ic: d.map(x => Number(x.ic ?? x.value ?? x.y ?? 0))
+      lags: d.map((x) => Number(x.lag ?? x.lag_days ?? x.x ?? 0)),
+      ic: d.map((x) => Number(x.ic ?? x.value ?? x.y ?? 0)),
     }
   }
   const lags = d.lags || d.lag || d.x || []
@@ -256,17 +257,22 @@ const statCards = computed(() => {
       key: 't_stat',
       label: 't-stat',
       value: fmtNum(s.t_stat, 3),
-      cls: tSig === null ? '' : (tSig ? 'is-positive' : 'is-negative'),
-      note: tSig === null ? '' : (tSig ? '显著' : '不显著')
+      cls: tSig === null ? '' : tSig ? 'is-positive' : 'is-negative',
+      note: tSig === null ? '' : tSig ? '显著' : '不显著',
     },
     {
       key: 'p_value',
       label: 'p-value',
       value: fmtNum(s.p_value, 4) + (hasP && pValue < 0.05 ? ' ★' : ''),
-      cls: (hasP && pValue < 0.05) ? 'is-positive' : ''
+      cls: hasP && pValue < 0.05 ? 'is-positive' : '',
     },
     { key: 'annual_turnover', label: '年化换手', value: fmtNum(s.annual_turnover, 2, '%'), cls: '' },
-    { key: 'long_short_annual', label: '多空年化', value: fmtNum(s.long_short_annual, 2, '%'), cls: numClass(s.long_short_annual) }
+    {
+      key: 'long_short_annual',
+      label: '多空年化',
+      value: fmtNum(s.long_short_annual, 2, '%'),
+      cls: numClass(s.long_short_annual),
+    },
   ]
 })
 // === 图表配置 ===
@@ -278,7 +284,7 @@ const icTimeseriesOption = computed(() => {
   const ma = []
   for (let i = 0; i < ic.length; i++) {
     const start = Math.max(0, i - win + 1)
-    const slice = ic.slice(start, i + 1).filter(v => !Number.isNaN(v))
+    const slice = ic.slice(start, i + 1).filter((v) => !Number.isNaN(v))
     ma.push(slice.length ? Number((slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(6)) : null)
   }
   return {
@@ -286,7 +292,12 @@ const icTimeseriesOption = computed(() => {
     textStyle: { color: chartTheme.axisText() },
     legend: { top: 0, data: ['日 IC', win + '日均线'], textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      boundaryGap: false,
+      axisLabel: { hideOverlap: true, color: chartTheme.axisText() },
+    },
     yAxis: { type: 'value', name: 'IC', scale: true, axisLabel: { color: chartTheme.axisText() } },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
     series: [
@@ -297,7 +308,12 @@ const icTimeseriesOption = computed(() => {
         showSymbol: false,
         lineStyle: { width: 1, color: chartTheme.line() },
         itemStyle: { color: chartTheme.line() },
-        markLine: { silent: true, symbol: 'none', lineStyle: { color: chartTheme.neutral(), type: 'dashed' }, data: [{ yAxis: 0 }] }
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: chartTheme.neutral(), type: 'dashed' },
+          data: [{ yAxis: 0 }],
+        },
       },
       {
         name: win + '日均线',
@@ -306,9 +322,9 @@ const icTimeseriesOption = computed(() => {
         showSymbol: false,
         smooth: true,
         lineStyle: { width: 2, color: colors[0] },
-        itemStyle: { color: colors[0] }
-      }
-    ]
+        itemStyle: { color: colors[0] },
+      },
+    ],
   }
 })
 
@@ -317,7 +333,7 @@ const icDistOption = computed(() => {
   void themeRev.value
   const { bins, counts } = icDistribution.value
   const centers = bins.map(binCenter)
-  const allNumeric = centers.length > 0 && centers.every(c => !Number.isNaN(c))
+  const allNumeric = centers.length > 0 && centers.every((c) => !Number.isNaN(c))
   const icMean = Number(summary.value.ic_mean)
   const base = { type: 'bar', barCategoryGap: '0%', itemStyle: { color: colors[4] } }
   if (allNumeric) {
@@ -328,16 +344,20 @@ const icDistOption = computed(() => {
       grid: { left: '3%', right: '4%', bottom: '10%', top: 30, containLabel: true },
       xAxis: { type: 'value', name: 'IC', axisLabel: { color: chartTheme.axisText() } },
       yAxis: { type: 'value', name: '频次', axisLabel: { color: chartTheme.axisText() } },
-      series: [{
-        ...base,
-        data,
-        markLine: !Number.isNaN(icMean) ? {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: colors[2], type: 'dashed', width: 2 },
-          data: [{ xAxis: icMean, label: { formatter: '均值 ' + icMean.toFixed(4) } }]
-        } : undefined
-      }]
+      series: [
+        {
+          ...base,
+          data,
+          markLine: !Number.isNaN(icMean)
+            ? {
+                silent: true,
+                symbol: 'none',
+                lineStyle: { color: colors[2], type: 'dashed', width: 2 },
+                data: [{ xAxis: icMean, label: { formatter: '均值 ' + icMean.toFixed(4) } }],
+              }
+            : undefined,
+        },
+      ],
     }
   }
   return {
@@ -346,7 +366,7 @@ const icDistOption = computed(() => {
     grid: { left: '3%', right: '4%', bottom: '10%', top: 30, containLabel: true },
     xAxis: { type: 'category', data: bins.map(String), axisLabel: { color: chartTheme.axisText() } },
     yAxis: { type: 'value', name: '频次', axisLabel: { color: chartTheme.axisText() } },
-    series: [{ ...base, data: counts }]
+    series: [{ ...base, data: counts }],
   }
 })
 
@@ -366,7 +386,7 @@ const quantileOption = computed(() => {
       showSymbol: false,
       smooth: false,
       lineStyle: { width: 1.5, color },
-      itemStyle: { color }
+      itemStyle: { color },
     })
   }
   series.push({
@@ -375,55 +395,64 @@ const quantileOption = computed(() => {
     data: longShort,
     showSymbol: false,
     lineStyle: { width: 2.5, color: chartTheme.textPrimary() },
-    itemStyle: { color: chartTheme.textPrimary() }
+    itemStyle: { color: chartTheme.textPrimary() },
   })
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
     textStyle: { color: chartTheme.axisText() },
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      boundaryGap: false,
+      axisLabel: { hideOverlap: true, color: chartTheme.axisText() },
+    },
     yAxis: { type: 'value', name: '净值', scale: true, axisLabel: { color: chartTheme.axisText() } },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
-    series
+    series,
   }
 })
 // 换手率曲线：bar + markLine 平均换手率
 const turnoverOption = computed(() => {
   void themeRev.value
   const { dates, turnover } = turnoverCurve.value
-  const valid = turnover.filter(v => !Number.isNaN(v))
+  const valid = turnover.filter((v) => !Number.isNaN(v))
   const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0
   // 假设换手率为小数，展示为百分比
-  const data = turnover.map(v => Number.isNaN(v) ? null : Number((v * 100).toFixed(4)))
+  const data = turnover.map((v) => (Number.isNaN(v) ? null : Number((v * 100).toFixed(4))))
   return {
     tooltip: {
       trigger: 'axis',
-      formatter: params => {
+      formatter: (params) => {
         if (!params.length) return ''
         let s = params[0].axisValue + '<br/>'
-        params.forEach(p => {
+        params.forEach((p) => {
           s += p.marker + p.seriesName + ': ' + (p.value != null ? p.value + '%' : '—') + '<br/>'
         })
         return s
-      }
+      },
     },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 30, containLabel: true },
     xAxis: { type: 'category', data: dates, axisLabel: { hideOverlap: true, color: chartTheme.axisText() } },
     yAxis: { type: 'value', name: '换手率%', axisLabel: { formatter: '{value}%', color: chartTheme.axisText() } },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
-    series: [{
-      name: '换手率',
-      type: 'bar',
-      data,
-      itemStyle: { color: colors[3] },
-      markLine: {
-        silent: true,
-        symbol: 'none',
-        lineStyle: { color: colors[2], type: 'dashed' },
-        data: [{ yAxis: Number((avg * 100).toFixed(4)), label: { formatter: '均值 ' + (avg * 100).toFixed(2) + '%' } }]
-      }
-    }]
+    series: [
+      {
+        name: '换手率',
+        type: 'bar',
+        data,
+        itemStyle: { color: colors[3] },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: colors[2], type: 'dashed' },
+          data: [
+            { yAxis: Number((avg * 100).toFixed(4)), label: { formatter: '均值 ' + (avg * 100).toFixed(2) + '%' } },
+          ],
+        },
+      },
+    ],
   }
 })
 
@@ -450,28 +479,30 @@ const decayOption = computed(() => {
     grid: { left: '3%', right: '4%', bottom: '10%', top: 30, containLabel: true },
     xAxis: { type: 'value', name: 'lag', minInterval: 1 },
     yAxis: { type: 'value', name: 'IC' },
-    series: [{
-      name: 'IC',
-      type: 'line',
-      data,
-      smooth: true,
-      showSymbol: true,
-      lineStyle: { width: 2, color: colors[0] },
-      itemStyle: { color: colors[0] },
-      markLine: {
-        silent: true,
-        symbol: 'none',
-        data: [
-          { yAxis: 0, lineStyle: { color: chartTheme.neutral(), type: 'dashed' } },
-          { yAxis: 0.03, lineStyle: { color: colors[1], type: 'dashed' }, label: { formatter: 'IC=0.03' } }
-        ]
+    series: [
+      {
+        name: 'IC',
+        type: 'line',
+        data,
+        smooth: true,
+        showSymbol: true,
+        lineStyle: { width: 2, color: colors[0] },
+        itemStyle: { color: colors[0] },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          data: [
+            { yAxis: 0, lineStyle: { color: chartTheme.neutral(), type: 'dashed' } },
+            { yAxis: 0.03, lineStyle: { color: colors[1], type: 'dashed' }, label: { formatter: 'IC=0.03' } },
+          ],
+        },
+        markArea: {
+          silent: true,
+          itemStyle: { color: chartTheme.successSoft() },
+          data: areas,
+        },
       },
-      markArea: {
-        silent: true,
-        itemStyle: { color: chartTheme.successSoft() },
-        data: areas
-      }
-    }]
+    ],
   }
 })
 
@@ -492,7 +523,7 @@ async function runAnalysis() {
       end_date: dateRange.value[1],
       horizon: horizon.value,
       n_groups: nGroups.value,
-      ic_window: icWindow
+      ic_window: icWindow,
     })
     result.value = data || {}
     if (!data) ElMessage.warning('未返回分析数据')

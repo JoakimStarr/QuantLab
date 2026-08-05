@@ -3,14 +3,16 @@
     <div class="mining-page">
       <!-- 页面头 -->
       <header class="page-header">
-        <div class="header-left">
-          <h1 class="page-title">AI 因子挖掘</h1>
-          <p class="page-subtitle">大模型与遗传编程驱动的因子发现</p>
+        <div class="page-header__lead">
+          <h1 class="page-header__title">AI 因子挖掘</h1>
+          <p class="page-header__subtitle">大模型与遗传编程驱动的因子发现</p>
         </div>
-        <span class="model-badge" v-if="aiProviders.length">
-          <span class="model-badge__dot"></span>
-          {{ aiBadgeText }}
-        </span>
+        <div class="page-header__actions">
+          <span class="model-badge" v-if="aiProviders.length">
+            <span class="model-badge__dot"></span>
+            {{ aiBadgeText }}
+          </span>
+        </div>
       </header>
 
       <!-- 两栏布局 -->
@@ -18,8 +20,7 @@
         <!-- 左栏：挖掘方式 + 参数配置 -->
         <aside class="mining-sidebar">
           <!-- 挖掘方式 -->
-          <section class="card">
-            <h3 class="card__title">挖掘方式</h3>
+          <SectionCard title="挖掘方式">
             <div class="mode-grid">
               <button
                 v-for="m in modes"
@@ -34,11 +35,10 @@
                 <div class="mode-card__desc">{{ m.desc }}</div>
               </button>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 参数配置 -->
-          <section class="card">
-            <h3 class="card__title">参数配置</h3>
+          <SectionCard title="参数配置">
             <el-form label-position="top" class="config-form">
               <el-form-item label="候选数量">
                 <el-input-number v-model="form.candidates" :min="1" :max="50" controls-position="right" />
@@ -50,7 +50,14 @@
               </el-form-item>
 
               <el-form-item label="IC 阈值">
-                <el-input-number v-model="form.icThreshold" :min="0" :max="1" :step="0.01" :precision="2" controls-position="right" />
+                <el-input-number
+                  v-model="form.icThreshold"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :precision="2"
+                  controls-position="right"
+                />
               </el-form-item>
 
               <el-form-item label="回测区间">
@@ -93,18 +100,17 @@
                 <el-button @click="resetForm">重置</el-button>
               </div>
             </el-form>
-          </section>
+          </SectionCard>
         </aside>
 
         <!-- 右栏：挖掘历史 -->
-        <section class="card history-card">
-          <div class="history-head">
-            <h3 class="card__title">挖掘历史</h3>
+        <SectionCard title="挖掘历史" class="history-card">
+          <template #extra>
             <a class="refresh-link" @click="loadTasks">
               <el-icon><Refresh /></el-icon>
               <span>刷新</span>
             </a>
-          </div>
+          </template>
 
           <el-table :data="tasks" v-loading="loading" size="default">
             <el-table-column label="类型" min-width="90">
@@ -136,7 +142,8 @@
                 <span
                   class="cell-mono"
                   :class="{ 'cell-ic-positive': row.best_ic != null && Number(row.best_ic) > 0 }"
-                >{{ fmtIc(row.best_ic) }}</span>
+                  >{{ fmtIc(row.best_ic) }}</span
+                >
               </template>
             </el-table-column>
 
@@ -156,61 +163,57 @@
               <el-empty description="暂无挖掘任务" :image-size="72" />
             </template>
           </el-table>
-        </section>
+        </SectionCard>
       </div>
-    <!-- 文本因子挖掘对话框 -->
-    <el-dialog v-model="textDialog.visible" title="文本因子挖掘" width="480px" :close-on-click-modal="false">
-      <el-form label-position="top" class="config-form">
-        <el-form-item label="股票池">
-          <el-select v-model="textDialog.form.universe">
-            <el-option v-for="o in universeOptions" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="新闻天数">
-          <el-input-number v-model="textDialog.form.newsDays" :min="1" :max="365" controls-position="right" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="textDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="textDialog.submitting" @click="submitTextMining">
-          开始挖掘
-        </el-button>
-      </template>
-    </el-dialog>
+      <!-- 文本因子挖掘对话框 -->
+      <el-dialog v-model="textDialog.visible" title="文本因子挖掘" width="480px" :close-on-click-modal="false">
+        <el-form label-position="top" class="config-form">
+          <el-form-item label="股票池">
+            <el-select v-model="textDialog.form.universe">
+              <el-option v-for="o in universeOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="新闻天数">
+            <el-input-number v-model="textDialog.form.newsDays" :min="1" :max="365" controls-position="right" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="textDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="textDialog.submitting" @click="submitTextMining"> 开始挖掘 </el-button>
+        </template>
+      </el-dialog>
 
-    <!-- AutoML 因子组合对话框 -->
-    <el-dialog v-model="automlDialog.visible" title="AutoML 因子组合" width="560px" :close-on-click-modal="false">
-      <el-form label-position="top" class="config-form">
-        <el-form-item label="基础因子">
-          <el-select
-            v-model="automlDialog.form.factorIds"
-            multiple
-            filterable
-            placeholder="选择参与组合的因子"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="f in factorList"
-              :key="f.id"
-              :label="f.name + ' (IC: ' + (f.ic != null ? Number(f.ic).toFixed(3) : '--') + ')'"
-              :value="f.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="组合方法">
-          <el-select v-model="automlDialog.form.method">
-            <el-option label="LightGBM" value="lightgbm" />
-            <el-option label="线性回归" value="linear" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="automlDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="automlDialog.submitting" @click="submitAutoML">
-          开始训练
-        </el-button>
-      </template>
-    </el-dialog>
+      <!-- AutoML 因子组合对话框 -->
+      <el-dialog v-model="automlDialog.visible" title="AutoML 因子组合" width="560px" :close-on-click-modal="false">
+        <el-form label-position="top" class="config-form">
+          <el-form-item label="基础因子">
+            <el-select
+              v-model="automlDialog.form.factorIds"
+              multiple
+              filterable
+              placeholder="选择参与组合的因子"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="f in factorList"
+                :key="f.id"
+                :label="f.name + ' (IC: ' + (f.ic != null ? Number(f.ic).toFixed(3) : '--') + ')'"
+                :value="f.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="组合方法">
+            <el-select v-model="automlDialog.form.method">
+              <el-option label="LightGBM" value="lightgbm" />
+              <el-option label="线性回归" value="linear" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="automlDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="automlDialog.submitting" @click="submitAutoML"> 开始训练 </el-button>
+        </template>
+      </el-dialog>
     </div>
   </PageContainer>
 </template>
@@ -229,7 +232,7 @@ const modes = [
   { value: 'llm', title: 'LLM 生成', desc: '大模型生成因子表达式', icon: MagicStick },
   { value: 'symbolic', title: '符号回归', desc: 'gplearn 遗传编程搜索', icon: Operation },
   { value: 'text', title: '文本因子', desc: '新闻情感与文本特征', icon: ChatLineSquare },
-  { value: 'automl', title: 'AutoML 组合', desc: 'LightGBM 因子组合优化', icon: Connection }
+  { value: 'automl', title: 'AutoML 组合', desc: 'LightGBM 因子组合优化', icon: Connection },
 ]
 
 // 允许算子（静态展示）
@@ -240,7 +243,7 @@ const universeOptions = [
   { value: 'csi300', label: 'CSI300' },
   { value: 'csi500', label: 'CSI500' },
   { value: 'csi1000', label: 'CSI1000' },
-  { value: 'all', label: '全A股' }
+  { value: 'all', label: '全A股' },
 ]
 
 // 默认表单值（重置用）
@@ -251,14 +254,14 @@ const defaultForm = () => ({
   icThreshold: 0.03,
   startDate: '2020-01-01',
   endDate: todayStr(),
-  universe: 'csi300'
+  universe: 'csi300',
 })
 
 // AI Provider 动态状态（badge 显示真实可用模型）
 const aiProviders = ref([])
 const aiBadgeText = computed(() => {
   if (!aiProviders.value.length) return ''
-  const models = aiProviders.value.map(p => p.model).join(' / ')
+  const models = aiProviders.value.map((p) => p.model).join(' / ')
   return `${models} 就绪`
 })
 async function loadAiStatus() {
@@ -280,14 +283,14 @@ const submitting = ref(false)
 const textDialog = reactive({
   visible: false,
   submitting: false,
-  form: { universe: 'csi300', newsDays: 30 }
+  form: { universe: 'csi300', newsDays: 30 },
 })
 
 // AutoML 因子组合对话框
 const automlDialog = reactive({
   visible: false,
   submitting: false,
-  form: { factorIds: [], method: 'lightgbm' }
+  form: { factorIds: [], method: 'lightgbm' },
 })
 
 // 因子库列表（AutoML 多选用）
@@ -298,17 +301,25 @@ let pollTimer = null
 let tickTimer = null
 const now = ref(Date.now())
 
-const hasRunning = computed(() => tasks.value.some(t => t.status === 'running' || t.status === 'pending'))
+const hasRunning = computed(() => tasks.value.some((t) => t.status === 'running' || t.status === 'pending'))
 
 // 类型 / 状态标签映射
-const typeLabel = (t) => ({ llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' }[t] || t)
-const typeBadgeClass = (t) => ({
-  llm: 'badge--primary', symbolic: 'badge--warning', text: 'badge--info', automl: 'badge--danger'
-}[t] || 'badge--muted')
-const statusLabel = (s) => ({ done: '完成', running: '运行中', failed: '失败', pending: '等待' }[s] || s)
-const statusBadgeClass = (s) => ({
-  done: 'badge--success', running: 'badge--warning', failed: 'badge--danger', pending: 'badge--muted'
-}[s] || 'badge--muted')
+const typeLabel = (t) => ({ llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' })[t] || t
+const typeBadgeClass = (t) =>
+  ({
+    llm: 'badge--primary',
+    symbolic: 'badge--warning',
+    text: 'badge--info',
+    automl: 'badge--danger',
+  })[t] || 'badge--muted'
+const statusLabel = (s) => ({ done: '完成', running: '运行中', failed: '失败', pending: '等待' })[s] || s
+const statusBadgeClass = (s) =>
+  ({
+    done: 'badge--success',
+    running: 'badge--warning',
+    failed: 'badge--danger',
+    pending: 'badge--muted',
+  })[s] || 'badge--muted'
 
 // 候选 / 通过格式化
 function fmtCand(row) {
@@ -378,20 +389,22 @@ async function loadTasks() {
 function startPolling() {
   if (pollTimer) return
   pollTimer = setInterval(async () => {
-    const running = tasks.value.filter(t => t.status === 'running' || t.status === 'pending')
+    const running = tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
     if (!running.length) {
       stopPolling()
       return
     }
-    await Promise.all(running.map(async (t) => {
-      try {
-        const data = await getMiningTask(t.id)
-        const idx = tasks.value.findIndex(x => x.id === t.id)
-        if (idx > -1) tasks.value[idx] = { ...tasks.value[idx], ...data }
-      } catch (e) {
-        // 单个任务查询失败忽略，下轮继续
-      }
-    }))
+    await Promise.all(
+      running.map(async (t) => {
+        try {
+          const data = await getMiningTask(t.id)
+          const idx = tasks.value.findIndex((x) => x.id === t.id)
+          if (idx > -1) tasks.value[idx] = { ...tasks.value[idx], ...data }
+        } catch (e) {
+          // 单个任务查询失败忽略，下轮继续
+        }
+      })
+    )
   }, 5000)
 }
 
@@ -403,14 +416,20 @@ function stopPolling() {
 }
 
 // 秒级 ticker：仅在有运行中任务时刷新耗时显示
-watch(hasRunning, (v) => {
-  if (v && !tickTimer) {
-    tickTimer = setInterval(() => { now.value = Date.now() }, 1000)
-  } else if (!v && tickTimer) {
-    clearInterval(tickTimer)
-    tickTimer = null
-  }
-}, { immediate: true })
+watch(
+  hasRunning,
+  (v) => {
+    if (v && !tickTimer) {
+      tickTimer = setInterval(() => {
+        now.value = Date.now()
+      }, 1000)
+    } else if (!v && tickTimer) {
+      clearInterval(tickTimer)
+      tickTimer = null
+    }
+  },
+  { immediate: true }
+)
 
 // 开始挖掘
 async function startMining() {
@@ -468,7 +487,7 @@ async function submitTextMining() {
   try {
     const data = await mineText({
       universe: textDialog.form.universe,
-      news_days: textDialog.form.newsDays
+      news_days: textDialog.form.newsDays,
     })
     if (data && data.task_id != null) {
       ElMessage.success('文本因子挖掘任务已创建')
@@ -494,7 +513,7 @@ async function submitAutoML() {
   try {
     const data = await mineAutoml({
       factor_ids: automlDialog.form.factorIds,
-      method: automlDialog.form.method
+      method: automlDialog.form.method,
     })
     if (data && data.task_id != null) {
       ElMessage.success('AutoML 因子组合任务已创建')
@@ -532,21 +551,27 @@ onBeforeUnmount(() => {
   gap: var(--space-md);
   margin-bottom: var(--space-lg);
   flex-wrap: wrap;
-}
-.header-left {
-  min-width: 0;
-}
-.page-title {
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin: 0;
-  line-height: var(--line-height-tight);
-}
-.page-subtitle {
-  font-size: var(--font-size-base);
-  color: var(--text-tertiary);
-  margin: 4px 0 0;
+
+  &__lead {
+    flex: 1;
+    min-width: 0;
+  }
+  &__title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-xs);
+    line-height: var(--line-height-tight);
+  }
+  &__subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
 }
 .model-badge {
   display: inline-flex;
@@ -580,18 +605,9 @@ onBeforeUnmount(() => {
   gap: var(--space-md);
 }
 
-/* 通用卡片 */
-.card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-lg);
-}
-.card__title {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin: 0 0 var(--space-md);
+/* 历史卡片 */
+.history-card {
+  overflow: hidden;
 }
 
 /* 挖掘方式 */
@@ -708,21 +724,7 @@ onBeforeUnmount(() => {
 
 /* 历史卡片 */
 .history-card {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
   overflow: hidden;
-}
-.history-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--border-light);
-
-  .card__title {
-    margin: 0;
-  }
 }
 .refresh-link {
   display: inline-flex;
@@ -765,12 +767,30 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
 }
-.badge--primary { background: rgba(var(--primary-rgb), 0.1); color: var(--primary); }
-.badge--success { background: rgba(31, 157, 107, 0.1); color: var(--success); }
-.badge--warning { background: rgba(200, 128, 28, 0.1); color: var(--warning); }
-.badge--info { background: rgba(47, 125, 194, 0.1); color: var(--info); }
-.badge--danger { background: rgba(210, 69, 69, 0.1); color: var(--danger); }
-.badge--muted { background: var(--bg-hover); color: var(--text-tertiary); }
+.badge--primary {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.badge--success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.badge--warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.badge--info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.badge--muted {
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
+}
 
 /* 运行中状态徽章 */
 .badge--running {
@@ -787,8 +807,13 @@ onBeforeUnmount(() => {
   }
 }
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* 表格内文本样式 */

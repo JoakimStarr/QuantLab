@@ -8,11 +8,7 @@
     align-center
   >
     <div class="guide-content">
-      <div
-        v-for="(step, index) in steps"
-        :key="index"
-        class="guide-step"
-      >
+      <div v-for="(step, index) in steps" :key="index" class="guide-step">
         <div class="guide-step__index">{{ index + 1 }}</div>
         <div class="guide-step__body">
           <h4 class="guide-step__title">{{ step.title }}</h4>
@@ -33,7 +29,7 @@
 import { ref, watch } from 'vue'
 
 const props = defineProps({
-  visible: { type: Boolean, default: false }
+  visible: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:visible'])
@@ -45,28 +41,31 @@ const dontShow = ref(false)
 const steps = [
   {
     title: '同步数据',
-    desc: '在「数据管理」页面同步股票行情数据到本地 Qlib 数据存储，支持全量和增量同步。'
+    desc: '在「数据管理」页面同步股票行情数据到本地 Qlib 数据存储，支持全量和增量同步。',
   },
   {
     title: '查看因子',
-    desc: '在「因子库」页面浏览、评价已有因子，或通过「AI因子挖掘」生成新因子。'
+    desc: '在「因子库」页面浏览、评价已有因子，或通过「AI因子挖掘」生成新因子。',
   },
   {
     title: '创建策略',
-    desc: '在「策略回测」页面选择因子组合，配置 TopK 和调仓频率，运行回测。'
+    desc: '在「策略回测」页面选择因子组合，配置 TopK 和调仓频率，运行回测。',
   },
   {
     title: '查看回测',
-    desc: '查看回测的收益曲线、关键指标和交易明细，对比不同策略表现。'
-  }
+    desc: '查看回测的收益曲线、关键指标和交易明细，对比不同策略表现。',
+  },
 ]
 
 // 弹窗打开时重置勾选状态
-watch(() => props.visible, (val) => {
-  if (val) {
-    dontShow.value = false
+watch(
+  () => props.visible,
+  (val) => {
+    if (val) {
+      dontShow.value = false
+    }
   }
-})
+)
 
 function handleUpdateVisible(val) {
   if (!val) {

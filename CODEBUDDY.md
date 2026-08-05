@@ -27,9 +27,14 @@ Python is pinned to 3.11 (`pyqlib` does not support 3.13). The venv lives at `.v
 # Frontend alone
 cd frontend && npm run dev
 
-# Manual baostock data backfill (no auto-sync; years = how far back, newest → oldest)
-curl -X POST 'http://localhost:8000/api/v1/quant/data/sync' \
-  -H 'Content-Type: application/json' -d '{"years": 5}'
+# Manual data operations (no auto-sync; all run in an independent worker subprocess)
+curl -X POST 'http://localhost:8000/api/v1/quant/data/sync?years=5'              # baostock A股回填（最新→最旧）
+curl -X POST 'http://localhost:8000/api/v1/quant/data/sync-full?years=5'        # 一键全同步：A股→指数→宏观→财报→外盘
+curl -X POST 'http://localhost:8000/api/v1/quant/data/eod-sync?source=baostock&days=5'   # 增量 EOD（baostock/akshare）
+curl -X POST 'http://localhost:8000/api/v1/quant/data/fundamental/sync?broadcast=true'  # 财报拉取(+广播到 bin)
+curl -X POST 'http://localhost:8000/api/v1/quant/data/sync-external-market'     # 外盘隔夜情绪因子
+curl 'http://localhost:8000/api/v1/quant/data/validate?universe=all'            # 全市场数据校验
+curl -X POST 'http://localhost:8000/api/v1/quant/data/repair' -H 'Content-Type: application/json' -d '{"universe":"all","include_baostock":false}'
 ```
 
 ### Tests
@@ -46,6 +51,8 @@ DATABASE_URL=postgresql+asyncpg://quantlab:quantlab@localhost:5432/quantlab .ven
 ```
 
 `backend/tests/conftest.py` injects a fake `qlib` module so mock-based tests run without qlib installed; real qlib computation tests require the venv (which has qlib).
+
+Note: `test_macro_api.py::test_macro_upsert_idempotent` is flaky-by-design — it writes a fixed `(PMI, 2026-07-01, pmi)` row and asserts `n1 == 1`, which fails on the second run because the row already exists in the DB. Deselect it (`--deselect ...`) or delete the row before running.
 
 ### Lint / format / build
 
@@ -78,6 +85,7 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 
 - `backend/scripts/migrate_sqlite_to_pg.py` — migrated the old SQLite DB (`data/quantlab.db`) to Postgres. Idempotent (ON CONFLICT DO NOTHING), column-intersection copy.
 - `backend/scripts/rebuild_automl_bundles.py` — retrains missing AutoML model bundles (`data/models/automl/{task_id}.pkl`) from each task's original params, then removes the duplicate factor `mine_with_automl` creates and restores the original factor's metrics/`result_factor_ids`.
+- `backend/scripts/seed_indices.py` — registers the index dirs under `features/` (sh000001/sz399001/...) into the `stock_index` table (idempotent). Run once after a fresh backfill; index sync also auto-registers.
 
 ## Architecture
 
@@ -95,19 +103,29 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 - `quant/` — qlib integration: `factor_eval.py` (IC/RankIC/ICIR/turnover evaluation, handles `AutoML(...)` expressions via trained bundles), `backtest_engine.py` / `qlib_backtest.py` / `vbt_backtest.py` (backtest backends), `portfolio*.py`, `walk_forward.py`, `qlib_init.py` (provider_uri init).
 - `factor/` — factor library: `library.py` (CRUD), `expression.py` (AST sandbox, rejects exec/eval/import and negative `Ref`), `alpha158.py` (seed/import + batch evaluate + backfill metrics; batch uses an asyncio.Queue + single DB writer to avoid connection-pool contention), `neutralize.py`, `orthogonalize.py`, `factor_compare.py`.
 - `mining/` — factor mining: LLM (`llm_factor.py`), symbolic regression (`symbolic.py`), AutoML (`automl.py`), text factors (`text_factor.py`).
-- `data/` — data acquisition (baostock-only): **`baostock_backfill.py` is the primary sync** (`POST /quant/data/sync?years=N`, manual only) — pulls the whole A-share market per trading day from newest to oldest, writes qlib bin (`open/high/low/close/volume/amount/change/tradable`) **and** PG `stock_daily` (all baostock daily fields) + `stock_basic`/`stock_industry`/`trade_calendar`, and builds `instruments/*.txt`. `baostock_client.py` (login singleton + `query_daily_history_k_AStock`, one request = one trading day for all stocks; constraint: ≤50k requests/day, no concurrent connections). `eod_incremental.py` provides the bin read/write/merge helpers (`_sync_stock_bin`, `_write_calendar`, `_compute_tradable`). `akshare_client.py` (news / market-cap / industry / EOD fallback via akshare) still exists as a supplementary source; `fundamental_sync.py`/`sync_runner.py`/`smart_sync.py`/`chenditc_client.py` were **removed** — docs referencing them are stale.
+- `data/` — data acquisition & integrity. **`sync_worker.py` is the execution backbone**: every sync/repair runs as an independent subprocess (`spawn_sync_worker(kind, universe, ...)`, `start_new_session=True`, one process per `kind`) that reports progress via `data/sync_progress.json` (web process reads it; `sync_progress.py` + `sync_lock.py` provide a flock "crawl lock" that **serializes all baostock crawlers** — backfill/eod/indices/repair/full; akshare/eastmoney jobs skip it). Kinds: `backfill` (A股 baostock), `eod` (incremental, baostock/akshare via `source`), `repair` (一键补齐), `indices`, `fundamental`, `full` (一键全同步, see below). Key modules:
+  - `baostock_backfill.py` — primary A股 sync (`POST /quant/data/sync?years=N`, manual only): newest→oldest, one `query_daily_history_k_AStock` per trading day (whole market), writes qlib bin + PG `stock_daily`/`stock_basic`/`stock_industry`/`trade_calendar`, builds `instruments/*.txt`. Idempotent (`ON CONFLICT DO NOTHING`). `_build_out_df` outputs `factor=1.0` (prices stored qfq-adjusted).
+  - `eod_incremental.py` — bin read/write/merge helpers (`_sync_stock_bin`, `_write_calendar`, `_compute_tradable`, **`_pad_bins_to_calendar`**) + `incremental_sync_eod` (EOD for recent days).
+  - `validation.py` — cross-store validation (`GET /quant/data/validate`): bin field/length checks, day.txt↔stock_daily↔trade_calendar alignment, DB↔bin coverage, macro/fin field sampling. **Index-aware**: skips `stock_index` codes (indices only have OHLCV). The NaN-ratio "corrupt" heuristic is measured against each stock's own listed range (stock_daily min/max), so recent IPOs aren't false-flagged.
+  - `repair.py` — 一键补齐 (`POST /quant/data/repair`): rebuilds day.txt + target stock bins from PG, rebuilds instruments, rebroadcasts macro/fin to bins; only pulls baostock if `include_baostock=true` and PG is missing trading days. Logs (and reports `skipped` for) codes with no `stock_daily` rows instead of silently dropping them.
+  - `full_sync.py` — `kind=full` orchestration: A股回填 → 指数 → 宏观(广播) → 财报(拉取+广播) → 外盘, staged progress; re-sets `worker_pid` after each stage (its `finish+clear` would otherwise drop it, creating a zombie-progress risk).
+  - `index_sync.py` + `index_registry.py` + `stock_index` table — indices are a **distinct instrument class**: akshare/baostock index OHLCV only (no 19 stock fields, no stock_daily/financials). Validation/repair look up `stock_index` to exclude them; sync auto-registers; `seed_indices.py` backfills existing dirs.
+  - `macro_sync.py` — eastmoney/akshare macro indicators → PG `macro_indicator` narrow table → broadcast to bins (`$pmi`, `$cpi`, `$shibor_*`, ...).
+  - `fundamental_sync.py` — akshare per-stock financial abstracts → PG `financial_indicator` narrow table (`code, report_date, field_name, value, available_date`) → PIT forward-fill broadcast (`$roe`, `$netprofit_yoy`, ...). **Partial-fetch guard**: a code counts as "already fetched" only if it has ≥ half of `FIN_FIELD_NAMES`; otherwise the next run refetches it (prevents permanently-missing fields from a truncated response).
+  - `external_market.py` — overnight foreign-market factors (`$us_sp500_ret`, `$us_nasdaq_ret`, ...) broadcast to bins.
+  - `baostock_client.py` — login singleton; constraint: ≤50k requests/day, **no concurrent connections** (serial only). `akshare_client.py` is a supplementary source.
 - `ai/` — LLM clients + multi-provider failover.
 - `task/` — scheduled job implementations.
 
 ### Data storage model
 
-- **qlib bin** (`data/qlib_bin/cn_data/`): float32 per-field files `features/{code_lower}/{field}.day.bin`, plus `calendars/day.txt` (the master time axis, alignment via start_index) and `instruments/{pool}.txt` (`all`/`csiall`/`csi300`/`csi500`). Fields (baostock subset): OHLCV + `amount` + `change` (fractional daily return) + `tradable` (limit-up/down + ST 5% mask). **`vwap`/`adjclose`/`factor` are no longer stored** — baostock does not provide them. The backfill rebuilds this dir from empty (creates calendars/instruments/features).
-- **PostgreSQL** — business tables (`factor`, `strategy`, `mining_task`, `backtest_result`, `user`, `task_result`) + sync metadata (`stock_data_status`, `sync_history`) + **baostock full-field tables**: `stock_daily` (all daily K-line fields: OHLCV/preclose/volume/amount/turn/tradestatus/pct_chg/is_st/pe_ttm/pb_mrq/ps_ttm/pcf_ncf_ttm/adjustflag), `stock_basic`, `stock_industry`, `trade_calendar`; `fin_profit`/`fin_operation`/`fin_growth`/`fin_balance`/`fin_cashflow`/`fin_dupont` (quarterly financials) and `margin_daily` are **schema-only, not yet backfilled** (baostock per-stock-per-quarter request cost). `fundamental_pit` is legacy/write-only.
+- **qlib bin** (`data/qlib_bin/cn_data/`): float32 per-field files `features/{code_lower}/{field}.day.bin`, plus `calendars/day.txt` (the master time axis, alignment via start_index) and `instruments/{pool}.txt` (`all`/`csiall`/`csi300`/`csi500`). Stock fields (19): OHLCV + `preclose`/`volume`/`amount`/`turn`/`tradestatus`/`pct_chg`/`is_st`/`pe_ttm`/`pb_mrq`/`ps_ttm`/`pcf_ncf_ttm`/`adjustflag` (baostock subset) + derived `change` (fractional daily return) + `tradable` (limit-up/down + ST 5% mask) + **`factor` (uniform 1.0 — prices are stored qfq-adjusted; qlib needs `$factor` to treat them as adjusted)**. Indices (`sh000001`/`sz399001`/...) live in the same `features/` tree but only carry OHLCV (+ macro/fin broadcast fields). **Calendar-growth rule**: every bin must be exactly `4 + 4×len(day.txt)` bytes. When a new trading day is added (e.g., today's data first arrives), stocks with no data that day (delisted/long-suspended) keep the old length and flag "长度异常" — the writers call `_pad_bins_to_calendar` (NaN-pad) after extending `day.txt` to keep everything aligned.
+- **PostgreSQL** — business tables (`factor`, `strategy`, `mining_task`, `backtest_result`, `user`, `task_result`) + sync metadata (`stock_data_status`, `sync_history`) + market data: `stock_daily` (all baostock daily fields), `stock_basic`, `stock_industry`, `trade_calendar`, `financial_indicator` (narrow: code/report_date/field_name/value/available_date), `macro_indicator` (narrow: indicator/report_date/field_name/value), `stock_index` (registered indices). `fin_profit`/`fin_operation`/`fin_growth`/`fin_balance`/`fin_cashflow`/`fin_dupont` (quarterly financials) and `margin_daily` are **schema-only, not yet backfilled**; `fundamental_pit` is legacy/write-only.
 - The dual-store split: qlib bin holds the daily fields factors reference as `$field`; PG holds the full raw baostock data and anything needing PIT/version semantics.
 
 ### Frontend (`frontend/src`)
 
-- `views/quant/` — business pages: `Dashboard.vue`, `FactorLibrary.vue` (expression cells truncate single-line with ellipsis; "补算指标" button in the filter toolbar applies to any selected factor, not just alpha158), `Strategy.vue`, `Mining.vue`, `DataStatus.vue` (manual baostock sync with a years selector; 同步监控/系统监控 pages were removed), `FactorCompare.vue`, `BacktestCompare.vue`, etc.
+- `views/quant/` — business pages: `Dashboard.vue`, `FactorLibrary.vue` (expression cells truncate single-line with ellipsis; "补算指标" button in the filter toolbar applies to any selected factor, not just alpha158), `Strategy.vue`, `Mining.vue`, `DataStatus.vue` (data management: "开始同步" submits the full sync chain, plus EOD/指数/财报/外盘 buttons, data validation + 一键补齐 dialogs, an index table from `stock_index`, and a sync-statistics panel; 同步监控/系统监控 pages were removed), `FactorCompare.vue`, `BacktestCompare.vue`, etc.
 - `stores/` (Pinia) — `factor.js` holds a 5-min-cached factor list; invalidate after mutations. `api/` — axios wrappers per domain. `composables/` — `useWebSocket`.
 - Vite dev server proxies `/api` and `/ws` to `http://localhost:8000`.
 
@@ -117,7 +135,10 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 - **Concurrency**: keep the event loop free; dispatch qlib/CPU work via `executor.run_io_cpu`/`run_cpu`. Don't add startup background jobs that evaluate factors or load large datasets.
 - **Alembic migrations**: always additive and defensive (check existence via `sa.inspect()` before alter), since `create_all` already builds the current model schema on fresh DBs. Don't modify applied migrations.
 - **Async sessions**: one session per operation; commits must be short. The alpha158 batch evaluator serializes DB writes through a single queue consumer to avoid pool exhaustion.
-- **Data sync**: baostock-only and manual (`POST /quant/data/sync?years=N`); the backfill iterates trading days newest → oldest, one `query_daily_history_k_AStock` per day (whole market), then writes qlib bin + PG `stock_daily`. PG inserts are idempotent (`ON CONFLICT DO NOTHING`), so re-running with more years only fills gaps. Respect baostock's limits: ≤50k requests/day, no concurrent connections (serial only).
-- **Docs staleness**: `docs/DATA_LAYER.md` and parts of `README.md`/`DEVELOPMENT.md` reference removed components (SQLite, `capital_flow_sync.py`, chenditc/akshare-default data source, 同步监控 page). Trust the code over those docs.
+- **Data sync**: manual only — `POST /quant/data/sync?years=N` (baostock A股 backfill) and `POST /quant/data/sync-full?years=N` (一键全同步 chain). Backfill iterates trading days newest → oldest, one `query_daily_history_k_AStock` per day (whole market), then writes qlib bin + PG `stock_daily`. PG inserts are idempotent (`ON CONFLICT DO NOTHING`), so re-running with more years only fills gaps. Respect baostock's limits: ≤50k requests/day, no concurrent connections (serial only; the `sync_lock` flock serializes baostock crawlers). **Long syncs run as independent worker subprocesses** (`sync_worker.py`) — never run baostock/akshare jobs as FastAPI `BackgroundTasks` in-process (uvicorn `--reload` waits forever on them); progress is bridged through `data/sync_progress.json`.
+- **Indices are not stocks**: `features/` also holds index dirs (sh000001/sz399001/...). They only have OHLCV, no `stock_daily`/financials, and must be excluded from validation/repair (via the `stock_index` table). Don't treat every `features/*` dir as a stock.
+- **`factor` bin is a constant 1.0** (derived, since prices are stored qfq-adjusted); it is not a baostock field. When `BIN_FIELDS` changes, existing bins must be regenerated (e.g., a fresh backfill/repair) or the missing-field check flags every stock.
+- **Calendar growth must pad all bins**: after `day.txt` gains a trading day, call `_pad_bins_to_calendar` so delisted/suspended stocks' bins are NaN-padded to the new length (see `eod_incremental.py`); otherwise validation reports 长度异常.
+- **Docs staleness**: `docs/DATA_LAYER.md` and parts of `README.md`/`DEVELOPMENT.md` reference removed components (SQLite, `capital_flow_sync.py`, chenditc/akshare-default data source, 同步监控 page, "factor not stored"). Trust the code over those docs.
 - **Legacy SQLite read in AutoML loader**: `factor_eval.py` `_resolve_task_id_from_factor_ids()` reads the stale `data/quantlab.db` via `sqlite3` to map old-format `AutoML(method, fid1, ...)` expressions to a task_id (leftover from the SQLite→PG migration). It only works while that file exists; a follow-up should re-point it at Postgres.
 - **Environment**: `.env` is required (AI provider keys, `POSTGRES_*`); `SECRET_KEY` and `ADMIN_PASSWORD` defaults are dev-only — `APP_ENV=production` with defaults blocks startup (security gate in `app/core/config.py`).

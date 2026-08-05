@@ -34,17 +34,16 @@
           style="width: 100%"
           :loading="resultsLoading"
         >
-          <el-option
-            v-for="item in allResults"
-            :key="item.id"
-            :label="formatResultLabel(item)"
-            :value="item.id"
-          >
+          <el-option v-for="item in allResults" :key="item.id" :label="formatResultLabel(item)" :value="item.id">
             <div class="result-option">
               <span class="result-option__name">策略 #{{ item.strategy_id }}</span>
               <span class="result-option__meta">
-                <span v-if="item.start_date && item.end_date" class="meta-date">{{ item.start_date }}~{{ item.end_date }}</span>
-                <span v-if="item.annual_return != null" class="num" :class="numClass(item.annual_return)">年化 {{ fmt(item.annual_return, 2, '%') }}</span>
+                <span v-if="item.start_date && item.end_date" class="meta-date"
+                  >{{ item.start_date }}~{{ item.end_date }}</span
+                >
+                <span v-if="item.annual_return != null" class="num" :class="numClass(item.annual_return)"
+                  >年化 {{ fmt(item.annual_return, 2, '%') }}</span
+                >
                 <span v-if="item.sharpe != null" class="num">夏普 {{ fmt(item.sharpe, 3) }}</span>
               </span>
             </div>
@@ -172,6 +171,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
@@ -180,7 +180,6 @@ import { useThemeRev } from '@/composables/useChartTheme'
 const themeRev = useThemeRev()
 import { compareBacktests } from '@/api/quant'
 import { listAllBacktestResults } from '@/api/strategy'
-
 
 const route = useRoute()
 const router = useRouter()
@@ -214,8 +213,8 @@ const curveEmpty = computed(() => Object.keys(curveData.value).length === 0)
 // 已选回测名称摘要（折叠时展示）
 const selectedNames = computed(() => {
   return selectedIds.value
-    .map(id => {
-      const item = allResults.value.find(r => r.id === id)
+    .map((id) => {
+      const item = allResults.value.find((r) => r.id === id)
       return item ? `策略 #${item.strategy_id}` : `#${id}`
     })
     .join('、')
@@ -223,9 +222,7 @@ const selectedNames = computed(() => {
 
 // 最优值计算
 function bestValue(field, isMax = true) {
-  const vals = resultList.value
-    .map(r => Number(r[field]))
-    .filter(v => !Number.isNaN(v))
+  const vals = resultList.value.map((r) => Number(r[field])).filter((v) => !Number.isNaN(v))
   if (vals.length === 0) return null
   return isMax ? Math.max(...vals) : Math.min(...vals)
 }
@@ -237,7 +234,7 @@ const best = computed(() => ({
   max_drawdown: bestValue('max_drawdown', false),
   volatility: bestValue('volatility', false),
   calmar: bestValue('calmar', true),
-  win_rate: bestValue('win_rate', true)
+  win_rate: bestValue('win_rate', true),
 }))
 
 // 单元格样式：高亮最优值
@@ -257,15 +254,15 @@ const curveOption = computed(() => {
   const results = resultList.value
   // 收集所有日期并排序
   const allDates = new Set()
-  Object.values(curveData.value).forEach(points => {
-    points.forEach(p => allDates.add(p.date))
+  Object.values(curveData.value).forEach((points) => {
+    points.forEach((p) => allDates.add(p.date))
   })
   const dates = [...allDates].sort()
 
   const series = Object.entries(curveData.value).map(([rid, points], idx) => {
-    const result = results.find(r => String(r.id) === String(rid))
+    const result = results.find((r) => String(r.id) === String(rid))
     const color = colors[idx % colors.length]
-    const map = new Map(points.map(p => [p.date, Number(p.nav)]))
+    const map = new Map(points.map((p) => [p.date, Number(p.nav)]))
     return {
       name: result?.name || `回测${rid}`,
       type: 'line',
@@ -274,10 +271,10 @@ const curveOption = computed(() => {
       lineStyle: { width: 1.5, color },
       itemStyle: { color },
       connectNulls: true,
-      data: dates.map(d => {
+      data: dates.map((d) => {
         const v = map.get(d)
         return v === undefined ? null : v
-      })
+      }),
     }
   })
 
@@ -287,9 +284,16 @@ const curveOption = computed(() => {
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
     xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: chartTheme.axisText() } },
-    yAxis: { type: 'value', name: '净值', scale: true, nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: {
+      type: 'value',
+      name: '净值',
+      scale: true,
+      nameLocation: 'middle',
+      nameGap: 40,
+      axisLabel: { color: chartTheme.axisText() },
+    },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
-    series
+    series,
   }
 })
 
@@ -299,24 +303,24 @@ const monthlyOption = computed(() => {
   const allMonths = new Set()
   const perResult = []
   Object.entries(curveData.value).forEach(([rid, points], idx) => {
-    const result = resultList.value.find(r => String(r.id) === String(rid))
+    const result = resultList.value.find((r) => String(r.id) === String(rid))
     const name = result?.name || `回测${rid}`
     const monthly = {}
-    points.forEach(p => {
+    points.forEach((p) => {
       const month = String(p.date).slice(0, 7)
       if (!monthly[month]) monthly[month] = { first: Number(p.nav), last: Number(p.nav) }
       monthly[month].last = Number(p.nav)
     })
     const months = Object.keys(monthly).sort()
-    months.forEach(m => allMonths.add(m))
-    const returns = months.map(m => (monthly[m].last / monthly[m].first - 1) * 100)
+    months.forEach((m) => allMonths.add(m))
+    const returns = months.map((m) => (monthly[m].last / monthly[m].first - 1) * 100)
     perResult.push({ name, color: colors[idx % colors.length], months, returns })
   })
   const sortedMonths = [...allMonths].sort()
-  const series = perResult.map(r => ({
+  const series = perResult.map((r) => ({
     name: r.name,
     type: 'bar',
-    data: sortedMonths.map(m => {
+    data: sortedMonths.map((m) => {
       const idx = r.months.indexOf(m)
       return idx >= 0 ? Number(r.returns[idx].toFixed(2)) : null
     }),
@@ -325,14 +329,14 @@ const monthlyOption = computed(() => {
   return {
     tooltip: {
       trigger: 'axis',
-      formatter: params => {
+      formatter: (params) => {
         if (!params.length) return ''
         let s = params[0].axisValue + '<br/>'
-        params.forEach(p => {
+        params.forEach((p) => {
           s += `${p.marker}${p.seriesName}: ${p.value != null ? p.value + '%' : '—'}<br/>`
         })
         return s
-      }
+      },
     },
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     textStyle: { color: chartTheme.axisText() },
@@ -347,21 +351,21 @@ const monthlyOption = computed(() => {
 const drawdownOption = computed(() => {
   void themeRev.value
   const allDates = new Set()
-  Object.values(curveData.value).forEach(points => {
-    points.forEach(p => allDates.add(p.date))
+  Object.values(curveData.value).forEach((points) => {
+    points.forEach((p) => allDates.add(p.date))
   })
   const dates = [...allDates].sort()
   const series = Object.entries(curveData.value).map(([rid, points], idx) => {
-    const result = resultList.value.find(r => String(r.id) === String(rid))
+    const result = resultList.value.find((r) => String(r.id) === String(rid))
     const name = result?.name || `回测${rid}`
     const color = colors[idx % colors.length]
-    const map = new Map(points.map(p => [p.date, Number(p.nav)]))
+    const map = new Map(points.map((p) => [p.date, Number(p.nav)]))
     let cummax = -Infinity
-    const drawdown = dates.map(d => {
+    const drawdown = dates.map((d) => {
       const v = map.get(d)
       if (v === undefined || v === null) return null
       if (v > cummax) cummax = v
-      return Number(((v - cummax) / cummax * 100).toFixed(2))
+      return Number((((v - cummax) / cummax) * 100).toFixed(2))
     })
     return {
       name,
@@ -377,14 +381,14 @@ const drawdownOption = computed(() => {
   return {
     tooltip: {
       trigger: 'axis',
-      formatter: params => {
+      formatter: (params) => {
         if (!params.length) return ''
         let s = params[0].axisValue + '<br/>'
-        params.forEach(p => {
+        params.forEach((p) => {
           s += `${p.marker}${p.seriesName}: ${p.value != null ? p.value + '%' : '—'}<br/>`
         })
         return s
-      }
+      },
     },
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     textStyle: { color: chartTheme.axisText() },
@@ -433,13 +437,15 @@ const radarOption = computed(() => {
   return {
     tooltip: { trigger: 'item' },
     textStyle: { color: chartTheme.axisText() },
-    legend: { top: 0, textStyle: { color: chartTheme.axisText() }, data: data.map(d => d.name) },
+    legend: { top: 0, textStyle: { color: chartTheme.axisText() }, data: data.map((d) => d.name) },
     radar: {
       indicator: indicators,
       shape: 'polygon',
       splitNumber: 5,
       axisName: { color: chartTheme.textPrimary() },
-      splitArea: { areaStyle: { color: [withAlpha(chartTheme.primary(), 0.02), withAlpha(chartTheme.primary(), 0.04)] } },
+      splitArea: {
+        areaStyle: { color: [withAlpha(chartTheme.primary(), 0.02), withAlpha(chartTheme.primary(), 0.04)] },
+      },
     },
     series: [{ type: 'radar', data }],
   }
@@ -468,7 +474,7 @@ function normalizeNavSeries(data) {
   const curves = data?.nav_curves || data?.nav_series || data?.curve_series || data?.series
   if (Array.isArray(curves)) {
     const map = {}
-    curves.forEach(item => {
+    curves.forEach((item) => {
       const rid = String(item.result_id)
       const arr = item.curve || item.nav || []
       map[rid] = toNavPoints(arr)
@@ -483,7 +489,7 @@ function normalizeNavSeries(data) {
 function toNavPoints(arr) {
   // 已是指针点数组（date/nav 对象）
   if (Array.isArray(arr) && arr.length > 0 && (arr[0]?.date != null || arr[0]?.nav != null || arr[0]?.value != null)) {
-    return arr.map(p => ({ date: String(p.date ?? p.name ?? p.ts ?? ''), nav: Number(p.nav ?? p.value ?? p.y) }))
+    return arr.map((p) => ({ date: String(p.date ?? p.name ?? p.ts ?? ''), nav: Number(p.nav ?? p.value ?? p.y) }))
   }
   // dict 格式 { dates, portfolio, benchmark }
   if (!Array.isArray(arr) && arr && typeof arr === 'object') {
@@ -528,8 +534,8 @@ async function loadAllResults() {
 // 同步 URL ids → 选择器（保证从分享链接进入时选择器已预选）
 function syncSelectionFromIds(ids) {
   if (!ids || !ids.length) return
-  const nums = ids.map(id => Number(id)).filter(n => !Number.isNaN(n))
-  const validIds = nums.filter(n => allResults.value.some(r => r.id === n))
+  const nums = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n))
+  const validIds = nums.filter((n) => allResults.value.some((r) => r.id === n))
   selectedIds.value = validIds.length ? validIds : nums
 }
 
@@ -597,7 +603,10 @@ async function loadData() {
 
   const idsParam = route.query.ids
   const ids = idsParam
-    ? String(idsParam).split(',').map(s => s.trim()).filter(Boolean)
+    ? String(idsParam)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
     : []
   if (ids.length === 0) {
     loading.value = false

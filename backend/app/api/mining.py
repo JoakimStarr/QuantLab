@@ -13,6 +13,7 @@ from app.core.errors import AppError
 from app.core.ratelimit import limiter
 from app.models.mining_task import MiningTask
 from app.schemas.common import ApiResponse
+from app.services.data.sync_progress import busy_message
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,16 @@ def _llm_timeout(n_candidates: int, n_rounds: int = 1):
     return hard
 
 
+async def _ensure_sync_idle() -> str | None:
+    """挖掘任务需要读取 qlib bin；仅当活跃任务会写 bin（回填/补齐/指数/EOD/广播）
+    时才拒绝。fetch-only 任务（如财报拉取只写 PG）不影响 bin，允许挖掘。"""
+    from app.services.data.sync_progress import busy_message, writes_bins_active
+
+    if not writes_bins_active():
+        return None
+    return busy_message() + "；挖掘需要读取 qlib bin 数据，回填/同步期间数据不稳定，请稍后重试"
+
+
 async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str = None, timeout: int = None) -> None:
     """统一的挖掘任务执行包装器。
 
@@ -80,6 +91,15 @@ async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str 
     try:
         # 信号量限流：超出 max_concurrent 的任务在此排队，超时只计实际执行时间
         async with sem:
+            # 兜底：任务真正开始时若恰逢数据回填/同步正在写 bin，
+            # 直接中止避免读到半写数据产生虚假 IC（fetch-only 任务不拦截）
+            from app.services.data.sync_progress import writes_bins_active
+            if writes_bins_active():
+                await _mark_failed(
+                    task_id,
+                    "数据回填/补齐正在写 qlib bin，挖掘任务已中止，请稍后重试",
+                )
+                return
             await asyncio.wait_for(coro_factory(), timeout=timeout)
     except TimeoutError:
         logger.error("%s 任务超时 task_id=%s (timeout=%ss)", label, task_id, timeout)
@@ -204,6 +224,9 @@ async def mine_llm_api(
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
+    busy = await _ensure_sync_idle()
+    if busy:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     n = n_candidates or settings.mining.get("llm", {}).get("candidates_per_run", 10)
     task_id = await _create_task("llm", {"n_candidates": n, "n_rounds": n_rounds})
     if n_rounds and n_rounds > 1:
@@ -229,6 +252,9 @@ async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks)
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
+    busy = await _ensure_sync_idle()
+    if busy:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     task_id = await _create_task("symbolic", settings.mining.get("symbolic", {}))
     background_tasks.add_task(_run_symbolic_task, task_id)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "symbolic", "status": "pending",
@@ -260,6 +286,9 @@ async def mine_automl_api(
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，组合需要数据", 503)
+    busy = await _ensure_sync_idle()
+    if busy:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method,
                                             "walk_forward": bool(walk_forward)})
     background_tasks.add_task(_run_automl_task, task_id, factor_ids, method, bool(walk_forward))
@@ -283,6 +312,9 @@ async def mine_text_api(
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，挖掘需要 IC 评价", 503)
+    busy = await _ensure_sync_idle()
+    if busy:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     task_id = await _create_task("text", {"codes": codes})
     background_tasks.add_task(_run_text_task, task_id, codes)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "text", "status": "pending",

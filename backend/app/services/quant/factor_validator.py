@@ -323,10 +323,28 @@ def bh_corrected_pvalues(p_values: list) -> list:
 _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
 
-def _ic_cache_key(expr: str, start: str, end: str, horizon: int, diversity: bool = False) -> str:
-    """生成 IC 缓存 key（diversity 是否启用会影响结果，必须纳入 key）。"""
+def _ic_cache_key(
+    expr: str, start: str, end: str, horizon: int, diversity: bool = False,
+    ic_threshold: float = None, significance_alpha: float = 0.05,
+    stability_threshold: float = 0.5, positive_ratio_threshold: float = 0.55,
+    decay_threshold: float = -0.01, diversity_threshold: float = 0.8,
+    roll_windows: list = None, industry_neutralize_enabled: bool = False,
+    robustness_enabled: bool = False, baseline_exprs: list = None,
+) -> str:
+    """生成 IC 缓存 key。
+
+    所有会影响评价结果的参数必须纳入 key，否则配置不同会命中脏缓存：
+    阈值、滚动窗口、行业中性化/稳健性开关、基准因子表达式（正交）等。
+    """
     import hashlib
-    raw = f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
+    roll = tuple(roll_windows or [])
+    base = tuple(sorted(baseline_exprs or []))
+    raw = (
+        f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
+        f"|{ic_threshold}|{significance_alpha}|{stability_threshold}"
+        f"|{positive_ratio_threshold}|{decay_threshold}|{diversity_threshold}"
+        f"|{roll}|{industry_neutralize_enabled}|{robustness_enabled}|{base}"
+    )
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -366,8 +384,8 @@ def compute_daily_ic_series(factor_expr: str, start: str, end: str,
     Returns:
         pd.Series(index=datetime, values=daily_rank_ic)
     """
-    from app.services.quant.factor_eval import load_factor_values, load_label
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    from app.services.quant.factor_eval import load_factor_values, load_label, forward_return_label
+    label_expr = forward_return_label(horizon)
     if factor_df is None:
         factor_df = load_factor_values(factor_expr, start, end, universe)
     if label_df is None:
@@ -395,9 +413,9 @@ def compute_daily_ic_series(factor_expr: str, start: str, end: str,
 _EXISTING_IC_CACHE: LRUCache = LRUCache(maxsize=256)
 
 
-def _existing_ic_cache_key(expr: str, start: str, end: str, horizon: int) -> str:
+def _existing_ic_cache_key(expr: str, start: str, end: str, horizon: int, universe: str = None) -> str:
     import hashlib
-    raw = f"{expr}|{start}|{end}|{horizon}"
+    raw = f"{expr}|{start}|{end}|{horizon}|{universe or ''}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -410,7 +428,7 @@ def compute_existing_ic_series(exprs: list, start: str, end: str,
     """
     series_list = []
     for expr in exprs:
-        key = _existing_ic_cache_key(expr, start, end, horizon)
+        key = _existing_ic_cache_key(expr, start, end, horizon, universe)
         cached = _EXISTING_IC_CACHE.get(key)
         if cached is not None:
             series_list.append(cached)
@@ -498,18 +516,30 @@ def evaluate_factor_with_validation(
     if ic_threshold is None:
         ic_threshold = mining_cfg.get("ic_threshold", 0.03)
 
-    # 检查缓存（diversity 状态纳入 key，避免缓存污染多样性检测结果）
-    cache_key = _ic_cache_key(factor_expr, start, end, horizon,
-                              diversity=bool(existing_ic_series))
+    # 检查缓存（所有影响结果的参数均纳入 key，避免配置不同命中脏缓存）
+    cache_key = _ic_cache_key(
+        factor_expr, start, end, horizon,
+        diversity=bool(existing_ic_series),
+        ic_threshold=ic_threshold,
+        significance_alpha=significance_alpha,
+        stability_threshold=stability_threshold,
+        positive_ratio_threshold=positive_ratio_threshold,
+        decay_threshold=decay_threshold,
+        diversity_threshold=diversity_threshold,
+        roll_windows=roll_windows,
+        industry_neutralize_enabled=industry_neutralize_enabled,
+        robustness_enabled=robustness_enabled,
+        baseline_exprs=baseline_exprs,
+    )
     cached = _ic_cache_get(cache_key)
     if cached is not None:
         return cached
 
     # 1. 样本分割：基于实际交易日（因子数据真实存在的日期），而非自然日
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, compute_ic, compute_turnover
+        load_factor_values, load_label, compute_ic, compute_turnover, forward_return_label
     )
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    label_expr = forward_return_label(horizon)
     factor_df = load_factor_values(factor_expr, start, end, universe)
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
     actual_dates = sorted(factor_df.index.get_level_values("datetime").unique())

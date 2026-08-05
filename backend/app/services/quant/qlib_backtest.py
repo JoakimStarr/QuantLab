@@ -112,6 +112,7 @@ def run_qlib_backtest(
     benchmark: str = None,
     rebalance_freq: str = "day",
     portfolio_method: str = None,
+    capital: float = None,
 ) -> dict:
     """用 QLib backtest_daily 运行 top-k dropout 回测。
 
@@ -189,7 +190,8 @@ def run_qlib_backtest(
     backtest_params = {
         "start_time": start,
         "end_time": end,
-        "account": 100000000,
+        # 初始资金：默认 1 亿元，可经 config.quant.initial_capital 或调用方覆盖
+        "account": capital or settings.quant.get("initial_capital", 100000000),
         "benchmark": benchmark,
         "exchange_kwargs": exchange_kwargs,
     }

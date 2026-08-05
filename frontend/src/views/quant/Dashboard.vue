@@ -1,28 +1,32 @@
 <template>
   <PageContainer>
-    <header class="dashboard-header">
-      <div class="dashboard-header__lead">
-        <h2>量化研究看板</h2>
-        <p>量化研究全景概览</p>
+    <header class="page-header">
+      <div class="page-header__lead">
+        <h1 class="page-header__title">量化研究看板</h1>
+        <p class="page-header__subtitle">量化研究全景概览</p>
       </div>
-      <div class="dashboard-header__actions">
-        <span v-if="lastTradeDate" class="dashboard-last-update">最近行情 {{ lastTradeDate }}</span>
+      <div class="page-header__actions">
+        <span v-if="lastTradeDate" class="page-header__count">最近行情 {{ lastTradeDate }}</span>
         <el-button @click="refreshAll" :loading="loading" size="small">刷新</el-button>
       </div>
     </header>
 
     <!-- 加载失败的非阻塞提示条 -->
     <el-alert
-      v-for="err in loadErrors" :key="err"
+      v-for="err in loadErrors"
+      :key="err"
       class="dashboard-alert"
-      :title="err" type="error" :closable="true" show-icon
-      @close="loadErrors = loadErrors.filter(e => e !== err)"
+      :title="err"
+      type="error"
+      :closable="true"
+      show-icon
+      @close="loadErrors = loadErrors.filter((e) => e !== err)"
     />
 
     <!-- 初始加载骨架屏 -->
     <template v-if="initialLoading">
       <SkeletonLoader :rows="3" />
-      <el-row :gutter="16" style="margin-top: 16px;">
+      <el-row :gutter="16" style="margin-top: 16px">
         <el-col :xs="24" :sm="12">
           <SkeletonLoader :rows="4" />
         </el-col>
@@ -108,6 +112,7 @@ import { getQuantDataStatus } from '@/api/quant'
 import { listIndices, getIndexKline, getMarketOverview } from '@/api/market'
 import { getMacroIndicators } from '@/api/macro'
 import { searchStocks } from '@/api/quant'
+import { getCached, setCache } from '@/utils/ttlCache'
 
 const loading = ref(true)
 const initialLoading = ref(true)
@@ -143,7 +148,7 @@ const customRange = ref(null)
 const periods = [
   { key: '1d', label: '日线' },
   { key: '1w', label: '周线' },
-  { key: '1M', label: '月线' }
+  { key: '1M', label: '月线' },
 ]
 
 const dashboardStats = computed(() => ({
@@ -153,7 +158,7 @@ const dashboardStats = computed(() => ({
   recentMining: recentMining.value,
   miningTotal: miningTotal.value,
   recentBacktests: recentBacktests.value,
-  backtestTotal: backtestTotal.value
+  backtestTotal: backtestTotal.value,
 }))
 
 function formatDate(d) {
@@ -175,12 +180,23 @@ function rangeToDates(range, custom) {
   const end = new Date()
   const start = new Date()
   switch (range) {
-    case '1M': start.setMonth(start.getMonth() - 1); break
-    case '3M': start.setMonth(start.getMonth() - 3); break
-    case '6M': start.setMonth(start.getMonth() - 6); break
-    case '1Y': start.setFullYear(start.getFullYear() - 1); break
-    case '2Y': start.setFullYear(start.getFullYear() - 2); break
-    default: return { start: null, end: null }
+    case '1M':
+      start.setMonth(start.getMonth() - 1)
+      break
+    case '3M':
+      start.setMonth(start.getMonth() - 3)
+      break
+    case '6M':
+      start.setMonth(start.getMonth() - 6)
+      break
+    case '1Y':
+      start.setFullYear(start.getFullYear() - 1)
+      break
+    case '2Y':
+      start.setFullYear(start.getFullYear() - 2)
+      break
+    default:
+      return { start: null, end: null }
   }
   return { start: formatDate(start), end: formatDate(end) }
 }
@@ -237,21 +253,21 @@ async function loadMacroSnapshot() {
       if (!series[k]) series[k] = []
       series[k].push(it)
     }
-    macroItems.value = Object.values(series).map(arr => {
+    macroItems.value = Object.values(series).map((arr) => {
       arr.sort((a, b) => String(a.available_date).localeCompare(String(b.available_date)))
       const latest = arr[arr.length - 1]
       const prev = arr[arr.length - 2]
       const latestVal = Number(latest.value)
       const prevVal = prev ? Number(prev.value) : null
-      const change = prev != null && prevVal != null && latestVal != null &&
-        !Number.isNaN(latestVal) && !Number.isNaN(prevVal)
-        ? latestVal - prevVal
-        : null
+      const change =
+        prev != null && prevVal != null && latestVal != null && !Number.isNaN(latestVal) && !Number.isNaN(prevVal)
+          ? latestVal - prevVal
+          : null
       return {
         ...latest,
         label: labelMap[latest.field_name] || latest.field_name,
         change,
-        prevDate: prev?.available_date ?? null
+        prevDate: prev?.available_date ?? null,
       }
     })
   } catch {
@@ -262,8 +278,32 @@ async function loadMacroSnapshot() {
   }
 }
 
-async function loadAll() {
-  loading.value = true
+// 首页统计缓存：5 分钟内复用，进入时先渲染缓存再后台刷新
+const DASH_STATS_KEY = 'dashboard_stats'
+const DASH_STATS_TTL = 5 * 60 * 1000
+
+function applyStats(s) {
+  factorTotal.value = s.factorTotal ?? 0
+  factorBySource.value = s.factorBySource ?? { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 }
+  strategies.value = s.strategies ?? []
+  recentMining.value = s.recentMining ?? []
+  miningTotal.value = s.miningTotal ?? 0
+  recentBacktests.value = s.recentBacktests ?? []
+  backtestTotal.value = s.backtestTotal ?? 0
+  dataStatus.value = s.dataStatus ?? {}
+  indices.value = s.indices ?? []
+}
+
+function computeFactorBySource(items) {
+  const bySource = { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 }
+  items.forEach((f) => {
+    const k = (f.source || f.category || f.type || '').toLowerCase()
+    if (bySource[k] != null) bySource[k]++
+  })
+  return bySource
+}
+
+async function fetchStats() {
   try {
     const [factors, factorsAll, strategiesData, mining, backtests, status, indicesData] = await Promise.all([
       listFactors({ limit: 1 }),
@@ -272,31 +312,46 @@ async function loadAll() {
       listMiningTasks({ limit: 5 }),
       listAllBacktestResults({ limit: 5 }),
       getQuantDataStatus(),
-      listIndices()
+      listIndices(),
     ])
-    factorTotal.value = factors?.total ?? 0
-    const bySource = { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 }
-    ;(factorsAll?.items ?? []).forEach(f => {
-      const s = (f.source || f.category || f.type || '').toLowerCase()
-      if (bySource[s] != null) bySource[s]++
-    })
-    factorBySource.value = bySource
-    strategies.value = strategiesData?.items ?? []
-    recentMining.value = mining?.items ?? []
-    miningTotal.value = mining?.total ?? 0
-    recentBacktests.value = backtests?.items ?? []
-    backtestTotal.value = backtests?.total ?? 0
-    dataStatus.value = status ?? {}
-    indices.value = indicesData?.items ?? []
+    const stats = {
+      factorTotal: factors?.total ?? 0,
+      factorBySource: computeFactorBySource(factorsAll?.items ?? []),
+      strategies: strategiesData?.items ?? [],
+      recentMining: mining?.items ?? [],
+      miningTotal: mining?.total ?? 0,
+      recentBacktests: backtests?.items ?? [],
+      backtestTotal: backtests?.total ?? 0,
+      dataStatus: status ?? {},
+      indices: indicesData?.items ?? [],
+    }
+    applyStats(stats)
+    setCache(DASH_STATS_KEY, stats, DASH_STATS_TTL)
+    return true
   } catch {
     ElMessage.error('加载首页数据失败')
-  } finally {
-    loading.value = false
+    return false
   }
 }
 
+async function loadAll(force = false) {
+  loading.value = true
+  const cached = !force ? getCached(DASH_STATS_KEY) : null
+  if (cached) {
+    applyStats(cached)
+    loading.value = false
+    // 命中缓存：快速展示，后台静默刷新（不阻塞首屏）
+    fetchStats().finally(() => {
+      loading.value = false
+    })
+    return
+  }
+  await fetchStats()
+  loading.value = false
+}
+
 function refreshAll() {
-  loadAll()
+  loadAll(true)
   loadOverview()
   loadKline()
   loadMacroSnapshot()
@@ -305,7 +360,7 @@ function refreshAll() {
 function onSelectIndex(code) {
   selectedIndex.value = code
   stockTarget.value = null
-  const item = overviewItems.value.find(i => i.code === code)
+  const item = overviewItems.value.find((i) => i.code === code)
   if (item) ElMessage.success(`已切换指数：${item.name}`)
 }
 
@@ -356,22 +411,47 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="scss">
-.dashboard-col { display: flex; }
-.dashboard-col > .section-card { flex: 1; }
-.dashboard-header {
+.dashboard-col {
+  display: flex;
+}
+.dashboard-col > .section-card {
+  flex: 1;
+}
+.page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+
   &__lead {
-    h2 { margin: 0; font-size: 24px; font-weight: 600; color: var(--text-primary); }
-    p { margin: 4px 0 0; font-size: 14px; color: var(--text-tertiary); }
+    flex: 1;
+    min-width: 0;
   }
-  &__actions { display: flex; align-items: center; gap: 12px; }
+  &__title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-xs);
+  }
+  &__subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+  &__count {
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
 }
-.dashboard-last-update {
-  font-size: 12px; color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+.dashboard-alert {
+  margin-bottom: 16px;
 }
-.dashboard-alert { margin-bottom: 16px; }
 </style>

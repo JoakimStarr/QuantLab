@@ -1,9 +1,11 @@
 <template>
   <PageContainer narrow>
-    <div class="page-header mb-6">
-      <h2 class="page-title">策略库</h2>
-      <p class="page-desc">内置规则/信号型策略模板，选模板配参数即可回测（v1 结果不保存）</p>
-    </div>
+    <header class="page-header">
+      <div class="page-header__lead">
+        <h1 class="page-header__title">策略库</h1>
+        <p class="page-header__subtitle">内置规则/信号型策略模板，选模板配参数即可回测（v1 结果不保存）</p>
+      </div>
+    </header>
 
     <!-- 模板卡片 -->
     <div class="tpl-grid">
@@ -21,10 +23,21 @@
     </div>
 
     <!-- 配置弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="`配置策略：${currentTpl?.name || ''}`" width="520px" :close-on-click-modal="false">
+    <el-dialog
+      v-model="dialogVisible"
+      :title="`配置策略：${currentTpl?.name || ''}`"
+      width="520px"
+      :close-on-click-modal="false"
+    >
       <el-form label-width="90px" label-position="left">
         <el-form-item v-for="p in currentTpl?.params || []" :key="p.key" :label="p.label">
-          <el-input-number v-model="formParams[p.key]" :min="p.min" :max="p.max" :step="p.step || 1" style="width: 100%" />
+          <el-input-number
+            v-model="formParams[p.key]"
+            :min="p.min"
+            :max="p.max"
+            :step="p.step || 1"
+            style="width: 100%"
+          />
         </el-form-item>
         <el-form-item label="标的">
           <div v-if="currentTpl?.kind === 'pairs'" class="sym-pair">
@@ -35,7 +48,15 @@
           <el-input v-else v-model="formSymbols[0]" placeholder="如 sh600000 / 600000" />
         </el-form-item>
         <el-form-item label="日期区间">
-          <el-date-picker v-model="formDates" type="daterange" range-separator="至" start-placeholder="开始" end-placeholder="结束" value-format="YYYY-MM-DD" style="width: 100%" />
+          <el-date-picker
+            v-model="formDates"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
         </el-form-item>
         <el-form-item label="基准">
           <el-select v-model="formBenchmark" style="width: 100%">
@@ -47,7 +68,9 @@
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="running" @click="runBacktest">{{ running ? '回测中...' : '运行回测' }}</el-button>
+        <el-button type="primary" :loading="running" @click="runBacktest">{{
+          running ? '回测中...' : '运行回测'
+        }}</el-button>
       </template>
     </el-dialog>
 
@@ -82,7 +105,7 @@
           </el-table-column>
           <el-table-column label="方向" width="80" align="center">
             <template #default="{ row }">
-              <el-tag :type="row.action === 'BUY' ? 'success' : 'danger'" size="small">
+              <el-tag :type="row.action === 'BUY' ? 'danger' : 'success'" size="small">
                 {{ row.action === 'BUY' ? '买入' : '卖出' }}
               </el-tag>
             </template>
@@ -115,6 +138,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import { getStrategyTemplates, runStrategyLibraryBacktest } from '@/api/strategyLibrary'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
@@ -131,7 +155,7 @@ const formBenchmark = ref('SH000300')
 const running = ref(false)
 const result = ref(null)
 
-const catType = (c) => ({ 均值回归: 'success', 趋势: 'primary', 统计套利: 'warning' }[c] || 'info')
+const catType = (c) => ({ 均值回归: 'success', 趋势: 'primary', 统计套利: 'warning' })[c] || 'info'
 
 function openConfig(t) {
   currentTpl.value = t
@@ -208,7 +232,7 @@ const hasChart = computed(() => {
 })
 
 // 交易明细是否有"说明"列（配对交易含开/平仓说明）
-const hasTradeNote = computed(() => (result.value?.trades || []).some(t => t.note))
+const hasTradeNote = computed(() => (result.value?.trades || []).some((t) => t.note))
 
 const chartOption = computed(() => {
   void themeRev.value
@@ -222,7 +246,7 @@ const chartOption = computed(() => {
       borderColor: chartTheme.border(),
       textStyle: { color: chartTheme.textPrimary() },
       formatter: (params) => {
-        const lines = params.map(p => `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(3)}</b>`)
+        const lines = params.map((p) => `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(3)}</b>`)
         return `${params[0].axisValue}<br/>${lines.join('<br/>')}`
       },
     },
@@ -239,7 +263,7 @@ const chartOption = computed(() => {
       scale: true,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: chartTheme.axisText(), fontSize: 11, formatter: v => Number(v).toFixed(2) },
+      axisLabel: { color: chartTheme.axisText(), fontSize: 11, formatter: (v) => Number(v).toFixed(2) },
       splitLine: { lineStyle: { color: chartTheme.border(), type: 'dashed' } },
     },
     series: [
@@ -281,9 +305,30 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="scss">
-.page-header { animation: fadeInUp 0.5s var(--ease-out-expo); }
-.page-title { font-size: var(--font-size-2xl); font-weight: 700; color: var(--text-primary); }
-.page-desc { font-size: var(--font-size-sm); color: var(--text-secondary); margin-top: 4px; }
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  animation: fadeInUp 0.5s var(--ease-out-expo);
+
+  &__lead {
+    flex: 1;
+    min-width: 0;
+  }
+  &__title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-xs);
+  }
+  &__subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+}
 
 .tpl-grid {
   display: grid;
@@ -291,23 +336,71 @@ onMounted(async () => {
   gap: 16px;
 }
 .tpl-card {
-  :deep(.el-card__body) { display: flex; flex-direction: column; height: 100%; }
+  :deep(.el-card__body) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
 }
-.tpl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.tpl-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.tpl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tpl-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
 .tpl-desc {
-  font-size: 13px; color: var(--text-secondary); line-height: 1.6;
-  margin: 10px 0 14px; min-height: 42px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 10px 0 14px;
+  min-height: 42px;
 }
-.tpl-foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; }
-.tpl-kind { font-size: 12px; color: var(--text-tertiary); }
+.tpl-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+.tpl-kind {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
 
-.sym-pair { display: flex; align-items: center; gap: 8px; width: 100%; }
-.sym-sep { color: var(--text-tertiary); font-size: 12px; flex-shrink: 0; }
+.sym-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.sym-sep {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
 
-.result-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.result-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
-.result-meta { font-size: 12px; color: var(--text-tertiary); }
+.result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.result-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+.result-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
 
 .metrics-grid {
   display: grid;
@@ -320,23 +413,66 @@ onMounted(async () => {
   background: var(--bg-tertiary, #f5f7fa);
   border-radius: 8px;
 }
-.metric-label { font-size: 12px; color: var(--text-tertiary); }
-.metric-value { font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 4px; font-variant-numeric: tabular-nums; }
-.tone-success { color: var(--success); }
-.tone-danger { color: var(--danger); }
+.metric-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.tone-success {
+  color: var(--success);
+}
+.tone-danger {
+  color: var(--danger);
+}
 
-.chart-body { height: 360px; }
+.chart-body {
+  height: 360px;
+}
 
-.trades-section { margin-top: 18px; }
-.trades-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
-.trades-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.trades-count { font-size: 12px; color: var(--text-tertiary); }
-.time { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.mt-6 { margin-top: 24px; }
-.mb-6 { margin-bottom: 24px; }
+.trades-section {
+  margin-top: 18px;
+}
+.trades-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.trades-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.trades-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.time {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.mt-6 {
+  margin-top: 24px;
+}
+.mb-6 {
+  margin-bottom: 24px;
+}
 
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

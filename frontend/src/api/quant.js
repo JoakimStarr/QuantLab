@@ -5,7 +5,7 @@ import axios from 'axios'
 const blobRequest = axios.create({
   baseURL: '/api/v1',
   timeout: 60000,
-  paramsSerializer: { indexes: null }
+  paramsSerializer: { indexes: null },
 })
 
 // === 量化数据同步与状态 ===
@@ -13,6 +13,11 @@ const blobRequest = axios.create({
 // baostock 全量回填同步（years: 回填年数，从最新向旧）
 export function syncQuantData(params) {
   return request.post('/quant/data/sync', params)
+}
+
+// 一键全同步（A股回填 → 指数 → 宏观 → 财报 → 外盘，独立进程顺序执行）
+export function syncFullData(years, universe = 'all') {
+  return request.post('/quant/data/sync-full', null, { params: { years, universe } })
 }
 
 export function getQuantDataStatus() {
@@ -48,10 +53,10 @@ export function getSyncStats(days = 30, universe) {
   return request.get('/quant/data/sync-stats', { params: { days, universe } })
 }
 
-// 增量EOD同步（基于akshare国内源，拉取最近N天）
-export function eodSync(universe, days, overwrite) {
+// 增量EOD同步（拉取最近N天；source: baostock/akshare）
+export function eodSync(universe, days, overwrite, source) {
   return request.post('/quant/data/eod-sync', null, {
-    params: { universe, days, overwrite }
+    params: { universe, days, overwrite, source },
   })
 }
 
@@ -63,6 +68,26 @@ export function getEodResult() {
 // 同步指数数据（上证、沪深300、中证500等）
 export function syncIndices() {
   return request.post('/quant/data/sync-indices')
+}
+
+// 已注册指数清单（stock_index 主表：代码/名称/数据源 + bin 状态）
+export function getIndices() {
+  return request.get('/quant/data/indices')
+}
+
+// 季频财报同步（akshare 逐股全量；broadcast=true 时同时 PIT 广播写 bin）
+export function syncFundamental(broadcast = false) {
+  return request.post('/quant/data/fundamental/sync', null, { params: { broadcast } })
+}
+
+// 外盘隔夜情绪因子：最新状态（读缓存）
+export function getExternalMarket() {
+  return request.get('/quant/data/external-market')
+}
+
+// 外盘隔夜情绪因子：拉取并广播到 bin
+export function syncExternalMarket() {
+  return request.post('/quant/data/sync-external-market')
 }
 
 // 数据完整性校验
@@ -85,18 +110,12 @@ export function syncCalendar() {
   return request.post('/quant/data/sync-calendar')
 }
 
-// @deprecated 行业同步已禁用（后期规划）
-export function syncIndustry() {
-  return request.post('/quant/data/sync-industry')
-}
-
-
 // === 因子相关 ===
 
 // 因子对比（factor_ids 以 Query 参数方式传递）
 export function compareFactors(factor_ids, start_date, end_date) {
   return request.post('/factors/compare', null, {
-    params: { factor_ids, start_date, end_date }
+    params: { factor_ids, start_date, end_date },
   })
 }
 
@@ -110,14 +129,14 @@ export function getFactorDecay(factor_id, max_lag) {
 // 回测对比（result_ids 以 Query 参数方式传递）
 export function compareBacktests(result_ids) {
   return request.post('/strategies/compare-backtests', null, {
-    params: { result_ids }
+    params: { result_ids },
   })
 }
 
 // 导出交易明细（返回 blob，完整 response）
 export function exportTrades(result_id) {
   return blobRequest.get(`/strategies/backtest-results/${result_id}/trades`, {
-    responseType: 'blob'
+    responseType: 'blob',
   })
 }
 

@@ -43,7 +43,8 @@ def _status_from_counts(error=0, warn=0):
 
 
 # ---------------------------------------------------------------- fields
-def check_fields(provider_uri: str, calendar: list) -> dict:
+def check_fields(provider_uri: str, calendar: list,
+                 index_codes: set = frozenset(), db_spans: dict | None = None) -> dict:
     """扫描 features/ 目录，检查每只股票 bin 字段完整性与文件长度。
 
     - 缺失字段文件（BIN_FIELDS 中的某个 .day.bin 不存在）
@@ -55,6 +56,11 @@ def check_fields(provider_uri: str, calendar: list) -> dict:
     Args:
         provider_uri: qlib 数据目录
         calendar: 当前日历（day.txt 日期列表，升序）
+        index_codes: 指数代码集合（features/ 下这些目录是 akshare 指数，
+            只写 OHLCV，不要求 18 个股票字段，跳过不校验）
+        db_spans: stock_daily 每只股票 [最早日期, 最晚日期]（_load_existing_ranges
+            返回值）。NaN 占比以此区间内的交易日数为分母：新股上市只有几天，
+            整日历占比天然 <1%，会误判为损坏；用真实上市区间后正常股 ≈100%。
 
     Returns:
         dict: {
@@ -87,6 +93,8 @@ def check_fields(provider_uri: str, calendar: list) -> dict:
     stocks_checked = 0
 
     for name in sorted(os.listdir(feat_root)):
+        if name in index_codes:
+            continue
         stock_dir = os.path.join(feat_root, name)
         if not os.path.isdir(stock_dir):
             continue
@@ -119,7 +127,16 @@ def check_fields(provider_uri: str, calendar: list) -> dict:
             if raw.size > 0:
                 values = raw[1:]  # 去掉 start_index 头
                 finite = int(np.count_nonzero(np.isfinite(values)))
-                ratio = finite / max(len(values), 1)
+                # NaN 占比以"该股实际上市区间内的交易日数"为分母，而不是整条日历：
+                # 新股上市只有几天，整日历占比天然 <1% 会被误判为损坏；用
+                # stock_daily 的 [min_date, max_date] 求期望交易日数，正常股
+                # ratio≈1，只有写入 bug（全 NaN/整段错位）才会 ≈0。
+                expected_days = None
+                if db_spans and name in db_spans:
+                    lo, hi = db_spans[name]
+                    expected_days = sum(1 for d in calendar if lo <= d <= hi)
+                denom = expected_days if (expected_days or 0) >= 1 else len(values)
+                ratio = finite / max(denom, 1)
                 duplicated = (
                     len(values) >= 10
                     and bool(np.array_equal(values[:5], values[-5:]))
@@ -128,7 +145,7 @@ def check_fields(provider_uri: str, calendar: list) -> dict:
                     suspicious_bin_stocks += 1
                     if len(suspicious_samples) < MAX_SAMPLES:
                         suspicious_samples.append(
-                            f"{name} (finite={ratio:.0%}, dup={duplicated})"
+                            f"{name} (finite={ratio:.0%}, dup={duplicated}, exp={expected_days or '-'})"
                         )
                     # 全 NaN / 首尾重复 = 写入 bug，需要重建
                     if duplicated or ratio < 0.01:
@@ -183,6 +200,35 @@ def check_fieldset() -> dict:
 
 
 # ------------------------------------------------------------- calendar
+def _exclude_pending_today(missing_dates: list, now: "datetime | None" = None) -> list:
+    """排除"今天但 baostock 尚未发布"的日期。
+
+    baostock 的交易日历提前发布（周末/节假日前即可查到未来交易日），
+    但当日日 K 数据要等收盘后 quant_data_update_time（默认 18:00，
+    官方 17:30 完成入库 + 30 分钟缓冲）才更新。因此盘中/收盘后未到
+    更新时间点时，"缺今天"不是真实缺口，不应提示"需 baostock 补拉"，
+    否则会误导触发无意义的 repair/回填（今天的数据根本还不存在）。
+    过了发布点仍缺失 → 保留（真缺口）。
+    """
+    from datetime import datetime
+
+    now = now or datetime.now()
+    if not missing_dates:
+        return missing_dates
+    today = now.date().strftime("%Y-%m-%d")
+    if today not in missing_dates:
+        return missing_dates
+    try:
+        update_time = settings.scheduler.quant_data_update_time or "18:00"
+        hh, mm = str(update_time).split(":")
+        cutoff = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    except (ValueError, AttributeError):
+        cutoff = now.replace(hour=18, minute=0, second=0, microsecond=0)
+    if now < cutoff:
+        return [d for d in missing_dates if d != today]
+    return missing_dates
+
+
 def _calendar_diff(day_txt: set, stock_daily: set, trade_cal: set) -> dict:
     """纯函数：三套日期集合的差异。
 
@@ -215,7 +261,8 @@ async def check_calendar(provider_uri: str) -> dict:
     diff = _calendar_diff(day_txt, stock_daily_dates, trade_cal)
     missing_in_day_txt = diff["missing_in_day_txt"]
     missing_in_stock_daily = diff["missing_in_stock_daily"]
-    pg_missing_dates = diff["pg_missing_dates"]
+    # 今天的日期若在 baostock 发布时间点前出现，是"尚未发布"而非缺口，过滤掉
+    pg_missing_dates = _exclude_pending_today(diff["pg_missing_dates"])
 
     status = _status_from_counts(
         error=len(missing_in_day_txt) + len(missing_in_stock_daily),
@@ -278,14 +325,24 @@ def _compute_range_mismatch(provider_uri: str, calendar: list,
     return sorted(set(mismatch))
 
 
-async def check_coverage(provider_uri: str, calendar: list) -> dict:
-    """校验数据库每股数据区间与 bin 覆盖是否一致。"""
+async def check_coverage(provider_uri: str, calendar: list,
+                         index_codes: set = frozenset(), db_ranges: dict | None = None) -> dict:
+    """校验数据库每股数据区间与 bin 覆盖是否一致。
+
+    index_codes 里的指数目录（features/ 下的指数，DB 无对应记录）不参与比对，
+    避免被误判为 bin_without_db / 区间错位。db_ranges 可由调用方传入（避免
+    与 check_fields 重复查询 stock_daily），为空时内部自行加载。
+    """
     from app.services.data.baostock_backfill import _load_existing_ranges
 
     # 数据库每只股票 [min_date, max_date]
-    db_ranges = await _load_existing_ranges(provider_uri, calendar)
-    # bin 股票目录（文件系统）
-    bin_dirs = await run_io_cpu(_scan_bin_dirs, provider_uri)
+    if db_ranges is None:
+        db_ranges = await _load_existing_ranges(provider_uri, calendar)
+    # bin 股票目录（文件系统，剔除指数目录）
+    bin_dirs = {
+        c for c in await run_io_cpu(_scan_bin_dirs, provider_uri)
+        if c not in index_codes
+    }
 
     db_without_bin = sorted(c for c in db_ranges if c not in bin_dirs)
     bin_without_db = sorted(c for c in bin_dirs if c not in db_ranges)
@@ -331,6 +388,93 @@ async def check_qlib(provider_uri: str, universe: str) -> dict:
     }
 
 
+# -------------------------------------------------------------- macro
+def check_macro(provider_uri: str, calendar: list,
+                index_codes: set = frozenset(), fin_codes: set | None = None) -> dict:
+    """校验宏观/财报 bin 字段：文件存在 + 长度与日历对齐（广播字段，抽样股票检查）。
+
+    宏观字段（$pmi 等）全市场同一数组，财报字段（$roe 等）逐股不同，
+    但都是广播到 features/*/{field}.day.bin，长度必须与 day.txt 一致，
+    否则 qlib 读位错位、因子全是 NaN。取前 N 只股票为样本检查。
+
+    Args:
+        provider_uri: qlib 数据目录
+        calendar: 当前日历
+        index_codes: 指数代码集合（指数无财报数据，跳过不校验）
+        fin_codes: 有财报数据入库的股票代码集合（financial_indicator 的 code
+            去重）。某股票若已有财报数据但个别字段缺失（如银行无流动/速动比率），
+            是数据源固有缺口，bin 无法凭空生成，不应计为"缺失"误报；只有
+            完全无财报数据的股票，其字段缺失才是真实缺口（需重新拉取）。
+    """
+    from app.services.data.macro_sync import MACRO_INDICATORS, AKSHARE_INDICATORS
+    from app.services.data.fundamental_sync import FIN_FIELD_NAMES
+
+    macro_fields = [
+        fname
+        for cfg in MACRO_INDICATORS.values() for fname in cfg["fields"]
+    ] + [
+        fname
+        for cfg in AKSHARE_INDICATORS.values() for fname in cfg["fields"]
+    ]
+    macro_fields += FIN_FIELD_NAMES
+    macro_fields = sorted(set(macro_fields))
+    if not macro_fields:
+        return {"status": "warn", "message": "无宏观/财报字段配置", "macro_fields": 0,
+                "checked_stocks": 0, "missing": 0, "missing_samples": [],
+                "bad_size": 0, "bad_size_samples": []}
+
+    expected_size = QLIB_BIN_HEADER_SIZE + 4 * len(calendar)
+    feat_root = os.path.join(provider_uri, "features")
+    stock_dirs = sorted(os.listdir(feat_root))[:20] if os.path.isdir(feat_root) else []
+    missing_count = 0
+    bad_size_count = 0
+    missing_samples: list[str] = []
+    bad_size_samples: list[str] = []
+    checked = 0
+    for code in stock_dirs:
+        d = os.path.join(feat_root, code)
+        if not os.path.isdir(d):
+            continue
+        if code in index_codes:
+            continue
+        checked += 1
+        for f in macro_fields:
+            p = os.path.join(d, f"{f}.day.bin")
+            if not os.path.exists(p):
+                # 财报字段：该股已有财报数据但个别字段缺失（如银行无流动/速动比率）
+                # 是数据源固有缺口；只有完全没有财报数据的股票才是真实缺口
+                if f in FIN_FIELD_NAMES and fin_codes is not None and code in fin_codes:
+                    continue
+                missing_count += 1
+                if len(missing_samples) < MAX_SAMPLES:
+                    missing_samples.append(f"{code}: {f}")
+                continue
+            if os.path.getsize(p) != expected_size:
+                bad_size_count += 1
+                if len(bad_size_samples) < MAX_SAMPLES:
+                    bad_size_samples.append(f"{code}: {f}")
+
+    status = "ok"
+    if missing_count or bad_size_count:
+        status = "error"
+    message = (
+        f"宏观+财报字段 {len(macro_fields)} 个（抽样 {checked} 只股票）"
+        + (f"，缺失 {missing_count} 个" if missing_count else "")
+        + (f"，长度异常 {bad_size_count} 个" if bad_size_count else "")
+        + ("，与日历对齐" if not missing_count and not bad_size_count else "")
+    )
+    return {
+        "status": status,
+        "message": message,
+        "macro_fields": len(macro_fields),
+        "checked_stocks": checked,
+        "missing": missing_count,
+        "missing_samples": missing_samples,
+        "bad_size": bad_size_count,
+        "bad_size_samples": bad_size_samples,
+    }
+
+
 # ------------------------------------------------------------ sync state
 async def _load_sync_state(universe: str) -> dict:
     """读取 StockDataStatus，判断是否处于回填中。"""
@@ -364,16 +508,49 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     calendar = _get_calendar(provider_uri)
     sync_state = await _load_sync_state(universe)
 
-    fields_result = await run_io_cpu(check_fields, provider_uri, calendar)
+    # 全局活跃同步兜底：状态行只记录指定 universe 的行，回填可能写在其他 universe
+    # （如当前回填写在 csi300 行而校验查 all），或状态行被 recovery 误标 failed。
+    # 用共享进度文件检测真正在跑的 bin 写入任务，否则回填期间的瞬态错位
+    # （bin 对齐 global_calendar 而 day.txt 还在增长）会被误判成真实损坏
+    # （全市场"长度异常/疑似损坏"），用户看到虚假告警还会去点「一键补齐」撞 409。
+    # 排除 repair：repair 自身的 run_validation 需要真实 drift 来决定修复内容。
+    from app.services.data.sync_progress import get_progress, sync_is_active
+
+    active_prog = get_progress()
+    if active_prog and sync_is_active() and active_prog.get("data_source") != "repair":
+        sync_state["syncing"] = True
+        sync_state["status"] = "syncing"
+
+    # 指数主表：features/ 下的指数目录（如 sh000001/sz399001）只写 OHLCV，
+    # 不要求 18 个股票字段，也不在 stock_daily/财报中，校验时需跳过。
+    from app.models.fundamental import FinancialIndicator
+    from app.services.data.index_registry import load_index_codes
+
+    index_codes = await load_index_codes()
+    async with async_session() as session:
+        fin_rows = await session.execute(select(FinancialIndicator.code).distinct())
+        fin_codes = {r[0].lower() for r in fin_rows}
+
+    # stock_daily 每只股票 [min,max]（check_fields 计算新股 ratio 分母 / check_coverage 复用）
+    from app.services.data.baostock_backfill import _load_existing_ranges
+
+    db_ranges = await _load_existing_ranges(provider_uri, calendar)
+
+    fields_result = await run_io_cpu(check_fields, provider_uri, calendar, index_codes, db_ranges)
     fieldset_result = check_fieldset()
     calendar_result = await check_calendar(provider_uri)
-    coverage_result = await check_coverage(provider_uri, calendar)
+    coverage_result = await check_coverage(provider_uri, calendar, index_codes, db_ranges)
     qlib_result = await check_qlib(provider_uri, universe)
+    macro_result = await run_io_cpu(check_macro, provider_uri, calendar, index_codes, fin_codes)
 
-    # 回填中：字段/覆盖结果不可信，降级为 warn
+    # 回填中：字段/覆盖/qlib/宏观结果不可信，统一降级为 warn
     if sync_state["syncing"]:
-        for key in ("fields", "coverage"):
-            result = fields_result if key == "fields" else coverage_result
+        _all_results = {
+            "fields": fields_result, "coverage": coverage_result,
+            "qlib": qlib_result, "macro": macro_result,
+        }
+        for key in ("fields", "coverage", "qlib", "macro"):
+            result = _all_results[key]
             if result["status"] == "error":
                 result["status"] = "warn"
                 result["message"] += "（回填进行中，结果可能不完整）"
@@ -387,6 +564,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
             or fields_result["bad_size_stocks"]
             or coverage_result["db_without_bin"]
             or coverage_result["range_mismatch"]
+            or macro_result["missing"]
+            or macro_result["bad_size"]
         ),
         "missing_field_files": fields_result["missing_field_files"],
         "db_without_bin": coverage_result["db_without_bin"],
@@ -397,11 +576,16 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
         "pg_missing_dates": calendar_counts["pg_missing_dates"],
         "pg_missing_date_samples": calendar_result["pg_missing_date_samples"],
         "stocks_with_gaps": fields_result["suspicious_bin_stocks"],
+        "macro_missing": macro_result["missing"],
+        "macro_bad_size": macro_result["bad_size"],
     }
+    if sync_state["syncing"]:
+        # 回填进行中结果不可信，禁止触发补齐（前端按 drift.needs_repair 隐藏按钮）
+        drift["needs_repair"] = False
 
     check_statuses = [fieldset_result["status"], fields_result["status"],
                       calendar_result["status"], coverage_result["status"],
-                      qlib_result["status"]]
+                      qlib_result["status"], macro_result["status"]]
     all_ok = all(s == "ok" for s in check_statuses)
     summary = "数据完整" if all_ok else (
         "存在待修复差异，可点击「一键补齐」" if drift["needs_repair"] else "存在差异（需人工处理）"
@@ -409,9 +593,27 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     if sync_state["syncing"]:
         summary = "回填进行中，校验结果不完整"
 
+    # 数据对齐摘要：bin ↔ day.txt ↔ stock_daily ↔ 宏观字段 长度一致性，
+    # 对齐正常则因子可直接计算（补齐的作用就是修复对齐错位）。
+    align_issues = []
+    if fields_result["bad_size_stocks"]:
+        align_issues.append(f"bin 长度异常 {fields_result['bad_size_stocks']} 只")
+    if calendar_counts["missing_in_day_txt"] or calendar_counts["missing_in_stock_daily"]:
+        align_issues.append("day.txt 与 stock_daily 不一致")
+    if coverage_result["range_mismatch"]:
+        align_issues.append(f"区间错位 {coverage_result['range_mismatch']} 只")
+    if macro_result["bad_size"]:
+        align_issues.append(f"宏观字段长度异常 {macro_result['bad_size']} 个")
+    if macro_result["missing"]:
+        align_issues.append(f"宏观字段缺失 {macro_result['missing']} 个")
+    checks_summary = "数据对齐正常，因子可直接计算" if not align_issues else "数据对齐待修复：" + "；".join(align_issues[:4])
+    if sync_state["syncing"]:
+        checks_summary = "回填进行中，数据对齐状态待定"
+
     return {
         "ok": all_ok and not sync_state["syncing"],
         "summary": summary,
+        "checks_summary": checks_summary,
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "provider_uri": provider_uri,
         "universe": universe,
@@ -423,6 +625,7 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
             "calendar": calendar_result,
             "coverage": coverage_result,
             "qlib": qlib_result,
+            "macro": macro_result,
         },
         "drift": drift,
         # 兼容旧前端字段

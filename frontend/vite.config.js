@@ -84,6 +84,8 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // 允许 cloudflared 快速隧道域名访问 dev server（Vite 5.3+ 默认拦截非 localhost Host）
+    allowedHosts: ['.trycloudflare.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

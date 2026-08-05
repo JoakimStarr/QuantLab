@@ -117,7 +117,7 @@ class ProviderRouter:
 
         self.force_json = settings.ai_provider.get("force_json_output", True)
 
-    async def route_request(self, messages: list) -> dict:
+    async def route_request(self, messages: list, force_json: bool = None) -> dict:
         providers = []
         if self.primary:
             providers.append(("opencodezen", self.primary.chat_completion))
@@ -128,6 +128,9 @@ class ProviderRouter:
 
         if not providers:
             raise AIProviderUnavailableError("无可用 AI Provider")
+
+        # 覆盖全局 force_json（如追问对话等需要自由文本输出时传 False）
+        use_json = self.force_json if force_json is None else force_json
 
         # 顺序调用：primary 优先，失败则 fallback（LLMClient 内部已有重试和超时）
         # 总预算控制：避免多 provider × 多次重试吃光任务超时
@@ -140,7 +143,7 @@ class ProviderRouter:
                 logger.warning("AI Provider 路由预算耗尽 (%.1fs/%ss)，跳过 %s", elapsed, budget, name)
                 break
             try:
-                result = await fn(messages, self.force_json)
+                result = await fn(messages, use_json)
                 if result and result.get("content"):
                     return result
             except Exception as e:

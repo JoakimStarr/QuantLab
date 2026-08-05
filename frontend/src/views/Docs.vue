@@ -12,12 +12,7 @@
   <div class="docs-page">
     <!-- 顶部工具栏 -->
     <div class="docs-toolbar">
-      <el-select
-        v-model="categoryFilter"
-        size="default"
-        class="docs-cat-select"
-        placeholder="分类筛选"
-      >
+      <el-select v-model="categoryFilter" size="default" class="docs-cat-select" placeholder="分类筛选">
         <el-option label="全部分类" value="all" />
         <el-option v-for="g in groupNames" :key="g" :label="g" :value="g" />
       </el-select>
@@ -29,19 +24,10 @@
         class="docs-select"
         @change="onDocChange"
       >
-        <el-option-group
-          v-for="group in filteredGroupedDocs"
-          :key="group.name"
-          :label="group.name"
-        >
-          <el-option
-            v-for="d in group.docs"
-            :key="d.slug"
-            :value="d.slug"
-            :label="d.title"
-          >
+        <el-option-group v-for="group in filteredGroupedDocs" :key="group.name" :label="group.name">
+          <el-option v-for="d in group.docs" :key="d.slug" :value="d.slug" :label="d.title">
             <span style="float: left">{{ d.title }}</span>
-            <span style="float: right; color: var(--el-text-color-secondary); font-size: 12px">
+            <span style="float: right; color: var(--text-secondary); font-size: 12px">
               {{ d.summary || '—' }}
             </span>
           </el-option>
@@ -60,13 +46,15 @@
             size="small"
             @click="sidebarPos = 'left'"
             title="目录在左"
-          >⟸</el-button>
+            >⟸</el-button
+          >
           <el-button
             :type="sidebarPos === 'right' ? 'primary' : ''"
             size="small"
             @click="sidebarPos = 'right'"
             title="目录在右"
-          >⟹</el-button>
+            >⟹</el-button
+          >
         </el-button-group>
         <el-button
           :type="readingMode ? 'primary' : ''"
@@ -75,7 +63,8 @@
           style="margin-left: 8px"
           title="阅读模式（隐藏目录）"
           @click="readingMode = !readingMode"
-        >{{ readingMode ? '退出阅读' : '阅读模式' }}</el-button>
+          >{{ readingMode ? '退出阅读' : '阅读模式' }}</el-button
+        >
       </div>
     </div>
 
@@ -95,12 +84,9 @@
               class="toc-caret"
               :class="{ 'toc-caret--open': !collapsedSections.has(item.id) }"
               @click="toggleTocSection(item.id)"
-            >▸</span>
-            <a
-              class="toc-item"
-              :href="'#' + item.id"
-              @click.prevent="scrollToHeading(item.id)"
-            >{{ item.text }}</a>
+              >▸</span
+            >
+            <a class="toc-item" :href="'#' + item.id" @click.prevent="scrollToHeading(item.id)">{{ item.text }}</a>
           </div>
         </nav>
         <div v-if="!toc.length" class="toc-empty">无标题结构</div>
@@ -116,7 +102,7 @@
         @click="onContentClick"
       >
         <div v-if="!doc" class="docs-empty">
-          <el-icon :size="48" color="var(--el-text-color-placeholder)"><Document /></el-icon>
+          <el-icon :size="48" color="var(--text-placeholder)"><Document /></el-icon>
           <p>请从上方选择一篇文档</p>
         </div>
         <template v-else>
@@ -136,19 +122,13 @@
           </div>
           <div class="markdown-body" v-html="renderedHtml" />
           <nav class="doc-nav">
-            <el-button
-              v-if="docNav.prev"
-              link
-              @click="onDocChange(docNav.prev.slug)"
-              title="上一篇"
-            >⟵ {{ docNav.prev.title }}</el-button>
+            <el-button v-if="docNav.prev" link @click="onDocChange(docNav.prev.slug)" title="上一篇"
+              >⟵ {{ docNav.prev.title }}</el-button
+            >
             <span v-else class="doc-nav__placeholder" />
-            <el-button
-              v-if="docNav.next"
-              link
-              @click="onDocChange(docNav.next.slug)"
-              title="下一篇"
-            >{{ docNav.next.title }} ⟶</el-button>
+            <el-button v-if="docNav.next" link @click="onDocChange(docNav.next.slug)" title="下一篇"
+              >{{ docNav.next.title }} ⟶</el-button
+            >
             <span v-else class="doc-nav__placeholder" />
           </nav>
         </template>
@@ -204,9 +184,7 @@ const toc = ref([])
 const activeHeading = ref('')
 const loading = ref(false)
 const loadError = ref('')
-const categoryFilter = ref(
-  route.query.category || localStorage.getItem('docs_category') || 'all'
-)
+const categoryFilter = ref(route.query.category || localStorage.getItem('docs_category') || 'all')
 // 已加载文档缓存：Map<slug, doc>，重复切换秒开；模块级，跨路由往返保留
 const docCache = new Map()
 
@@ -219,8 +197,14 @@ const md = new MarkdownIt({
   highlight(str, lang) {
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return '<pre class="hljs"><code>' + hljs.highlight(str, { language: lang, ignoreIllegals: true }).value + '</code></pre>'
-      } catch { /* fall through */ }
+        return (
+          '<pre class="hljs"><code>' +
+          hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+          '</code></pre>'
+        )
+      } catch {
+        /* fall through */
+      }
     }
     // 没有语言或高亮失败，用通用转义
     return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>'
@@ -238,9 +222,9 @@ const md = new MarkdownIt({
 function cleanHeadingText(text) {
   return text
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // 链接/图片 → 文字
-    .replace(/`([^`]*)`/g, '$1')               // 行内代码 → 文字
-    .replace(/\*\*([^*]+)\*\*/g, '$1')         // 粗体 → 文字
-    .replace(/\*([^*]+)\*/g, '$1')             // 斜体 → 文字
+    .replace(/`([^`]*)`/g, '$1') // 行内代码 → 文字
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // 粗体 → 文字
+    .replace(/\*([^*]+)\*/g, '$1') // 斜体 → 文字
 }
 
 // 与 markdown-it 渲染一致的 slugify（仅保留字母数字与中文，其他转 -）
@@ -297,11 +281,9 @@ const groupedDocs = computed(() => {
 })
 
 // 分类筛选：全部 / 按分组（百科·基础 / 百科·AI / 架构 / ...）
-const groupNames = computed(() => groupedDocs.value.map(g => g.name))
+const groupNames = computed(() => groupedDocs.value.map((g) => g.name))
 const filteredGroupedDocs = computed(() =>
-  categoryFilter.value === 'all'
-    ? groupedDocs.value
-    : groupedDocs.value.filter(g => g.name === categoryFilter.value)
+  categoryFilter.value === 'all' ? groupedDocs.value : groupedDocs.value.filter((g) => g.name === categoryFilter.value)
 )
 
 // 切换分类时，若当前文档不在该分类下，跳到该分类第一篇
@@ -312,7 +294,7 @@ watch(categoryFilter, (val) => {
   const groups = filteredGroupedDocs.value
   if (!groups.length) return
   const first = groups[0]?.docs?.[0]
-  const inSet = groups.some(g => g.docs.some(d => d.slug === currentSlug.value))
+  const inSet = groups.some((g) => g.docs.some((d) => d.slug === currentSlug.value))
   if (!inSet && first) {
     currentSlug.value = first.slug
     router.replace({ query: { slug: first.slug, ...(val === 'all' ? {} : { category: val }) } })
@@ -366,9 +348,7 @@ function scrollToHeading(id) {
 // 滚动时高亮当前章节
 function onContentScroll() {
   if (!contentRef.value || !toc.value.length) return
-  const headings = toc.value
-    .map((item) => contentRef.value.querySelector('#' + CSS.escape(item.id)))
-    .filter(Boolean)
+  const headings = toc.value.map((item) => contentRef.value.querySelector('#' + CSS.escape(item.id))).filter(Boolean)
 
   // 从底部往上找第一个可见的标题
   const scrollTop = contentRef.value.scrollTop
@@ -448,8 +428,8 @@ function onDocChange(slug) {
 
 // === 上/下一篇导航（按分组内 order 顺序）===
 const docNav = computed(() => {
-  const flat = groupedDocs.value.flatMap(g => g.docs)
-  const idx = flat.findIndex(d => d.slug === currentSlug.value)
+  const flat = groupedDocs.value.flatMap((g) => g.docs)
+  const idx = flat.findIndex((d) => d.slug === currentSlug.value)
   if (idx < 0) return { prev: null, next: null }
   return {
     prev: flat[idx - 1] || null,
@@ -522,10 +502,17 @@ function onContentClick(e) {
   const pre = btn.closest('pre')
   const text = pre?.querySelector('code')?.textContent || ''
   if (!text) return
-  navigator.clipboard?.writeText(text).then(() => {
-    btn.textContent = '已复制'
-    setTimeout(() => { btn.textContent = '复制' }, 1500)
-  }).catch(() => { btn.textContent = '复制失败' })
+  navigator.clipboard
+    ?.writeText(text)
+    .then(() => {
+      btn.textContent = '已复制'
+      setTimeout(() => {
+        btn.textContent = '复制'
+      }, 1500)
+    })
+    .catch(() => {
+      btn.textContent = '复制失败'
+    })
 }
 
 watch(readingMode, (v) => localStorage.setItem('docs_reading_mode', v ? '1' : '0'))
@@ -537,7 +524,7 @@ watch(
       currentSlug.value = slug
       loadDoc(slug)
     }
-  },
+  }
 )
 
 watch(sidebarPos, (v) => localStorage.setItem('docs_sidebar_pos', v))
@@ -574,7 +561,7 @@ onBeforeUnmount(() => {
   max-width: 960px;
   margin: 0 auto;
   padding: 24px 32px 80px;
-  color: var(--el-text-color-primary);
+  color: var(--text-primary);
   line-height: 1.7;
   word-wrap: break-word;
 }
@@ -586,35 +573,60 @@ onBeforeUnmount(() => {
   margin-top: 24px;
   margin-bottom: 12px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--text-primary);
   line-height: 1.3;
   scroll-margin-top: 20px;
 }
 
-.markdown-body h1 { font-size: 1.8em; margin-top: 0; padding-bottom: 8px; border-bottom: 1px solid var(--el-border-color-lighter); }
-.markdown-body h2 { font-size: 1.45em; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 6px; }
-.markdown-body h3 { font-size: 1.2em; }
-.markdown-body h4 { font-size: 1.05em; }
+.markdown-body h1 {
+  font-size: 1.8em;
+  margin-top: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.markdown-body h2 {
+  font-size: 1.45em;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 6px;
+}
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+.markdown-body h4 {
+  font-size: 1.05em;
+}
 
-.markdown-body p { margin: 8px 0; }
-.markdown-body ul, .markdown-body ol { padding-left: 24px; margin: 8px 0; }
-.markdown-body li { margin: 4px 0; }
+.markdown-body p {
+  margin: 8px 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 24px;
+  margin: 8px 0;
+}
+.markdown-body li {
+  margin: 4px 0;
+}
 
 .markdown-body a {
-  color: var(--el-color-primary);
+  color: var(--primary);
   text-decoration: none;
 }
-.markdown-body a:hover { text-decoration: underline; }
+.markdown-body a:hover {
+  text-decoration: underline;
+}
 
 .markdown-body blockquote {
   margin: 16px 0;
   padding: 12px 16px;
-  border-left: 4px solid var(--el-color-primary-light-5);
-  background: var(--el-color-primary-light-9);
+  border-left: 4px solid var(--primary-light);
+  background: var(--primary-soft);
   border-radius: 0 4px 4px 0;
-  color: var(--el-text-color-regular);
+  color: var(--text-secondary);
 }
-.markdown-body blockquote p { margin: 4px 0; }
+.markdown-body blockquote p {
+  margin: 4px 0;
+}
 
 .markdown-body table {
   display: block;
@@ -626,34 +638,36 @@ onBeforeUnmount(() => {
 }
 .markdown-body table th,
 .markdown-body table td {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--border-light);
   padding: 8px 12px;
   text-align: left;
   white-space: normal;
   word-break: break-word;
 }
 .markdown-body table th {
-  background: var(--el-fill-color-light);
+  background: var(--bg-tertiary);
   font-weight: 600;
 }
 .markdown-body table tr:nth-child(even) {
-  background: var(--el-fill-color-lighter);
+  background: var(--bg-hover);
 }
 
 .markdown-body code {
-  background: var(--el-fill-color-light);
-  color: #d63384;
+  background: var(--bg-tertiary);
+  color: var(--primary);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 0.92em;
-  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .markdown-body pre {
   margin: 16px 0;
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
   position: relative;
+  background: var(--bg-tertiary);
 }
 
 .markdown-body .code-copy-btn {
@@ -662,30 +676,29 @@ onBeforeUnmount(() => {
   right: 8px;
   z-index: 2;
   padding: 2px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.6;
-  color: var(--el-text-color-secondary);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 4px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s;
-  font-family: var(--el-font-family);
+  transition: opacity var(--duration-fast) var(--ease-in-out);
+  font-family: var(--font-family);
 }
 .markdown-body pre:hover .code-copy-btn {
   opacity: 1;
 }
 .markdown-body pre .code-copy-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.16);
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 .markdown-body pre code {
   display: block;
   padding: 16px;
   overflow-x: auto;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  color: var(--text-primary);
   font-size: 0.9em;
   line-height: 1.5;
   tab-size: 2;
@@ -698,32 +711,19 @@ onBeforeUnmount(() => {
 
 .markdown-body hr {
   border: none;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--border-light);
   margin: 24px 0;
 }
 
 .markdown-body :not(pre) > code {
-  background: var(--el-fill-color-light);
+  background: var(--bg-tertiary);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 0.92em;
-  color: #d63384;
+  color: var(--primary);
 }
-
-/* 暗色主题适配 */
-html.dark .markdown-body code {
-  background: var(--el-fill-color-light);
-  color: var(--el-color-primary-light-5);
-}
-html.dark .markdown-body table th {
-  background: #2d2d2d;
-}
-html.dark .markdown-body table tr:nth-child(even) {
-  background: #252525;
-}
-html.dark .markdown-body blockquote {
-  background: #1e2a3a;
-  border-left-color: #409eff;
+:root.dark .markdown-body :not(pre) > code {
+  color: var(--primary-light);
 }
 </style>
 
@@ -732,7 +732,7 @@ html.dark .markdown-body blockquote {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 120px);
-  background: var(--el-bg-color-page);
+  background: var(--bg-page);
 }
 
 .docs-toolbar {
@@ -740,12 +740,14 @@ html.dark .markdown-body blockquote {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-card);
   flex-shrink: 0;
 }
 
-.docs-cat-select { width: 170px; }
+.docs-cat-select {
+  width: 170px;
+}
 .docs-select {
   width: 360px;
 }
@@ -781,20 +783,20 @@ html.dark .markdown-body blockquote {
   width: 240px;
   flex-shrink: 0;
   overflow-y: auto;
-  background: var(--el-bg-color);
-  border-right: 1px solid var(--el-border-color-lighter);
+  background: var(--bg-card);
+  border-right: 1px solid var(--border-light);
   padding: 20px 0;
 }
 .docs-body.sidebar--right .docs-sidebar {
   border-right: none;
-  border-left: 1px solid var(--el-border-color-lighter);
+  border-left: 1px solid var(--border-light);
 }
 
 .toc-title {
   padding: 0 16px 12px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -812,14 +814,14 @@ html.dark .markdown-body blockquote {
   position: relative;
 }
 .toc-row:hover {
-  background: var(--el-color-primary-light-9);
+  background: var(--primary-soft);
 }
 .toc-row--active {
-  background: var(--el-color-primary-light-9);
-  border-left-color: var(--el-color-primary);
+  background: var(--primary-soft);
+  border-left-color: var(--primary);
 }
 .toc-row--active .toc-item {
-  color: var(--el-color-primary);
+  color: var(--primary);
   font-weight: 500;
 }
 
@@ -827,7 +829,7 @@ html.dark .markdown-body blockquote {
   flex-shrink: 0;
   width: 16px;
   text-align: center;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   cursor: pointer;
   padding-top: 6px;
   font-size: 10px;
@@ -843,7 +845,7 @@ html.dark .markdown-body blockquote {
   min-width: 0;
   display: block;
   padding: 5px 12px;
-  color: var(--el-text-color-regular);
+  color: var(--text-secondary);
   text-decoration: none;
   font-size: 13px;
   line-height: 1.4;
@@ -854,16 +856,22 @@ html.dark .markdown-body blockquote {
 }
 
 .toc-item:hover {
-  color: var(--el-color-primary);
+  color: var(--primary);
 }
 
-.toc-h2 { padding-left: 4px; }
-.toc-h3 { padding-left: 20px; }
-.toc-h4 { padding-left: 36px; }
+.toc-h2 {
+  padding-left: 4px;
+}
+.toc-h3 {
+  padding-left: 20px;
+}
+.toc-h4 {
+  padding-left: 36px;
+}
 
 .toc-empty {
   padding: 16px;
-  color: var(--el-text-color-placeholder);
+  color: var(--text-placeholder);
   font-size: 13px;
   text-align: center;
 }
@@ -874,7 +882,7 @@ html.dark .markdown-body blockquote {
 .docs-content {
   flex: 1;
   overflow-y: auto;
-  background: var(--el-bg-color);
+  background: var(--bg-card);
 }
 
 .docs-empty {
@@ -884,7 +892,7 @@ html.dark .markdown-body blockquote {
   justify-content: center;
   height: 100%;
   gap: 16px;
-  color: var(--el-text-color-placeholder);
+  color: var(--text-placeholder);
 }
 
 /* 阅读模式：隐藏 TOC 侧边栏 */
@@ -906,22 +914,22 @@ html.dark .markdown-body blockquote {
   max-width: 960px;
   margin: 16px auto 0;
   padding: 0 32px;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 .doc-meta__group {
   display: inline-block;
   padding: 2px 10px;
   border-radius: 999px;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
+  background: var(--primary-soft);
+  color: var(--primary);
   font-weight: 500;
   font-size: 12px;
 }
 .doc-meta__summary {
   flex: 1;
   min-width: 200px;
-  color: var(--el-text-color-regular);
+  color: var(--text-secondary);
 }
 .doc-meta__count {
   white-space: nowrap;

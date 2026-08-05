@@ -122,6 +122,49 @@ def _write_bin(file_path: str, values: np.ndarray, start_index: int):
         values.astype(QLIB_BIN_DTYPE).tofile(f)
 
 
+def _pad_bins_to_calendar(qlib_dir: str, calendar: list) -> int:
+    """日历扩展后，把所有比新日历短的 bin 文件补齐到新长度（末尾补 NaN）。
+
+    新增交易日时（如"今天"首次入库），没有该日数据的股票（退市/长期停牌）的
+    bin 不会被重新写入，长度停留在旧日历 → 数据校验报"长度异常"。本函数扫描
+    features/*/{field}.day.bin，短于目标长度的统一末尾补 NaN 扩展（覆盖股票
+    OHLCV / 宏观 / 财报 / 指数等全部字段）；长度超长的（异常）仅记 warning。
+    """
+    feat_root = os.path.join(qlib_dir, "features")
+    if not os.path.isdir(feat_root):
+        return 0
+    target_size = QLIB_BIN_HEADER_SIZE + 4 * len(calendar)
+    target_n = len(calendar)
+    padded = 0
+    for code in sorted(os.listdir(feat_root)):
+        code_dir = os.path.join(feat_root, code)
+        if not os.path.isdir(code_dir):
+            continue
+        for fname in sorted(os.listdir(code_dir)):
+            if not fname.endswith(".day.bin"):
+                continue
+            path = os.path.join(code_dir, fname)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            if size == target_size:
+                continue
+            if size < target_size:
+                raw = np.fromfile(path, dtype="<f4")
+                arr = np.full(target_n, np.nan, dtype="<f4")
+                if raw.size > 1:
+                    keep = min(raw.size - 1, target_n)
+                    arr[:keep] = raw[1 : keep + 1]
+                _write_bin(path, arr, 0)
+                padded += 1
+            else:
+                logger.warning("bin 长度超过日历（异常）: %s %d > %d", path, size, target_size)
+    if padded:
+        logger.info("已按新日历补齐 %d 个 bin 文件（末尾补 NaN）", padded)
+    return padded
+
+
 def _get_calendar(provider_uri: str):
     """读取 qlib 日历
 
@@ -337,6 +380,7 @@ def incremental_sync_eod_baostock(
     """
     try:
         from app.services.data.baostock_client import (
+            BaostockQuotaError,
             fetch_daily_all_a_stock_sync,
             from_baostock_code,
         )
@@ -368,6 +412,10 @@ def incremental_sync_eod_baostock(
     for date_idx, date in enumerate(dates):
         try:
             df_all = fetch_daily_all_a_stock_sync(date)
+        except BaostockQuotaError as e:
+            # 当日请求配额耗尽，中止增量同步，避免逐日无谓重试
+            logger.error("baostock 增量同步中止: %s", e)
+            break
         except Exception as e:
             logger.warning("baostock 拉取 %s 失败: %s", date, e)
             continue
@@ -449,6 +497,8 @@ def incremental_sync_eod_baostock(
         _write_calendar(provider_uri, merged_cal)
         logger.info("baostock 日历更新: %d -> %d (新增 %d 个交易日)",
                     len(old_calendar), len(merged_cal), len(new_dates_sorted))
+        # 日历扩展后，无新日数据的股票（退市/停牌）bin 仍是旧长度，补 NaN 对齐
+        _pad_bins_to_calendar(provider_uri, merged_cal)
 
     skipped = max(len(codes) - success_count - fail_count, 0)
     logger.info("baostock EOD 同步完成: 拉取日期%d, 成功%d, 失败%d, 跳过%d, 新增日期%d",
@@ -661,6 +711,8 @@ async def _incremental_sync_eod_akshare(
         _write_calendar(provider_uri, merged_cal)
         logger.info("日历更新: %d -> %d (新增 %d 个交易日)",
                     len(old_calendar), len(merged_cal), len(new_dates_sorted))
+        # 日历扩展后，无新日数据的股票（退市/停牌）bin 仍是旧长度，补 NaN 对齐
+        _pad_bins_to_calendar(provider_uri, merged_cal)
 
     logger.info("EOD增量同步完成(akshare): 成功%d, 失败%d, 跳过%d, 新增日期%d",
                 success_count, fail_count, skip_count, len(new_dates_sorted))
@@ -681,7 +733,8 @@ async def _incremental_sync_eod_akshare(
 
 
 def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
-                    global_calendar: list, fields, overwrite: bool = False):
+                    global_calendar: list, fields, overwrite: bool = False,
+                    old_calendar: list = None):
     """将单只股票数据同步到 bin 文件（统一日历契约）。
 
     设计：
@@ -694,6 +747,11 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
 
     注意：merged_calendar 仅用于确定新日期的索引位置。全局日历合并
     由调用方在所有股票处理完成后统一执行。
+
+    old_calendar: 旧 bin 实际对齐的日历（历史回填时旧 bin 对齐的是"上次的
+        day.txt"，它位于 global_calendar 的**后缀**而非前缀；不传则沿用旧行为，
+        按 global_calendar 前缀映射——当新日期比旧数据更早时会把旧数据散到
+        错误位置，导致最近一段历史丢失）。
     """
     if not global_calendar:
         # 日历为空，无法定位索引（极端情况）
@@ -731,9 +789,10 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
         new_values = df[field].values.astype(np.float32)
 
         # ---- 旧 bin 对齐校验 ----
-        # 旧 bin 数据范围（[old_start, old_start + len)）必须落在当前合并日历内，
-        # 否则说明旧 bin 是对齐到另一份日历写入的（日历被覆盖/缩短过），
-        # 无法安全映射 → 丢弃旧数据，仅用新数据重建。
+        # 旧 bin 数据范围（[old_start, old_start + len)）必须落在旧 bin 对齐的
+        # 日历（old_calendar，缺省按 global_calendar）内，否则视为日历变更导致
+        # 的错位数据，无法安全映射 → 丢弃旧数据，仅用新数据重建。
+        ref_calendar = old_calendar if old_calendar is not None else global_calendar
         old_aligned = (
             old_values is not None
             and len(old_values) > 0
@@ -741,9 +800,9 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
             and old_start + len(old_values) <= len(merged_cal)
         )
         if old_aligned:
-            # 按日期映射重建数组
+            # 按日期映射重建数组（用旧 bin 真实对齐的日历，而非 global_calendar 前缀）
             mapping = _build_index_mapping(
-                global_calendar, old_start, len(old_values), merged_cal,
+                ref_calendar, old_start, len(old_values), merged_cal,
             )
             arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
             # 散布旧数据（保留已有值）
@@ -760,8 +819,8 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
                     old_last_idx = old_valid_indices[-1]
                     old_last_value = float(old_values[old_last_idx])
                     cal_pos = old_start + old_last_idx
-                    if 0 <= cal_pos < len(global_calendar):
-                        old_last_date = global_calendar[cal_pos]
+                    if 0 <= cal_pos < len(ref_calendar):
+                        old_last_date = ref_calendar[cal_pos]
                         if old_last_date in df_dates:
                             matching_idx = df_dates.index(old_last_date)
                             akshare_value = float(new_values[matching_idx])

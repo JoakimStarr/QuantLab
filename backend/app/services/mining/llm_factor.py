@@ -30,13 +30,18 @@ _HAS_GPU = is_gpu_available()
 # 本地 IC 缓存（LRU，上限保护）
 _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
-# 可用的基础字段（与 qlib bin 实际写入一致，含估值/换手）
+# 可用的基础字段（与 qlib bin 实际写入一致，含估值/换手/宏观/财报）
 _AVAILABLE_FIELDS = [
     "$open", "$high", "$low", "$close", "$preclose",
     "$volume", "$amount", "$turn",
     "$tradestatus", "$pct_chg", "$is_st",
     "$pe_ttm", "$pb_mrq", "$ps_ttm", "$pcf_ncf_ttm",
     "$adjustflag", "$change", "$tradable",
+    # 季频财报字段（fundamental_sync PIT 广播，财报数据拉取+补齐后可用）
+    "$netprofit", "$revenue", "$netprofit_deduct", "$roe", "$roa",
+    "$gross_margin", "$net_margin", "$debt_ratio", "$ocf",
+    "$eps", "$bvps", "$revenue_yoy", "$netprofit_yoy", "$ocf_to_np",
+    "$current_ratio", "$quick_ratio", "$equity_multiplier",
 ]
 
 _SYSTEM_PROMPT = """你是一位资深量化研究员，擅长构造A股截面选股因子。
@@ -216,14 +221,8 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
                 reasons = result.get("fail_reasons", [])
                 logger.info("因子 %s 未通过验证: valid_ic=%s, 原因: %s",
                             v["name"], valid_ic, "; ".join(reasons[:3]))
-                # 兜底：如果 valid_ic 不可用，回退到全样本 IC（仍受 BH 校正约束）
-                if not any("valid_ic" in r for r in reasons):
-                    ic = result.get("ic")
-                    if ic is not None and abs(ic) >= ic_threshold and bh_ok:
-                        logger.info("因子 %s 全样本 IC=%s 达标，作为后备", v["name"], ic)
-                        passed.append((v, result))
-                        if abs(ic) > abs(best_ic):
-                            best_ic = ic
+                # 不做全样本 IC 兜底：多维验证未通过说明因子不稳健（稳定性/显著性/
+                # 衰减/多样性不过关），全样本 IC 达标反而是过拟合信号，放行会污染因子库
 
         # Phase 4: 批量入库 + 逐个保存指标（指标更新轻量，逐个可接受）
         passed_ids = []
@@ -480,17 +479,16 @@ async def iterative_mine_factors(
                     bh_ok = p_adj_val is None or p_adj_val < significance_alpha
                     # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
                     valid_ic = ic_result.get("valid_ic")
-                    if ic_result.get("passed") and valid_ic is not None and abs(valid_ic) >= ic_threshold:
-                        pass
-                    else:
-                        valid_ic = ic_result.get("ic") or 0.0
-                        if abs(valid_ic) < ic_threshold or not bh_ok:
-                            if not bh_ok:
-                                logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
-                            continue
-                        # 未通过验证但全样本 IC 达标，作为后备
-                        logger.info("因子 %s 未通过多维验证，全样本 IC=%s 达标作为后备",
-                                    v["name"], valid_ic)
+                    if not (ic_result.get("passed") and valid_ic is not None
+                            and abs(valid_ic) >= ic_threshold and bh_ok):
+                        if not bh_ok:
+                            logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
+                        else:
+                            logger.info("因子 %s 未通过多维验证: valid_ic=%s, 原因: %s",
+                                        v["name"], valid_ic,
+                                        "; ".join((ic_result.get("fail_reasons") or [])[:3]))
+                        # 不做全样本 IC 兜底（理由同单轮挖掘）：未过验证即不稳健
+                        continue
                     round_results.append({
                         "name": v["name"],
                         "expression": v["expression"],

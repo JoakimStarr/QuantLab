@@ -78,6 +78,9 @@ htmlcov/
 data/*.db-shm
 data/*.db-wal
 
-# 同步运行时文件（爬取锁/进度，瞬态）
+# 同步运行时文件（爬取锁/进度/请求计数，瞬态）
 data/sync.lock
 data/sync_progress.json
+data/baostock_requests.json
+data/eod_last_result.json
+data/external_market.json

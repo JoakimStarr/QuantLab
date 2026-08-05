@@ -92,6 +92,9 @@ class SchedulerSettings(SettingsBaseModel):
 class LoggingSettings(SettingsBaseModel):
     dir: str = "logs"
     level: str = "INFO"
+    # 同时输出到 stdout（开发实时可见）。文件日志始终保留，是 UI 与归档的来源；
+    # 关闭可避免终端/重定向与 quantlab.log 内容重复
+    console: bool = True
     # 日志定期清理：普通日志轮转备份保留天数（默认 7 天）
     retention_days: int = 7
     # error.log 错误日志备份保留天数（更长，保证清理后仍能定位历史错误）
@@ -116,7 +119,7 @@ class QuantSettings(SettingsBaseModel):
     include_bj: bool = False
     n_drop: int = 5
     qlib_provider_uri: str = "data/qlib_bin/cn_data"
-    slippage_bps: int = 5
+    slippage_bps: int = 10
     sync_indices: list[str] = Field(
         default_factory=lambda: [
             "sh000001",
@@ -227,6 +230,11 @@ _PLACEHOLDER_GLM = "your_glm_api_key_here"
 _PLACEHOLDER_SILICONFLOW = "your_siliconflow_api_key_here"
 _PLACEHOLDER_GENERIC = "your_api_key_here"
 
+# 项目根目录与 .env 绝对路径：config.py 位于 backend/app/core/，向上 3 级即仓库根
+# （避免 uvicorn reload / 不同 CWD 启动时找不到根目录 .env，导致 API Key 未加载）
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 def _is_placeholder_key(value: str) -> bool:
     if not value:
@@ -253,7 +261,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",
         extra="ignore",
         arbitrary_types_allowed=True,
@@ -279,7 +287,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = SecuritySettings()
 
     # -- 项目根目录 --
-    PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
+    PROJECT_ROOT: Path = _PROJECT_ROOT
 
     def model_post_init(self, __context: Any) -> None:
         """初始化后加载 yaml 和环境变量安全配置。"""

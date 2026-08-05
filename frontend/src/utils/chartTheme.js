@@ -26,7 +26,11 @@ export const chartTheme = {
   baseline: () => read('--chart-baseline', '#d4380d'),
   areaAbove: () => read('--chart-area-above', 'rgba(82,196,26,0.08)'),
   areaBelow: () => read('--chart-area-below', 'rgba(245,34,45,0.06)'),
-  palette: (n) => read(`--chart-p${n}`, ['#5470c6', '#fa8c16', '#722ed1', '#13c2c2', '#52c41a', '#9333ea', '#0891b2', '#be185d'][(n - 1) % 8]),
+  palette: (n) =>
+    read(
+      `--chart-p${n}`,
+      ['#5470c6', '#fa8c16', '#722ed1', '#13c2c2', '#52c41a', '#9333ea', '#0891b2', '#be185d'][(n - 1) % 8]
+    ),
   // 语义色（对齐 CSS 变量）
   primary: () => read('--primary', '#1f4ba0'),
   success: () => read('--success', '#1f9d6b'),
@@ -61,7 +65,18 @@ export const echartPalette = {
 }
 
 // 分层分组 Q1（红）→ Qn（绿）渐变，最多支持 10 分组
-export const quantileGradient = ['#d03b3b', '#e8853a', '#d4b73a', '#7ab83a', '#2a9d4a', '#1f9d6b', '#1f7a4a', '#155f3a', '#0e4a2e', '#08351f']
+export const quantileGradient = [
+  '#d03b3b',
+  '#e8853a',
+  '#d4b73a',
+  '#7ab83a',
+  '#2a9d4a',
+  '#1f9d6b',
+  '#1f7a4a',
+  '#155f3a',
+  '#0e4a2e',
+  '#08351f',
+]
 
 // 一次性读取所有图表颜色（用于非响应式场景，如初始化即固定的系列色）
 export function snapshotChartTheme() {
@@ -73,7 +88,13 @@ export function snapshotChartTheme() {
 // 将 hex 颜色转为带透明度的 rgba（供 ECharts itemStyle/areaStyle 使用）
 export function withAlpha(hex, alpha) {
   const h = String(hex || '').replace('#', '')
-  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h
+  const full =
+    h.length === 3
+      ? h
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : h
   const num = parseInt(full, 16)
   if (Number.isNaN(num) || full.length !== 6) return hex
   return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`

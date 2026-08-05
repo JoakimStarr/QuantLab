@@ -9,7 +9,12 @@
       </div>
     </div>
     <div v-else-if="items.length" class="macro-grid">
-      <div v-for="it in items" :key="it.indicator + '-' + it.field_name" class="macro-cell" :title="it.available_date + (it.prevDate ? '，较 ' + it.prevDate : '')">
+      <div
+        v-for="it in items"
+        :key="it.indicator + '-' + it.field_name"
+        class="macro-cell"
+        :title="it.available_date + (it.prevDate ? '，较 ' + it.prevDate : '')"
+      >
         <div class="macro-label">{{ it.label }}</div>
         <div class="macro-value" :class="trendClass(it.change)">
           {{ it.value != null ? it.value : '--' }}
@@ -27,11 +32,12 @@
 </template>
 
 <script setup>
+import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 
 defineProps({
   items: { type: Array, default: () => [] },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
 })
 
 function hasChange(v) {
@@ -63,17 +69,48 @@ function fmtChange(v) {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.macro-label { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.macro-value { font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px; font-variant-numeric: tabular-nums; }
-.macro-unit { font-size: 11px; font-weight: 400; color: var(--text-tertiary); margin-left: 2px; }
-.macro-value.is-up { color: var(--chart-up); }
-.macro-value.is-down { color: var(--chart-down); }
-.macro-trend {
-  display: flex; align-items: center; gap: 2px;
-  margin-top: 4px; font-size: 12px; font-weight: 500;
+.macro-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.macro-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
-.macro-trend__icon { font-size: 13px; }
-.macro-trend.is-up { color: var(--chart-up); }
-.macro-trend.is-down { color: var(--chart-down); }
+.macro-unit {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+.macro-value.is-up {
+  color: var(--chart-up);
+}
+.macro-value.is-down {
+  color: var(--chart-down);
+}
+.macro-trend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.macro-trend__icon {
+  font-size: 13px;
+}
+.macro-trend.is-up {
+  color: var(--chart-up);
+}
+.macro-trend.is-down {
+  color: var(--chart-down);
+}
 </style>

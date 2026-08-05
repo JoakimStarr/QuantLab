@@ -318,7 +318,9 @@ async def batch_evaluate_alpha158(
 
     # 3. 预加载共用数据（关键优化！避免 N 次重复 IO）
     logger.info("Alpha158 批量评价: 预加载共用数据 (label + close), 待评价 %d 因子", total)
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    # 复权正确的前向收益标签（$change 累计），避免未复权 close 在除权日的虚假跳变
+    from app.services.quant.factor_eval import forward_return_label
+    label_expr = forward_return_label(horizon)
     # qlib 数据读取为同步 CPU/IO 重操作，放线程池执行，避免阻塞事件循环
     # 导致启动期 /health 等请求长时间无响应
     preloaded_label_df = await run_io_cpu(
@@ -523,11 +525,14 @@ async def seed_alpha158(progress_callback: Optional[Callable[[int, int, str], No
 async def backfill_alpha158_metrics(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     factor_ids: Optional[List[int]] = None,
+    eval_start: str = None,
+    eval_end: str = None,
 ) -> dict:
     """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
     - 不传 factor_ids：只对 category='alpha158' 且 ic IS NULL 的因子补算（历史遗留修复）
     - 传 factor_ids：对指定的任意类别因子重算（不管指标是否已存在），用于前端勾选后手动重算
+    - eval_start/eval_end：评价区间，默认从 config 读取
     """
     from sqlalchemy import select
     from app.core.config import settings
@@ -535,8 +540,8 @@ async def backfill_alpha158_metrics(
     from app.models.factor import Factor
 
     period = settings.quant.get("default_backtest_period", {})
-    eval_start = period.get("start", "2020-01-01")
-    eval_end = period.get("end", "2024-12-31")
+    eval_start = eval_start or period.get("start", "2020-01-01")
+    eval_end = eval_end or period.get("end", "2024-12-31")
 
     async with async_session() as session:
         q = select(Factor.id, Factor.expression)

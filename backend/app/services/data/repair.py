@@ -90,19 +90,27 @@ async def _fetch_stock_rows(code: str) -> list:
 
 
 async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> dict:
-    """对目标股票逐只从 PG 重建 bin（写盘走全局线程池并行）。"""
+    """对目标股票逐只从 PG 重建 bin（写盘走全局线程池并行）。
+
+    Returns:
+        dict: {"ok": 重建成功数, "failed": 失败数, "skipped": 无 DB 记录跳过数}
+    """
     from app.services.data.baostock_backfill import _get_write_pool
     from app.services.data.sync_progress import update_progress
 
     if not codes:
-        return {"ok": 0, "failed": 0}
+        return {"ok": 0, "failed": 0, "skipped": 0}
     ex = _get_write_pool()
-    ok = failed = 0
+    ok = failed = skipped = 0
     total = len(codes)
     for i, code_upper in enumerate(codes):
         try:
             rows = await _fetch_stock_rows(code_upper)
             if not rows:
+                # stock_daily 无此代码（指数目录 / 从未入库）→ 无法从 PG 重建。
+                # 记录 warning 而非静默跳过，否则用户会误以为"补齐没生效"。
+                skipped += 1
+                logger.warning("跳过重建 %s: stock_daily 无记录（可能为指数或数据缺失）", code_upper)
                 continue
             fut = ex.submit(_rebuild_one_stock, code_upper, rows, list(calendar), qlib_dir)
             fut.result()
@@ -112,7 +120,7 @@ async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> d
             logger.warning("重建 %s bin 失败: %s", code_upper, e)
         update_progress(pct=30 + int(35 * (i + 1) / total),
                         status="running", message=f"从数据库重建 bin {i + 1}/{total}...")
-    return {"ok": ok, "failed": failed}
+    return {"ok": ok, "failed": failed, "skipped": skipped}
 
 
 def _compute_years_from_missing(samples: list) -> int:
@@ -146,7 +154,7 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
 
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
-    init_progress(universe, "repair")
+    init_progress(universe, "repair", writes_bins=True)
 
     try:
         update_progress(pct=5, status="running", message="校验并生成修复计划...")
@@ -160,14 +168,24 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
             await rebuild_calendar_from_db(qlib_dir)
             steps.append("calendar")
 
-        # 2. 针对新日历重新计算 bin 差异目标
+        # 2. 针对新日历重新计算 bin 差异目标（剔除指数目录：无 stock_daily 数据，
+        #    无法从 PG 重建，不应进入 targets 造成"重建了但还报缺失"的假象）
+        from app.services.data.index_registry import load_index_codes
+
+        index_codes = await load_index_codes()
         calendar = _get_calendar(qlib_dir)
-        fields2 = await run_io_cpu(check_fields, qlib_dir, calendar)
-        coverage2 = await check_coverage(qlib_dir, calendar)
-        targets = sorted(set(fields2["repair_codes"]) | set(coverage2["repair_codes"]))
+        code_range = await _load_existing_ranges(qlib_dir, calendar)
+        fields2 = await run_io_cpu(check_fields, qlib_dir, calendar, index_codes, code_range)
+        coverage2 = await check_coverage(qlib_dir, calendar, index_codes, code_range)
+        targets = sorted(
+            (set(fields2["repair_codes"]) | set(coverage2["repair_codes"])) - index_codes
+        )
         if targets:
             result = await _rebuild_bins_from_pg(targets, qlib_dir, calendar)
-            steps.append(f"bins({result['ok']}ok/{result['failed']}failed)")
+            step = f"bins({result['ok']}ok/{result['failed']}failed"
+            if result.get("skipped"):
+                step += f"/{result['skipped']}skipped"
+            steps.append(step + ")")
         else:
             update_progress(pct=40, status="running", message="bin 无需重建")
 
@@ -176,10 +194,39 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
         calendar = await rebuild_calendar_from_db(qlib_dir)
 
         # 4. instruments（all/csiall）
-        code_range = await _load_existing_ranges(qlib_dir, calendar)
         if code_range:
             _build_instruments(qlib_dir, code_range, calendar, [], [])
             steps.append("instruments")
+
+        # 4.5 宏观/财报字段重广播（日历已最终对齐，bin 长度匹配；尽力而为，失败不阻塞补齐）
+        try:
+            from app.services.data.macro_sync import broadcast_macro_to_bins
+            update_progress(pct=68, status="running", message="重广播宏观字段到 bin（对齐日历）...")
+            n = await broadcast_macro_to_bins(
+                qlib_dir,
+                progress_cb=lambda pct, msg: update_progress(
+                    pct=68 + int(10 * (pct - 45) / 55), status="running",
+                    message=f"宏观广播: {msg}",
+                ),
+            )
+            if n:
+                steps.append(f"macro({n})")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("宏观字段重广播失败（可稍后在宏观页同步）: %s", e)
+        try:
+            from app.services.data.fundamental_sync import broadcast_financial_to_bins
+            update_progress(pct=80, status="running", message="重广播财报字段到 bin（PIT 对齐）...")
+            n = await broadcast_financial_to_bins(
+                qlib_dir,
+                progress_cb=lambda i, total, msg: update_progress(
+                    pct=80 + int(10 * i / max(total, 1)), status="running",
+                    message=f"财报广播: {msg}",
+                ),
+            )
+            if n:
+                steps.append(f"fin({n})")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("财报字段重广播失败（可稍后在财报同步页触发）: %s", e)
 
         # 5. baostock 增量（可选，用户确认）
         if include_baostock and drift.get("needs_baostock"):
@@ -194,6 +241,10 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
         if calendar:
             from app.services.data.baostock_backfill import _update_sync_status
             await _update_sync_status(universe, qlib_dir, calendar, code_range, sync_path="repair")
+        # 把实际修复步骤写进进度 message，前端补齐进度弹窗/进度条可看到
+        # （含 bins 的 skipped 计数，解释"跳过 N 只无 DB 记录"）
+        if steps:
+            update_progress(pct=100, status="running", message=f"修复完成: {', '.join(steps)}")
         finish_progress(True)
         await asyncio.sleep(3)
         clear_progress()

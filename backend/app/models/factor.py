@@ -14,6 +14,11 @@ class Factor(Base):
     # builtin / llm / symbolic / text
     category = Column(String, nullable=False, default="builtin")
     description = Column(Text, nullable=True)
+    # AI 因子解释：结构化 JSON（{summary, logic, rationale, caveats, generated_at}），
+    # description 字段只存 summary 一句话简述
+    ai_explanation = Column(Text, nullable=True)
+    # AI 追问对话历史：JSON 数组 [{role, content, ts}]，持久化保存
+    ai_chat_history = Column(Text, nullable=True)
 
     # 因子评价指标
     ic = Column(Float, nullable=True)

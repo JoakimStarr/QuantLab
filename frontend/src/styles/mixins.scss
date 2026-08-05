@@ -43,8 +43,9 @@ $breakpoints: (
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
-  transition: box-shadow var(--duration-normal) var(--ease-in-out),
-              transform var(--duration-normal) var(--ease-in-out);
+  transition:
+    box-shadow var(--duration-normal) var(--ease-in-out),
+    transform var(--duration-normal) var(--ease-in-out);
   @include hover {
     box-shadow: var(--shadow-md);
     transform: translateY(-2px);

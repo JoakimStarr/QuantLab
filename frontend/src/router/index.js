@@ -6,7 +6,7 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/Login.vue'),
-    meta: { title: '登录', public: true }
+    meta: { title: '登录', public: true },
   },
   {
     path: '/',
@@ -20,8 +20,8 @@ const routes = [
           title: '研究首页',
           icon: 'DataAnalysis',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/factors',
@@ -31,8 +31,8 @@ const routes = [
           title: '因子库',
           icon: 'Coin',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/strategy',
@@ -42,8 +42,8 @@ const routes = [
           title: '策略回测',
           icon: 'TrendCharts',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/strategy-library',
@@ -53,8 +53,8 @@ const routes = [
           title: '策略库',
           icon: 'Collection',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/mining',
@@ -64,8 +64,8 @@ const routes = [
           title: 'AI因子挖掘',
           icon: 'MagicStick',
           transition: 'fade-in-up',
-          keepAlive: false // Mining page should refresh each time
-        }
+          keepAlive: false, // Mining page should refresh each time
+        },
       },
       {
         path: 'quant/data',
@@ -75,8 +75,8 @@ const routes = [
           title: '数据管理',
           icon: 'SetUp',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/macro',
@@ -86,8 +86,8 @@ const routes = [
           title: '宏观指标',
           icon: 'Odometer',
           transition: 'fade-in-up',
-          keepAlive: true
-        }
+          keepAlive: true,
+        },
       },
       {
         path: 'quant/factor-compare',
@@ -96,8 +96,8 @@ const routes = [
         meta: {
           title: '因子对比',
           transition: 'fade-in-up',
-          keepAlive: false
-        }
+          keepAlive: false,
+        },
       },
       {
         path: 'quant/backtest-compare',
@@ -106,8 +106,8 @@ const routes = [
         meta: {
           title: '回测对比',
           transition: 'fade-in-up',
-          keepAlive: false
-        }
+          keepAlive: false,
+        },
       },
       {
         path: 'quant/factor-deep-analysis',
@@ -116,8 +116,8 @@ const routes = [
         meta: {
           title: '因子深度分析',
           transition: 'fade-in-up',
-          keepAlive: false
-        }
+          keepAlive: false,
+        },
       },
       {
         path: 'docs/:slug?',
@@ -127,8 +127,8 @@ const routes = [
           title: '技术文档',
           icon: 'Reading',
           transition: 'fade-in-up',
-          keepAlive: false
-        }
+          keepAlive: false,
+        },
       },
       {
         path: 'system/logs',
@@ -138,17 +138,17 @@ const routes = [
           title: '日志管理',
           icon: 'Document',
           transition: 'fade-in-up',
-          keepAlive: false
-        }
+          keepAlive: false,
+        },
       },
       {
         path: ':pathMatch(.*)*',
         name: 'NotFound',
         component: () => import('@/views/quant/NotFound.vue'),
-        meta: { title: '页面不存在' }
+        meta: { title: '页面不存在' },
       },
-    ]
-  }
+    ],
+  },
 ]
 
 const router = createRouter({
@@ -156,12 +156,17 @@ const router = createRouter({
   routes,
   scrollBehavior(to, from, savedPosition) {
     return savedPosition || { top: 0 }
-  }
+  },
 })
 
 // 鉴权守卫：后端开启鉴权且未登录时，跳转登录页
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+
+  // 挂载不再阻塞，鉴权状态在首次导航时同步补齐（fetchStatus 单次探测，失败兜底不锁死）
+  if (!authStore.statusLoaded) {
+    await authStore.fetchStatus()
+  }
 
   if (to.meta.public) {
     // 鉴权未开启时访问登录页 -> 回首页

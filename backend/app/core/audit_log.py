@@ -8,7 +8,7 @@ from logging.handlers import RotatingFileHandler
 
 from pythonjsonlogger import jsonlogger
 
-from app.core.config import settings
+from app.core import logging_config
 
 logger = logging.getLogger("audit")
 
@@ -18,10 +18,14 @@ def _ensure_audit_handler() -> None:
 
     用 RotatingFileHandler 轮转（10MB × 5），避免单文件无限增长；
     过期备份由 logging_config.cleanup_old_logs 定期清理。
+
+    目录复用 logging_config.log_dir（setup_logging 设置），保证与 logs API
+    扫描的目录一致（此前写 settings.PROJECT_ROOT/logs 与 API 的 backend/logs 错位，
+    导致 audit.jsonl 永远无法在前端日志页看到）。
     """
     if logger.handlers:
         return
-    log_dir = settings.PROJECT_ROOT / "logs"
+    log_dir = logging_config.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
         str(log_dir / "audit.jsonl"),

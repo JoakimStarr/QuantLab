@@ -14,11 +14,7 @@
       </span>
 
       <!-- 主题切换 -->
-      <button
-        class="theme-btn"
-        :title="isDark ? '切换到亮色模式' : '切换到暗色模式'"
-        @click="toggleTheme"
-      >
+      <button class="theme-btn" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'" @click="toggleTheme">
         <el-icon :size="18">
           <Sunny v-if="isDark" />
           <Moon v-else />

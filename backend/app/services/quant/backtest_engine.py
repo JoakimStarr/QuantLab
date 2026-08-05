@@ -106,10 +106,10 @@ def compute_combine_weights(
         {factor_name: weight}，权重按绝对值归一化（和为 1，保留符号）
     """
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, _daily_rank_ic_series,
+        load_factor_values, load_label, _daily_rank_ic_series, forward_return_label,
     )
 
-    label_expr = f"Ref($close, -{horizon}) / $close - 1"
+    label_expr = forward_return_label(horizon)
     try:
         label_df = load_label(start, end, label_expr=label_expr, universe=universe)
     except Exception as e:
@@ -154,6 +154,7 @@ def run_backtest(
     rebalance_freq: str = "day",
     portfolio_method: str = None,
     backend: str = "qlib",
+    capital: float = None,
 ) -> dict:
     """运行 top-k dropout 回测。
 
@@ -177,14 +178,28 @@ def run_backtest(
         return run_vbt_backtest(
             score_df, start=start, end=end, topk=topk, n_drop=n_drop,
             benchmark=benchmark, rebalance_freq=rebalance_freq,
-            portfolio_method=portfolio_method,
+            portfolio_method=portfolio_method, capital=capital,
         )
+
+    # 回测区间不超过因子数据实际范围：调用方（前端/参数扫描）可能传 end=今天，
+    # 而当日数据未入库；且 qlib 需要 end 之后一天的数据算最后一期收益，
+    # end 落在数据末日会越界（index N out of bounds with size N），故收敛到倒数第二日。
+    if score_df is not None and not score_df.empty and end:
+        try:
+            dates = sorted(score_df.index.get_level_values("datetime").unique())
+            if len(dates) >= 2:
+                data_end = str(dates[-2].date())
+                if end > data_end:
+                    logger.info("回测 end %s 收敛到因子数据倒数第二日 %s", end, data_end)
+                    end = data_end
+        except Exception as e:  # noqa: BLE001
+            logger.debug("回测 end 收敛失败（保持原值）: %s", e)
 
     init_qlib()
     from app.services.quant.qlib_backtest import run_qlib_backtest
     return run_qlib_backtest(
         score_df, start=start, end=end, topk=topk, n_drop=n_drop,
         benchmark=benchmark, rebalance_freq=rebalance_freq,
-        portfolio_method=portfolio_method,
+        portfolio_method=portfolio_method, capital=capital,
     )
 

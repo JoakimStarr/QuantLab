@@ -149,7 +149,7 @@ export function useWebSocket(url, options = {}) {
     }
     listeners[event].push(callback)
     return () => {
-      listeners[event] = (listeners[event] || []).filter(fn => fn !== callback)
+      listeners[event] = (listeners[event] || []).filter((fn) => fn !== callback)
     }
   }
 
@@ -157,7 +157,7 @@ export function useWebSocket(url, options = {}) {
   function emit(event, data) {
     const cbs = listeners[event]
     if (cbs) {
-      cbs.forEach(cb => {
+      cbs.forEach((cb) => {
         try {
           cb(data)
         } catch (e) {

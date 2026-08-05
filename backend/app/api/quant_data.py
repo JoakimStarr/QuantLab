@@ -34,8 +34,11 @@ async def qlib_status_api():
     earliest_date = None
     calendar_count = 0
     provider_uri = settings.qlib_provider_path
+    disk_usage = None
     if available:
         from pathlib import Path
+        import shutil
+        from starlette.concurrency import run_in_threadpool
         day_txt = Path(provider_uri) / "calendars" / "day.txt"
         if day_txt.exists():
             lines = [line.strip() for line in day_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -43,12 +46,27 @@ async def qlib_status_api():
                 earliest_date = lines[0]
                 calendar_count = len(lines)
 
+        # 磁盘占用：qlib 数据目录大小 + 所在文件系统剩余空间（rglob 较慢，放线程池避免阻塞事件循环）
+        try:
+            def _dir_bytes(p: Path) -> int:
+                return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+            dir_size = await run_in_threadpool(_dir_bytes, Path(provider_uri))
+            du = await run_in_threadpool(shutil.disk_usage, str(Path(provider_uri)))
+            disk_usage = {
+                "dir_size_bytes": dir_size,
+                "free_bytes": du.free,
+                "total_bytes": du.total,
+            }
+        except Exception:
+            disk_usage = None
+
     return ApiResponse(ok=True, data={
         "available": available,
         "message": message,
         "provider_uri": provider_uri,
         "earliest_date": earliest_date,
         "calendar_count": calendar_count,
+        "disk_usage": disk_usage,
     })
 
 
@@ -166,13 +184,15 @@ async def sync_data_api(
     uvicorn --reload 重启不会等它，也不会误杀它。状态写 DB、进度写共享文件，
     前端通过 /quant/data/status 与 /quant/data/sync-progress 实时查看。
     """
-    universe = req.universe or settings.quant.get("universe", "csi300")
+    # 回填本质是全市场拉取（query_daily_history_k_AStock 一次拉全部 A 股），
+    # universe 仅用于状态记录标签；默认 all 反映真实范围，避免误标 csi300。
+    universe = req.universe or "all"
     years = req.years or int(settings.quant.get("backfill_years", 5))
     data_source = "baostock"
     # 若已有一个真实活跃的同步（内存或存活 worker），拒绝重复提交，避免并发下载：
     # baostock 禁止并发连接，两个回填并发会互相拖垮。
-    from app.services.data.sync_progress import get_progress, sync_is_active
-    if sync_is_active():
+    from app.services.data.sync_progress import get_progress, writes_bins_active
+    if writes_bins_active():
         active = get_progress()
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
@@ -247,11 +267,11 @@ async def fallback_sync_api(
             "message": f"不支持的兜底源: {source}，仅支持 baostock/akshare",
             "status": 400,
         })
-    from app.services.data.sync_progress import sync_is_active
-    if sync_is_active():
+    from app.services.data.sync_progress import busy_message, writes_bins_active
+    if writes_bins_active():
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "message": busy_message(),
             "status": 409,
         })
     from app.services.data.sync_worker import spawn_sync_worker
@@ -259,3 +279,38 @@ async def fallback_sync_api(
     return ApiResponse(ok=True, data={
         "message": f"兜底同步已提交（source={source}, days={days}），独立进程后台执行中",
     })
+
+
+@router.get("/external-market")
+async def external_market_status_api():
+    """外盘隔夜因子最新状态（读最近一次同步缓存，不实时拉数据）。"""
+    from app.services.data.external_market import get_external_market_state
+    return ApiResponse(ok=True, data=get_external_market_state())
+
+
+@router.post("/sync-external-market")
+async def sync_external_market_api():
+    """拉取外盘指数（标普/纳指/道指/恒指）→ 对齐 A股日历 → 广播成 bin 因子字段。
+
+    轻量操作（4 个指数接口 + 广播写盘），直接在当前进程经 run_io_cpu 执行。
+    建议在每个交易日 A股开盘后、外盘已收盘时手动触发一次。
+    """
+    from app.services.data.external_market import sync_external_market
+    try:
+        result = await sync_external_market()
+    except Exception as e:
+        logger.exception("外盘数据同步失败")
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_FAILED",
+            "message": f"外盘数据同步失败: {e}",
+            "status": 500,
+        })
+    failed = [k for k, v in result.get("items", {}).items() if not v.get("ok")]
+    if failed:
+        return ApiResponse(ok=False, error={
+            "code": "PARTIAL_FAILURE",
+            "message": f"部分指数拉取失败: {', '.join(failed)}",
+            "status": 502,
+            "detail": result,
+        })
+    return ApiResponse(ok=True, data=result)

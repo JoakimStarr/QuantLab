@@ -38,6 +38,16 @@ _QLIB_FIELDS = {
     "$change", "$tradable",
     # 宏观指标字段（macro_sync 广播写入 features/*/{field}.day.bin）
     "$pmi", "$pmi_nm", "$cpi", "$ppi", "$gdp",
+    # 外盘隔夜情绪因子（external_market 广播写入 features/*/{field}.day.bin）
+    "$us_sp500_ret", "$us_nasdaq_ret", "$us_dow_ret", "$hk_hsi_ret",
+    # 北向资金日频字段（macro_sync HSGT 广播全市场同一数组）
+    "$hsgt_net_buy", "$hsgt_buy", "$hsgt_sell", "$hsgt_cum_net",
+    "$hsgt_inflow", "$hsgt_hold_mv",
+    # 季频财报字段（fundamental_sync 按股 PIT 广播写入 features/*/{field}.day.bin）
+    "$netprofit", "$revenue", "$netprofit_deduct", "$roe", "$roa",
+    "$gross_margin", "$net_margin", "$debt_ratio", "$ocf",
+    "$eps", "$bvps", "$revenue_yoy", "$netprofit_yoy", "$ocf_to_np",
+    "$current_ratio", "$quick_ratio", "$equity_multiplier",
 }
 
 # 严格禁止的标识符（词边界匹配，避免 "os" 误伤 "close"）

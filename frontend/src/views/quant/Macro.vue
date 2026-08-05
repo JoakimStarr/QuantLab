@@ -1,9 +1,13 @@
 <template>
   <PageContainer narrow>
-    <div class="page-header mb-6">
-      <h2 class="page-title">宏观指标</h2>
-      <p class="page-desc">东财 + akshare 宏观数据（PMI/CPI/PPI/GDP/国债/Shibor/汇率等），同步后广播为 qlib 因子字段</p>
-    </div>
+    <header class="page-header">
+      <div class="page-header__lead">
+        <h1 class="page-header__title">宏观指标</h1>
+        <p class="page-header__subtitle">
+          东财 + akshare 宏观数据（PMI/CPI/PPI/GDP/国债/Shibor/汇率等），同步后广播为 qlib 因子字段
+        </p>
+      </div>
+    </header>
 
     <!-- 操作区 -->
     <SectionCard class="mb-6">
@@ -49,18 +53,28 @@
       <el-empty v-else description="暂无数据，请先同步宏观指标" />
     </SectionCard>
 
-    <!-- 最新值快照 -->
+    <!-- 最新值快照（按分类分组） -->
     <SectionCard v-if="snapshotItems.length" title="最新值" class="mb-6">
-      <div class="snapshot-grid">
-        <div v-for="it in snapshotItems" :key="it.indicator + '-' + it.field_name" class="snapshot-cell" :title="it.available_date + (it.prevDate ? '，较 ' + it.prevDate : '')">
-          <div class="snapshot-label">{{ it.label }}</div>
-          <div class="snapshot-value" :class="trendClass(it.change)">{{ formatValue(it.value) }}<span v-if="it.unit" class="snapshot-unit">{{ it.unit }}</span></div>
-          <div v-if="hasChange(it.change)" class="snapshot-trend" :class="trendClass(it.change)">
-            <el-icon v-if="it.change > 0"><CaretTop /></el-icon>
-            <el-icon v-else><CaretBottom /></el-icon>
-            <span>{{ fmtChange(it.change) }}</span>
+      <div v-for="group in snapshotGroups" :key="group.label" class="snapshot-group">
+        <div class="snapshot-group-title">{{ group.label }}</div>
+        <div class="snapshot-grid">
+          <div
+            v-for="it in group.items"
+            :key="it.indicator + '-' + it.field_name"
+            class="snapshot-cell"
+            :title="it.available_date + (it.prevDate ? '，较 ' + it.prevDate : '')"
+          >
+            <div class="snapshot-label">{{ it.label }}</div>
+            <div class="snapshot-value" :class="trendClass(it.change)">
+              {{ formatValue(it.value) }}<span v-if="it.unit" class="snapshot-unit">{{ it.unit }}</span>
+            </div>
+            <div v-if="hasChange(it.change)" class="snapshot-trend" :class="trendClass(it.change)">
+              <el-icon v-if="it.change > 0"><CaretTop /></el-icon>
+              <el-icon v-else><CaretBottom /></el-icon>
+              <span>{{ fmtChange(it.change) }}</span>
+            </div>
+            <div class="snapshot-date">{{ it.available_date }}</div>
           </div>
-          <div class="snapshot-date">{{ it.available_date }}</div>
         </div>
       </div>
     </SectionCard>
@@ -81,10 +95,12 @@
 defineOptions({ name: 'QuantMacro' })
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
-import { syncMacro, getMacroIndicators, getMacroStatus } from '@/api/macro'
+import '@/utils/echarts'
+import { syncMacro, getMacroIndicators, getMacroStatus, getMacroSnapshot } from '@/api/macro'
 import { getSyncProgress } from '@/api/quant'
 import { chartTheme, echartPalette as C } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
@@ -106,9 +122,27 @@ const fieldOptions = [
       { field: 'pmi_nm', name: '非制造业PMI', color: C.orangeAlt },
     ],
   },
-  { key: 'cpi', indicator: 'CPI', label: 'CPI同比(%)', group: '景气/价格', fields: [{ field: 'cpi', name: 'CPI同比', color: C.purple }] },
-  { key: 'ppi', indicator: 'PPI', label: 'PPI同比(%)', group: '景气/价格', fields: [{ field: 'ppi', name: 'PPI同比', color: C.teal }] },
-  { key: 'gdp', indicator: 'GDP', label: 'GDP同比(%)', group: '景气/价格', fields: [{ field: 'gdp', name: 'GDP同比', color: C.grass }] },
+  {
+    key: 'cpi',
+    indicator: 'CPI',
+    label: 'CPI同比(%)',
+    group: '景气/价格',
+    fields: [{ field: 'cpi', name: 'CPI同比', color: C.purple }],
+  },
+  {
+    key: 'ppi',
+    indicator: 'PPI',
+    label: 'PPI同比(%)',
+    group: '景气/价格',
+    fields: [{ field: 'ppi', name: 'PPI同比', color: C.teal }],
+  },
+  {
+    key: 'gdp',
+    indicator: 'GDP',
+    label: 'GDP同比(%)',
+    group: '景气/价格',
+    fields: [{ field: 'gdp', name: 'GDP同比', color: C.grass }],
+  },
   // 利率
   {
     key: 'treasury',
@@ -169,12 +203,42 @@ const fieldOptions = [
     ],
   },
   // 商品/汇率
-  { key: 'commodity', indicator: 'COMMODITY', label: '大宗商品指数', group: '商品/汇率', fields: [{ field: 'commodity_idx', name: '商品价格指数', color: C.blue }] },
-  { key: 'copper', indicator: 'COPPER', label: '沪铜', group: '商品/汇率', fields: [{ field: 'copper_close', name: '沪铜主力收盘价', color: C.red }] },
-  { key: 'crude', indicator: 'CRUDE_OIL', label: '原油', group: '商品/汇率', fields: [{ field: 'crude_close', name: '原油SC主力', color: C.orange }] },
-  { key: 'fx', indicator: 'FX', label: '人民币汇率', group: '商品/汇率', fields: [{ field: 'usdcny_mid', name: '美元中间价', color: C.blue }] },
+  {
+    key: 'commodity',
+    indicator: 'COMMODITY',
+    label: '大宗商品指数',
+    group: '商品/汇率',
+    fields: [{ field: 'commodity_idx', name: '商品价格指数', color: C.blue }],
+  },
+  {
+    key: 'copper',
+    indicator: 'COPPER',
+    label: '沪铜',
+    group: '商品/汇率',
+    fields: [{ field: 'copper_close', name: '沪铜主力收盘价', color: C.red }],
+  },
+  {
+    key: 'crude',
+    indicator: 'CRUDE_OIL',
+    label: '原油',
+    group: '商品/汇率',
+    fields: [{ field: 'crude_close', name: '原油SC主力', color: C.orange }],
+  },
+  {
+    key: 'fx',
+    indicator: 'FX',
+    label: '人民币汇率',
+    group: '商品/汇率',
+    fields: [{ field: 'usdcny_mid', name: '美元中间价', color: C.blue }],
+  },
   // 风险/情绪
-  { key: 'ivix', indicator: 'IVIX', label: '波指iVIX', group: '风险/情绪', fields: [{ field: 'ivix', name: '50ETF波动率指数', color: C.red }] },
+  {
+    key: 'ivix',
+    indicator: 'IVIX',
+    label: '波指iVIX',
+    group: '风险/情绪',
+    fields: [{ field: 'ivix', name: '50ETF波动率指数', color: C.red }],
+  },
   {
     key: 'futif',
     indicator: 'FUTURES_IF',
@@ -182,7 +246,7 @@ const fieldOptions = [
     group: '风险/情绪',
     fields: [
       { field: 'if_close', name: 'IF主力收盘价', color: C.blue },
-      { field: 'if_hold', name: 'IF持仓量', color: C.orangeAlt },
+      { field: 'if_hold', name: 'IF持仓量', color: C.orangeAlt, axis: 'right' },
     ],
   },
   {
@@ -192,11 +256,23 @@ const fieldOptions = [
     group: '风险/情绪',
     fields: [
       { field: 'ic_close', name: 'IC主力收盘价', color: C.blue },
-      { field: 'ic_hold', name: 'IC持仓量', color: C.orangeAlt },
+      { field: 'ic_hold', name: 'IC持仓量', color: C.orangeAlt, axis: 'right' },
     ],
   },
-  { key: 'futtf', indicator: 'FUTURES_TF', label: '国债期货', group: '风险/情绪', fields: [{ field: 'tf_close', name: 'TF主力收盘价', color: C.cyan }] },
-  { key: 'gold', indicator: 'GOLD', label: '沪金', group: '风险/情绪', fields: [{ field: 'au_close', name: '沪金AU主力', color: C.gold }] },
+  {
+    key: 'futtf',
+    indicator: 'FUTURES_TF',
+    label: '国债期货',
+    group: '风险/情绪',
+    fields: [{ field: 'tf_close', name: 'TF主力收盘价', color: C.cyan }],
+  },
+  {
+    key: 'gold',
+    indicator: 'GOLD',
+    label: '沪金',
+    group: '风险/情绪',
+    fields: [{ field: 'au_close', name: '沪金AU主力', color: C.gold }],
+  },
   // 货币/信贷
   {
     key: 'moneysupply',
@@ -262,7 +338,7 @@ const statusItems = ref([])
 const snapshotItems = ref([])
 
 const currentLabel = computed(() => {
-  const f = fieldOptions.find(x => x.key === selectedField.value)
+  const f = fieldOptions.find((x) => x.key === selectedField.value)
   return f ? `${f.label} 走势` : '走势'
 })
 
@@ -281,14 +357,35 @@ const fieldGroups = computed(() => {
   return groups
 })
 
+// 快照卡片按分组展示（与 fieldOptions.group 一致）
+const snapshotGroups = computed(() => {
+  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '货币/信贷']
+  const byGroup = {}
+  for (const it of snapshotItems.value) {
+    const g = it.group || '其他'
+    ;(byGroup[g] = byGroup[g] || []).push(it)
+  }
+  const groups = order.filter((g) => byGroup[g]).map((g) => ({ label: g, items: byGroup[g] }))
+  const rest = Object.keys(byGroup).filter((g) => !order.includes(g))
+  for (const g of rest) groups.push({ label: g, items: byGroup[g] })
+  return groups
+})
+
 function rangeStartDate() {
   if (timeRange.value === 'ALL') return null
   const start = new Date()
   switch (timeRange.value) {
-    case '1Y': start.setFullYear(start.getFullYear() - 1); break
-    case '3Y': start.setFullYear(start.getFullYear() - 3); break
-    case '5Y': start.setFullYear(start.getFullYear() - 5); break
-    default: return null
+    case '1Y':
+      start.setFullYear(start.getFullYear() - 1)
+      break
+    case '3Y':
+      start.setFullYear(start.getFullYear() - 3)
+      break
+    case '5Y':
+      start.setFullYear(start.getFullYear() - 5)
+      break
+    default:
+      return null
   }
   return start.toISOString().slice(0, 10)
 }
@@ -338,36 +435,46 @@ const chartOption = computed(() => {
     for (const p of s.points) dateSet.add(p.date)
   }
   const dates = [...dateSet].sort()
-  const opt = fieldOptions.find(x => x.key === selectedField.value)
+  const opt = fieldOptions.find((x) => x.key === selectedField.value)
 
   // PMI 荣枯线（50）与扩张/收缩背景分区：上方淡绿、下方淡红
-  const markArea = opt?.markLine != null
-    ? (() => {
-        const vals = seriesData.value.flatMap(s => s.points.map(p => p.value)).filter(v => v != null)
-        const lo = Math.min(opt.markLine, ...(vals.length ? vals : [opt.markLine]))
-        const hi = Math.max(opt.markLine, ...(vals.length ? vals : [opt.markLine]))
-        return {
-          silent: true,
-          data: [
-            [{ yAxis: opt.markLine, itemStyle: { color: chartTheme.areaAbove() } }, { yAxis: hi, itemStyle: { color: chartTheme.areaAbove() } }],
-            [{ yAxis: lo, itemStyle: { color: chartTheme.areaBelow() } }, { yAxis: opt.markLine, itemStyle: { color: chartTheme.areaBelow() } }],
-          ],
-        }
-      })()
-    : undefined
+  const markArea =
+    opt?.markLine != null
+      ? (() => {
+          const vals = seriesData.value.flatMap((s) => s.points.map((p) => p.value)).filter((v) => v != null)
+          const lo = Math.min(opt.markLine, ...(vals.length ? vals : [opt.markLine]))
+          const hi = Math.max(opt.markLine, ...(vals.length ? vals : [opt.markLine]))
+          return {
+            silent: true,
+            data: [
+              [
+                { yAxis: opt.markLine, itemStyle: { color: chartTheme.areaAbove() } },
+                { yAxis: hi, itemStyle: { color: chartTheme.areaAbove() } },
+              ],
+              [
+                { yAxis: lo, itemStyle: { color: chartTheme.areaBelow() } },
+                { yAxis: opt.markLine, itemStyle: { color: chartTheme.areaBelow() } },
+              ],
+            ],
+          }
+        })()
+      : undefined
 
-  const series = seriesData.value.map(s => {
-    const valByDate = new Map(s.points.map(p => [p.date, p.value]))
+  const series = seriesData.value.map((s) => {
+    const valByDate = new Map(s.points.map((p) => [p.date, p.value]))
+    const fieldCfg = opt?.fields.find((x) => x.field === s.field)
     const cfg = {
       name: s.name,
       type: 'line',
       smooth: true,
       symbol: 'circle',
       symbolSize: 5,
-      data: dates.map(d => (valByDate.has(d) ? valByDate.get(d) : null)),
+      data: dates.map((d) => (valByDate.has(d) ? valByDate.get(d) : null)),
       lineStyle: { width: 2, color: s.color },
       itemStyle: { color: s.color },
     }
+    // 量纲差异大的字段（如持仓量 vs 收盘价）放右轴，避免价格线被压平
+    if (fieldCfg?.axis === 'right') cfg.yAxisIndex = 1
     if (seriesData.value.length === 1) cfg.areaStyle = { opacity: 0.12, color: s.color }
     const crosses = opt?.markLine != null ? crossingPoints(s.points, opt.markLine) : []
     if (crosses.length) cfg.markPoint = { symbol: 'pin', data: crosses, silent: true }
@@ -394,9 +501,14 @@ const chartOption = computed(() => {
     tooltip: { trigger: 'axis' },
     textStyle: { color: chartTheme.axisText() },
     legend: { top: 0, left: 8, textStyle: { color: chartTheme.axisText() } },
-    grid: { left: 48, right: 24, top: 40, bottom: 40 },
+    grid: { left: 48, right: 48, top: 40, bottom: 40 },
     xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, color: chartTheme.axisText() } },
-    yAxis: { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: opt?.fields.some((f) => f.axis === 'right')
+      ? [
+          { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() } },
+          { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() }, splitLine: { show: false } },
+        ]
+      : { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() } },
     series,
   }
 })
@@ -404,21 +516,22 @@ const chartOption = computed(() => {
 async function loadSeries() {
   seriesLoading.value = true
   try {
-    const opt = fieldOptions.find(x => x.key === selectedField.value)
+    const opt = fieldOptions.find((x) => x.key === selectedField.value)
     const startDate = rangeStartDate()
-    const series = []
-    for (const f of opt?.fields ?? []) {
-      const res = await getMacroIndicators({ indicator: opt.indicator, field: f.field })
-      const items = res?.items ?? []
-      series.push({
-        field: f.field,
-        name: f.name,
-        color: f.color,
-        points: items
-          .filter(d => !startDate || d.available_date >= startDate)
-          .map(d => ({ date: d.available_date, value: d.value })),
+    const series = await Promise.all(
+      (opt?.fields ?? []).map(async (f) => {
+        const res = await getMacroIndicators({ indicator: opt.indicator, field: f.field })
+        const items = res?.items ?? []
+        return {
+          field: f.field,
+          name: f.name,
+          color: f.color,
+          points: items
+            .filter((d) => !startDate || d.available_date >= startDate)
+            .map((d) => ({ date: d.available_date, value: d.value })),
+        }
       })
-    }
+    )
     seriesData.value = series
   } catch {
     seriesData.value = []
@@ -431,36 +544,33 @@ async function loadStatus() {
   try {
     const res = await getMacroStatus()
     statusItems.value = res?.items ?? []
-    // 快照：每个指标字段的最新一条 + 环比变化（最新值 - 上一条值）
-    const all = await getMacroIndicators()
-    const items = all?.items ?? []
+    // 快照：每个指标字段的最新一条 + 环比变化（最新值 - 上一条值），来自轻量 /macro/snapshot
     const labelMap = {}
+    const groupMap = {}
     for (const opt of fieldOptions) {
       for (const f of opt.fields) {
         labelMap[f.field] = f.name
+        groupMap[f.field] = opt.group
       }
     }
-    const series = {}
-    for (const it of items) {
-      const k = `${it.indicator}-${it.field_name}`
-      if (!series[k]) series[k] = []
-      series[k].push(it)
-    }
-    snapshotItems.value = Object.values(series).map(arr => {
-      arr.sort((a, b) => String(a.available_date).localeCompare(String(b.available_date)))
-      const latest = arr[arr.length - 1]
-      const prev = arr[arr.length - 2]
-      const latestVal = Number(latest.value)
-      const prevVal = prev ? Number(prev.value) : null
-      const change = prev != null && prevVal != null && latestVal != null &&
-        !Number.isNaN(latestVal) && !Number.isNaN(prevVal)
-        ? latestVal - prevVal
-        : null
+    const snap = await getMacroSnapshot()
+    snapshotItems.value = (snap?.items ?? []).map((it) => {
+      const latestVal = it.latest_value != null ? Number(it.latest_value) : null
+      const prevVal = it.prev_value != null ? Number(it.prev_value) : null
+      const change =
+        prevVal != null && latestVal != null && !Number.isNaN(latestVal) && !Number.isNaN(prevVal)
+          ? latestVal - prevVal
+          : null
       return {
-        ...latest,
-        label: labelMap[latest.field_name] || latest.field_name,
+        indicator: it.indicator,
+        field_name: it.field_name,
+        value: it.latest_value,
+        unit: it.unit,
+        available_date: it.latest_date,
+        prevDate: it.prev_date,
+        label: labelMap[it.field_name] || it.field_name,
+        group: groupMap[it.field_name] || '其他',
         change,
-        prevDate: prev?.available_date ?? null
       }
     })
   } catch {
@@ -494,7 +604,10 @@ async function doSync() {
     ElMessage.success('宏观同步已提交')
     startMacroProgressPolling()
     // 兜底：即使进度未显示，也刷新一次状态
-    setTimeout(() => { loadStatus(); loadSeries() }, 5000)
+    setTimeout(() => {
+      loadStatus()
+      loadSeries()
+    }, 5000)
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('宏观同步提交失败: ' + (e?.message || e))
   } finally {
@@ -518,7 +631,9 @@ function startMacroProgressPolling() {
           progressTimer = null
           if (data.status === 'done') ElMessage.success('宏观同步完成')
           else ElMessage.error('宏观同步失败: ' + (data.error || '未知错误'))
-          setTimeout(() => { syncProgress.value = null }, 2000)
+          setTimeout(() => {
+            syncProgress.value = null
+          }, 2000)
           loadStatus()
           loadSeries()
         }
@@ -553,9 +668,30 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.page-header { animation: fadeInUp 0.5s var(--ease-out-expo); }
-.page-title { font-size: var(--font-size-2xl); font-weight: 700; color: var(--text-primary); }
-.page-desc { font-size: var(--font-size-sm); color: var(--text-secondary); margin-top: 4px; }
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  animation: fadeInUp 0.5s var(--ease-out-expo);
+
+  &__lead {
+    flex: 1;
+    min-width: 0;
+  }
+  &__title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-xs);
+  }
+  &__subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+}
 
 .macro-toolbar {
   display: flex;
@@ -564,9 +700,21 @@ onBeforeUnmount(() => {
   gap: 12px;
   flex-wrap: wrap;
 }
-.toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.toolbar-right { display: flex; gap: 8px; }
-.sync-message { margin-top: 12px; font-size: 13px; color: var(--text-secondary); }
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.toolbar-right {
+  display: flex;
+  gap: 8px;
+}
+.sync-message {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
 
 .sync-progress {
   margin-top: 14px;
@@ -574,17 +722,43 @@ onBeforeUnmount(() => {
   background: var(--bg-tertiary, #f5f7fa);
   border-radius: 8px;
 }
-.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.progress-status { font-size: 13px; color: var(--text-primary); }
-.progress-pct { font-size: 13px; font-weight: 600; color: var(--primary); font-variant-numeric: tabular-nums; }
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.progress-status {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.progress-pct {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
 
-.chart-wrap { min-height: 200px; }
-.chart-macro { height: 420px; }
+.chart-wrap {
+  min-height: 200px;
+}
+.chart-macro {
+  height: 420px;
+}
 
 .snapshot-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
+}
+.snapshot-group + .snapshot-group {
+  margin-top: 20px;
+}
+.snapshot-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
 }
 .snapshot-cell {
   padding: 14px 16px;
@@ -592,25 +766,65 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.snapshot-label { font-size: 12px; color: var(--text-tertiary); }
-.snapshot-value { font-size: 22px; font-weight: 700; color: var(--text-primary); margin-top: 4px; font-variant-numeric: tabular-nums; }
-.snapshot-unit { font-size: 12px; font-weight: 400; color: var(--text-tertiary); margin-left: 2px; }
-.snapshot-value.is-up { color: var(--chart-up); }
-.snapshot-value.is-down { color: var(--chart-down); }
-.snapshot-trend {
-  display: flex; align-items: center; gap: 2px;
-  margin-top: 4px; font-size: 12px; font-weight: 500;
+.snapshot-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.snapshot-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
-.snapshot-trend .el-icon { font-size: 13px; }
-.snapshot-trend.is-up { color: var(--chart-up); }
-.snapshot-trend.is-down { color: var(--chart-down); }
-.snapshot-date { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
+.snapshot-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+.snapshot-value.is-up {
+  color: var(--chart-up);
+}
+.snapshot-value.is-down {
+  color: var(--chart-down);
+}
+.snapshot-trend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.snapshot-trend .el-icon {
+  font-size: 13px;
+}
+.snapshot-trend.is-up {
+  color: var(--chart-up);
+}
+.snapshot-trend.is-down {
+  color: var(--chart-down);
+}
+.snapshot-date {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
 
-.mb-6 { margin-bottom: 24px; }
+.mb-6 {
+  margin-bottom: 24px;
+}
 
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

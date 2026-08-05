@@ -7,13 +7,15 @@
       class="tab-item"
       :class="{ 'tab-item--active': $route.path === item.path }"
     >
-      <el-icon :size="20"><component :is="item.icon" /></el-icon>
+      <el-icon :size="20"><component :is="resolveIcon(item.icon)" /></el-icon>
       <span class="tab-label">{{ item.label }}</span>
     </router-link>
   </nav>
 </template>
 
 <script setup>
+import { resolveIcon } from '@/utils/icons'
+
 const tabItems = [
   { path: '/', label: '首页', icon: 'DataAnalysis' },
   { path: '/quant/factors', label: '因子', icon: 'Coin' },
@@ -63,6 +65,8 @@ const tabItems = [
 
 // 桌面端隐藏移动底栏（>=768px）
 @media (min-width: 768px) {
-  .mobile-tabbar { display: none; }
+  .mobile-tabbar {
+    display: none;
+  }
 }
 </style>

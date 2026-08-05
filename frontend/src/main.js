@@ -2,38 +2,15 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/loading/style/css'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import { initAppConfig } from '@/config/app'
 import { ElMessage } from 'element-plus/es/components/message/index'
+// Element Plus 暗色主题变量（html.dark 下生效），须先于 global.scss 引入，
+// 以便下方自定义 :root.dark 覆盖同优先级变量（品牌色/背景对齐自研 token）
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import './styles/global.scss'
-
-// ECharts configuration
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, PieChart, CandlestickChart, RadarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent, TitleComponent, DataZoomComponent, AxisPointerComponent, MarkLineComponent, MarkAreaComponent, MarkPointComponent } from 'echarts/components'
-
-// Register ECharts components globally
-use([
-  CanvasRenderer,
-  LineChart,
-  BarChart,
-  PieChart,
-  CandlestickChart,
-  RadarChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent,
-  AxisPointerComponent,
-  MarkLineComponent,
-  MarkAreaComponent,
-  MarkPointComponent
-])
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -50,16 +27,10 @@ app.config.errorHandler = (err, instance, info) => {
   }
 }
 
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
-}
-
-// 挂载前并行加载鉴权状态与应用配置；
-// 两个 Promise 均自带 finally 兜底，单项失败不阻塞启动
+// 立即挂载，避免白屏期间等待后端请求；
+// 鉴权状态与应用配置改为挂载后后台并行加载（各自内部有兜底，不阻塞首屏）。
+// 路由守卫会在首次导航时 await fetchStatus 完成鉴权判定。
 const authStore = useAuthStore()
-Promise.allSettled([
-  authStore.fetchStatus(),
-  initAppConfig(),
-]).finally(() => {
-  app.mount('#app')
-})
+app.mount('#app')
+authStore.fetchStatus()
+initAppConfig()

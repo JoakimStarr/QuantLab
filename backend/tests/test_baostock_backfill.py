@@ -91,7 +91,7 @@ async def test_run_backfill_downloads_pipeline():
 
     flushed = []
 
-    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows):
+    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None):
         flushed.append(len(per_stock))
         pg_rows.extend([1] * len(per_stock))
         return len(per_stock)
@@ -144,7 +144,7 @@ async def test_run_backfill_downloads_syncs_calendar(tmp_path):
             "adjustflag": [3],
         })
 
-    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows):
+    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None):
         for code_lower, rows in per_stock.items():
             pg_rows.extend({
                 "code": code_lower.upper(),

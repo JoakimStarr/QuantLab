@@ -35,12 +35,17 @@ const props = defineProps({
   subtitle: { type: String, default: '' },
   compact: { type: Boolean, default: false },
   collapsible: { type: Boolean, default: false },
-  collapsed: { type: Boolean, default: false }
+  collapsed: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:collapsed'])
 
 const collapsed = ref(props.collapsed)
-watch(() => props.collapsed, (v) => { collapsed.value = v })
+watch(
+  () => props.collapsed,
+  (v) => {
+    collapsed.value = v
+  }
+)
 
 function toggle() {
   collapsed.value = !collapsed.value
@@ -104,7 +109,9 @@ function toggle() {
   flex-shrink: 0;
 }
 
-.section-card__header-left--clickable { cursor: pointer; }
+.section-card__header-left--clickable {
+  cursor: pointer;
+}
 
 .section-card__collapse-icon {
   color: var(--text-tertiary);
@@ -112,7 +119,9 @@ function toggle() {
   cursor: pointer;
 }
 
-.section-card--collapsed .section-card__collapse-icon { transform: rotate(-90deg); }
+.section-card--collapsed .section-card__collapse-icon {
+  transform: rotate(-90deg);
+}
 
 .section-card__body {
   padding: var(--space-lg);

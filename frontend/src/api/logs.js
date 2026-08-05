@@ -8,3 +8,7 @@ export function getLogFiles() {
 export function getLogs(params) {
   return request.get('/logs', { params })
 }
+
+export function clearLogs(file) {
+  return request.post('/logs/clear', null, { params: { file } })
+}

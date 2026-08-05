@@ -22,7 +22,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.database import async_session
-from app.services.data.baostock_client import fetch_daily_all_a_stock_sync, from_baostock_code
+from app.services.data.baostock_client import (
+    BaostockQuotaError,
+    fetch_daily_all_a_stock_sync,
+    from_baostock_code,
+)
 from app.services.data.eod_incremental import _sync_stock_bin, _write_calendar, _compute_tradable, _get_calendar
 from app.services.data.sync_progress import (
     init_progress, update_progress, finish_progress, clear_progress,
@@ -42,7 +46,7 @@ BIN_FIELDS = [
     "tradestatus", "pct_chg", "is_st",
     "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm",
     "adjustflag",
-    "change", "tradable",
+    "change", "tradable", "factor",
 ]
 
 # baostock 日线列名 -> stock_daily 列名
@@ -56,7 +60,9 @@ DAILY_COL_MAP = {
 
 # 每个批次拉取的交易日数（控制内存）：1 = 每下载一天即写入，
 # 数据实时落盘、崩溃丢失少；调大可减少写盘次数但内存占用更高。
-_CHUNK_DAYS = int(os.environ.get("QUANTLAB_BACKFILL_CHUNK_DAYS", "1"))
+# 默认 20：整市场 5200 只股票的 bin 全量重写一次约 2-4 分钟，chunk_days=1 时
+# 消费者跟不上生产者，生产者入队必超时；20 把写盘次数降到 ~1/20，全程可完成。
+_CHUNK_DAYS = int(os.environ.get("QUANTLAB_BACKFILL_CHUNK_DAYS", "20"))
 
 # 写入侧并行度：_flush_chunk 同时并写多少只股票的 bin（相互独立，可并行）
 _WRITE_WORKERS = int(os.environ.get("QUANTLAB_BACKFILL_WRITE_WORKERS", "16"))
@@ -148,6 +154,10 @@ def _build_out_df(code_lower: str, df: pd.DataFrame) -> pd.DataFrame:
         "ps_ttm": df["psTTM"].astype(float) if "psTTM" in df.columns else np.nan,
         "pcf_ncf_ttm": df["pcfNcfTTM"].astype(float) if "pcfNcfTTM" in df.columns else np.nan,
         "adjustflag": df["adjustflag"].astype(float) if "adjustflag" in df.columns else np.nan,
+        # 价格已按 adjustflag=qfq 前复权存储，factor 统一为 1.0：
+        # qlib 依赖 $factor 判断价格是否复权（factor 全 NaN 会进入 adjusted_price 模式，
+        # 导致 trade_unit=100 的整手取整失效，成交出现碎股）。
+        "factor": 1.0,
     })
     # change = 涨跌幅(小数)；tradable 由涨跌幅+ST 判定
     out["change"] = (df["pctChg"].astype(float) / 100.0).fillna(0.0)
@@ -159,7 +169,7 @@ def _build_out_df(code_lower: str, df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _write_stock_bins(code_lower: str, rows: list, global_calendar: list,
-                      qlib_dir: str) -> list:
+                      qlib_dir: str, old_calendar: list = None) -> list:
     """写入单只股票的 qlib bin，并返回 stock_daily 记录。"""
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
     if df.empty:
@@ -169,7 +179,8 @@ def _write_stock_bins(code_lower: str, rows: list, global_calendar: list,
     out = _build_out_df(code_lower, df)
 
     feat_dir = os.path.join(qlib_dir, "features", code_lower)
-    _sync_stock_bin(feat_dir, out, global_calendar, BIN_FIELDS, overwrite=True)
+    _sync_stock_bin(feat_dir, out, global_calendar, BIN_FIELDS, overwrite=True,
+                    old_calendar=old_calendar)
 
     # stock_daily 全字段记录
     rec = []
@@ -217,7 +228,7 @@ def _get_write_pool():
 
 
 def _flush_chunk(per_stock: dict, global_calendar: list, qlib_dir: str,
-                 code_range: dict, pg_rows: list) -> int:
+                 code_range: dict, pg_rows: list, old_calendar: list = None) -> int:
     """写一批股票 bin 并收集 stock_daily 记录，返回成功股票数。
 
     每只股票的 bin 写入相互独立，用线程池并行写，缩短写盘耗时，
@@ -226,7 +237,7 @@ def _flush_chunk(per_stock: dict, global_calendar: list, qlib_dir: str,
     ex = _get_write_pool()
     success = 0
     futures = {
-        code_lower: ex.submit(_write_stock_bins, code_lower, rows, global_calendar, qlib_dir)
+        code_lower: ex.submit(_write_stock_bins, code_lower, rows, global_calendar, qlib_dir, old_calendar)
         for code_lower, rows in per_stock.items()
     }
     for code_lower, fut in futures.items():
@@ -237,7 +248,9 @@ def _flush_chunk(per_stock: dict, global_calendar: list, qlib_dir: str,
             continue
         pg_rows.extend(rec)
         if rec:
-            dates = sorted({r["trade_date"] for r in rec})
+            # code_range 种子来自 _load_existing_ranges（字符串 'YYYY-MM-DD'），
+            # 新记录是 datetime.date —— 统一转字符串再比较，避免 min/max 跨类型崩溃
+            dates = sorted({_fmt_ymd(r["trade_date"]) for r in rec})
             prev = code_range.get(code_lower)
             code_range[code_lower] = [min(dates[0], prev[0]) if prev else dates[0],
                                       max(dates[-1], prev[1]) if prev else dates[-1]]
@@ -252,6 +265,15 @@ def _fmt_ymd(v):
     return str(v)[:10]
 
 
+def _as_date(v):
+    """任意日期值 → datetime.date（asyncpg DATE 列需要 date 对象而非 str）。"""
+    if isinstance(v, str):
+        return date.fromisoformat(v[:10])
+    if isinstance(v, datetime):
+        return v.date()
+    return v
+
+
 async def _insert_stock_daily(rows: list) -> set:
     """批量落库 stock_daily（幂等，分批防 asyncpg 参数上限）。
 
@@ -261,6 +283,9 @@ async def _insert_stock_daily(rows: list) -> set:
     """
     if not rows:
         return set()
+    # 防御：asyncpg 对 DATE 列要求 date 对象，传 str 会抛 DataError；
+    # 统一转成 date 对象，避免个别记录类型漂移导致整批插入失败
+    rows = [dict(r, trade_date=_as_date(r["trade_date"])) for r in rows]
     dates = {_fmt_ymd(r["trade_date"]) for r in rows}
     # asyncpg 单条 SQL 最多 32767 个参数：18 字段 × 每行 = 18 参数，
     # 每批最多 1000 行（18000 参数），超出则拆批，避免 InterfaceError。
@@ -356,6 +381,84 @@ def _write_instrument_file(qlib_dir: str, name: str, entries: list) -> None:
     with open(path, "w") as f:
         for code, s, e in sorted(entries):
             f.write(f"{code}\t{s}\t{e}\n")
+
+
+def _fetch_membership_history(api_name: str, sample_dates: list) -> dict:
+    """拉取指数点按时点成分，返回 {code: [(start, end), ...]} 成员区间。
+
+    背景：baostock query_hs300_stocks(date) 返回"该日期"的指数成分（点按时点），
+    支持按历史日期查询。定期采样后拼接成每只股票的成员区间，写入 instruments
+    文件可实现动态成分股（消除幸存者偏差：只有当时在指数内的股票才可交易）。
+    """
+    spans_by_code: dict[str, list] = {}
+    prev_dates: dict[str, str] = {}
+    from app.services.data.baostock_client import _ensure_login
+    _ensure_login()
+    for sample in sample_dates:
+        try:
+            rows = _fetch_all_sync(api_name, sample)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s 采样 %s 失败: %s", api_name, sample, e)
+            continue
+        cur_codes = {from_baostock_code(r["code"]).lower() for r in rows}
+        # 上期在册且本期不在册 -> 关闭区间
+        for code in list(prev_dates.keys()):
+            if code not in cur_codes:
+                spans_by_code.setdefault(code, []).append((prev_dates.pop(code), sample))
+        # 本期在册 -> 记录起点（若已 open 则保持）
+        for code in cur_codes:
+            prev_dates.setdefault(code, sample)
+    # 尾随区间：仍在册的延伸到采样最后一天
+    last_sample = sample_dates[-1]
+    for code, start in prev_dates.items():
+        spans_by_code.setdefault(code, []).append((start, last_sample))
+    # 相邻区间合并（防御：同一代码多次连续在册被重复追加）
+    for code, spans in spans_by_code.items():
+        spans.sort()
+        merged = [spans[0]]
+        for s, e in spans[1:]:
+            if s <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        spans_by_code[code] = merged
+    return spans_by_code
+
+
+def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
+                                 sample_interval_days: int = 90) -> dict:
+    """按点按时点重建 csi300/csi500 动态成分 instruments 文件。
+
+    用 baostock 历史成分查询，以 sample_interval_days 间隔采样整个日历，
+    生成每只股票的真实成员区间（可多次写入同一 code 不同日期段）。
+    qlib 的 instruments 解析会按 (start, end) 区间掩码因子数据，
+    从而在回测/评价中实现动态成分（避免幸存者偏差）。
+
+    Returns:
+        dict: 各指数文件写入的代码数（供日志/状态展示）。
+    """
+    cal_start, cal_end = calendar[0], calendar[-1]
+    if len(calendar) < 2:
+        return {}
+    sample_dates = calendar[::max(1, sample_interval_days)]
+    if sample_dates[-1] != cal_end:
+        sample_dates.append(cal_end)
+
+    counts = {}
+    for name, api in (("csi300", "query_hs300_stocks"), ("csi500", "query_zz500_stocks")):
+        try:
+            spans = _fetch_membership_history(api, sample_dates)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s 动态成分重建失败: %s", name, e)
+            continue
+        entries = []
+        for code, spans_list in spans.items():
+            for s, e in spans_list:
+                entries.append((code, s, e))
+        _write_instrument_file(qlib_dir, name, entries)
+        counts[name] = len(spans)
+        logger.info("%s 动态成分写入完成: %d 只股票", name, len(spans))
+    return counts
 
 
 def _build_instruments(qlib_dir: str, code_range: dict, calendar: list,
@@ -474,6 +577,7 @@ async def _run_backfill_downloads(
     chunk_days: int = 1,
     queue_max: int = 8,
     written_days: set = None,
+    old_calendar: list = None,
 ) -> int:
     """流水线式回填下载：串行拉取 + 后台并行写盘，写盘不耽误下载。
 
@@ -511,12 +615,22 @@ async def _run_backfill_downloads(
             except asyncio.TimeoutError:
                 logger.warning("baostock 拉取 %s 超时(120s)，跳过该日", d)
                 continue
+            except BaostockQuotaError as e:
+                # 当日请求配额耗尽，中止整个回填，避免逐日无谓重试
+                logger.error("baostock 回填中止: %s", e)
+                break
             except Exception as e:
                 logger.warning("baostock 拉取 %s 失败: %s", d, e)
                 continue
             _up(pct=5 + (i + 1) / total * 80, status="running",
                 message=f"baostock 回填 {d} ({i + 1}/{total})")
-            await queue.put((d, df_norm))
+            # fetch 成功后才检查消费者健康：消费者已退出则立即中止，
+            # 否则数据只会在队列里越积越多，且 queue.put 无超时会永久挂起
+            if consumer_task.done():
+                raise RuntimeError("backfill 消费者任务已退出，同步中止")
+            # 入队超时 600s：消费者每批要重写全市场 bin（分钟级），
+            # 短超时会误杀健康同步；600s 只兜底真正卡死的场景
+            await asyncio.wait_for(queue.put((d, df_norm)), timeout=600)
 
     async def _consumer():
         nonlocal success_stocks
@@ -527,10 +641,13 @@ async def _run_backfill_downloads(
             item = await queue.get()
             if item is None:
                 if per_stock:
-                    success_stocks += await asyncio.to_thread(
-                        _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows
+                    success_stocks += await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar
+                        ),
+                        timeout=600,
                     )
-                    _dates = await _insert_stock_daily(pg_rows)
+                    _dates = await asyncio.wait_for(_insert_stock_daily(pg_rows), timeout=300)
                     if _dates:
                         written_days.update(_dates)
                         _write_calendar(qlib_dir, sorted(written_days))
@@ -541,10 +658,13 @@ async def _run_backfill_downloads(
             _accumulate(per_stock, df_norm)
             processed += 1
             if processed % chunk_days == 0:
-                success_stocks += await asyncio.to_thread(
-                    _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows
+                success_stocks += await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar
+                    ),
+                    timeout=600,
                 )
-                _dates = await _insert_stock_daily(pg_rows)
+                _dates = await asyncio.wait_for(_insert_stock_daily(pg_rows), timeout=300)
                 if _dates:
                     # 数据读写成功即回填日历，与数据库保持同步
                     written_days.update(_dates)
@@ -554,17 +674,25 @@ async def _run_backfill_downloads(
                 pg_rows = []
                 per_stock = {}
 
-    consumer = asyncio.create_task(_consumer())
+    producer_task = asyncio.create_task(_producer())
+    consumer_task = asyncio.create_task(_consumer())
+
     try:
-        try:
-            await _producer()
-        finally:
-            # 无论生产者是否异常，都必须放入结束哨兵，避免消费者永久等待
-            await queue.put(None)
-        await consumer
+        # 等生产者结束（内部检测到消费者死亡会主动抛错，不会永久挂起）
+        await producer_task
+        # 生产者正常结束：放哨兵让消费者写尾批
+        await asyncio.wait_for(queue.put(None), timeout=600)
+        await consumer_task
     finally:
-        if not consumer.done():
-            consumer.cancel()
+        # 消费者异常必须记录，否则会被静默吞掉
+        if consumer_task.done() and not consumer_task.cancelled():
+            exc = consumer_task.exception()
+            if exc is not None:
+                logger.error("backfill 消费者异常: %s", exc)
+        if not consumer_task.done():
+            consumer_task.cancel()
+        if not producer_task.done():
+            producer_task.cancel()
     return success_stocks
 
 
@@ -583,7 +711,7 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
     """
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
-    init_progress(universe, "baostock")
+    init_progress(universe, "baostock", writes_bins=True)
 
     try:
         await asyncio.to_thread(_ensure_login)
@@ -602,8 +730,9 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
         existing_calendar = _get_calendar(qlib_dir)
         global_calendar = sorted(set(trade_dates) | set(existing_calendar))
         # 去重：是否已下载以数据库 stock_daily 为准（决策口径）。
-        # day.txt 由库重建，二者本应一致；union 兼顾客历未及时跟新的异常场景。
-        already_downloaded = set(existing_calendar) | await _load_existing_dates()
+        # 注意：不要并入 existing_calendar（day.txt）——若上次同步把尚无数据的
+        # 交易日（如"今天"）写进了 day.txt，并进去会导致该日永远不再补拉。
+        already_downloaded = await _load_existing_dates()
         to_download = _select_new_dates(trade_dates, already_downloaded)
         # 用既有每股数据区间作种子，保证跳过已下载日期后 instruments 仍保留最早历史；
         # stock_daily 为空（如历史数据来自增量EOD路径）时回退到 features 目录推断。
@@ -619,6 +748,9 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
                 to_download, global_calendar, qlib_dir, code_range,
                 chunk_days=_CHUNK_DAYS, queue_max=_QUEUE_MAX,
                 written_days=set(already_downloaded),
+                # 旧 bin 对齐的是回填前的 day.txt（位于 global_calendar 后缀），
+                # 必须传旧日历，否则旧数据会被映射到错误位置而丢失
+                old_calendar=existing_calendar,
             )
         else:
             success_stocks = 0
@@ -629,6 +761,37 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
         # 数据落盘后按数据库重建日历，保证 day.txt 与已落库日期完全对齐；
         # 中断时也只写到库里已有的日期，不会污染日历导致后续漏下。
         await rebuild_calendar_from_db(qlib_dir)
+        # bin 是按 global_calendar（含窗口内尚无数据的交易日，如"今天"）对齐写入的，
+        # day.txt 必须并入 global_calendar 保持一致，否则 bin 比 day.txt 多一天，
+        # 所有股票 bin 会被校验标记为长度异常。无数据的日子是全 NaN，收盘后增量同步会补上。
+        _data_dates = set(await _load_existing_dates())
+        _final_cal = sorted(_data_dates | set(global_calendar))
+        if len(_final_cal) != len(_data_dates):
+            _write_calendar(qlib_dir, _final_cal)
+            logger.info("day.txt 并入窗口交易日: %d -> %d 天", len(_data_dates), len(_final_cal))
+
+        # 日历扩展后，无新日数据的股票（退市/长期停牌）bin 仍是旧长度，统一补 NaN 对齐，
+        # 否则校验会报"长度异常"（如新增"今天"一个交易日时）
+        from app.services.data.eod_incremental import _pad_bins_to_calendar
+        _pad_bins_to_calendar(qlib_dir, _final_cal)
+
+        # 日历可能被本轮回填扩展（如 5 年→10 年）；若此前已广播过外盘因子
+        # （对齐到旧日历），这里按最终日历重新对齐广播，避免长度异常。
+        try:
+            from app.services.data.external_market import rebroadcast_external_market
+            rb = await asyncio.to_thread(rebroadcast_external_market, qlib_dir)
+            if rb.get("rebroadcasted"):
+                logger.info("外盘因子已按最终日历重新对齐广播: %s", rb)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("外盘因子重新对齐广播失败（可稍后手动重拉）: %s", e)
+        # 宏观字段同样按最终日历重广播（尽力而为，失败可稍后在宏观页同步）
+        try:
+            from app.services.data.macro_sync import broadcast_macro_to_bins
+            n = await broadcast_macro_to_bins(qlib_dir)
+            if n:
+                logger.info("宏观字段已按最终日历重广播: %d 股票字段", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("宏观字段重广播失败（可稍后在宏观页同步）: %s", e)
 
         # 基础资料 / 行业 / 日历
         update_progress(pct=88, status="running", message="入库股票基本资料/行业分类...")
@@ -647,20 +810,24 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
             logger.warning("stock_industry 拉取失败: %s", e)
         await _insert_misc(df_basic, df_industry, global_calendar)
 
-        # 指数成分股 + instruments
-        update_progress(pct=94, status="running", message="构建股票池 instruments...")
-        hs300 = zz500 = []
+        # 指数成分股 + instruments（动态成分：按点按时点采样，消除幸存者偏差）
+        update_progress(pct=94, status="running", message="构建动态股票池 instruments...")
         try:
-            hs300 = [r["code"] for r in await asyncio.to_thread(
-                _fetch_all_sync, "query_hs300_stocks", end.strftime("%Y-%m-%d"))]
-        except Exception as e:
-            logger.warning("hs300 成分拉取失败: %s", e)
-        try:
-            zz500 = [r["code"] for r in await asyncio.to_thread(
-                _fetch_all_sync, "query_zz500_stocks", end.strftime("%Y-%m-%d"))]
-        except Exception as e:
-            logger.warning("zz500 成分拉取失败: %s", e)
-        _build_instruments(qlib_dir, code_range, global_calendar, hs300, zz500)
+            _rebuild_dynamic_instruments(qlib_dir, global_calendar)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("动态成分重建失败，回退静态快照: %s", e)
+            hs300 = zz500 = []
+            try:
+                hs300 = [r["code"] for r in await asyncio.to_thread(
+                    _fetch_all_sync, "query_hs300_stocks", end.strftime("%Y-%m-%d"))]
+            except Exception as e2:  # noqa: BLE001
+                logger.warning("hs300 成分拉取失败: %s", e2)
+            try:
+                zz500 = [r["code"] for r in await asyncio.to_thread(
+                    _fetch_all_sync, "query_zz500_stocks", end.strftime("%Y-%m-%d"))]
+            except Exception as e2:  # noqa: BLE001
+                logger.warning("zz500 成分拉取失败: %s", e2)
+            _build_instruments(qlib_dir, code_range, global_calendar, hs300, zz500)
 
         # 更新同步状态
         await _update_sync_status(universe, qlib_dir, global_calendar, code_range)
@@ -785,7 +952,8 @@ async def mark_sync_failed(universe: str, error: str):
 async def run_baostock_backfill_task(req) -> None:
     """后台任务包装：按请求执行 baostock 回填并更新状态。"""
     from app.schemas.quant import SyncDataRequest
-    universe = req.universe or settings.quant.get("universe", "csi300")
+    # 回填本质是全市场拉取，universe 仅作状态记录标签；默认 all 反映真实范围
+    universe = req.universe or "all"
     years = req.years or int(settings.quant.get("backfill_years", 5))
     try:
         result = await run_baostock_backfill(years=years, universe=universe)

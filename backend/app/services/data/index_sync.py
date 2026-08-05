@@ -35,6 +35,18 @@ DEFAULT_INDEX_LIST = [
     "sh000688",  # 科创50
 ]
 
+# 指数中文名（注册 stock_index 主表用，便于校验时区分指数与股票）
+INDEX_NAMES: dict[str, str] = {
+    "sh000001": "上证指数",
+    "sh000300": "沪深300",
+    "sh000016": "上证50",
+    "sh000905": "中证500",
+    "sh000852": "中证1000",
+    "sz399001": "深证成指",
+    "sz399006": "创业板指",
+    "sh000688": "科创50",
+}
+
 # qlib 指数字段（与 chenditc 指数 bin 一致：open/high/low/close/volume）
 INDEX_FIELDS = ["open", "high", "low", "close", "volume"]
 
@@ -63,10 +75,15 @@ def _fetch_index_via_baostock(qlib_code: str, start_date: str, end_date: str) ->
         RuntimeError: baostock 调用失败
     """
     import baostock as bs
-    from app.services.data.baostock_client import to_baostock_code, _ensure_login
+    from app.services.data.baostock_client import (
+        to_baostock_code,
+        _ensure_login,
+        _consume_request_slot,
+    )
 
     bs_code = to_baostock_code(qlib_code)  # sh000001 -> sh.000001
     _ensure_login()
+    _consume_request_slot()
     rs = bs.query_history_k_data_plus(
         code=bs_code,
         fields="date,code,open,high,low,close,volume,amount",
@@ -89,11 +106,58 @@ def _fetch_index_via_baostock(qlib_code: str, start_date: str, end_date: str) ->
     return df
 
 
+def _fetch_index_via_akshare(qlib_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """通过 akshare 拉取单个指数日K（baostock 缺失指数如科创50 的兜底）。
+
+    双源：优先东财 index_zh_a_hist（列 日期/开盘/...），失败时回退新浪
+    stock_zh_index_daily（列 date/open/high/low/close/volume，按 qlib 全代码）。
+    新浪源对科创50等新指数更稳定，东财近期常出现 RemoteDisconnected 断连。
+    归一化为 date,open,high,low,close,volume，与 baostock 分支一致。
+    """
+    import akshare as ak
+
+    empty = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+    # 源1：东财
+    symbol = qlib_code[2:]  # sh000688 -> 000688
+    try:
+        df = ak.index_zh_a_hist(
+            symbol=symbol, period="daily",
+            start_date=str(start_date).replace("-", ""),
+            end_date=str(end_date).replace("-", ""),
+        )
+        if df is not None and not df.empty:
+            return pd.DataFrame({
+                "date": df["日期"].astype(str),
+                "open": pd.to_numeric(df["开盘"], errors="coerce"),
+                "high": pd.to_numeric(df["最高"], errors="coerce"),
+                "low": pd.to_numeric(df["最低"], errors="coerce"),
+                "close": pd.to_numeric(df["收盘"], errors="coerce"),
+                "volume": pd.to_numeric(df["成交量"], errors="coerce"),
+            })
+    except Exception as e:
+        logger.warning("akshare 东财指数 %s 拉取失败，尝试新浪: %s", qlib_code, str(e)[:120])
+
+    # 源2：新浪（date 为 datetime.date，astype(str) 即 YYYY-MM-DD）
+    try:
+        df = ak.stock_zh_index_daily(symbol=qlib_code)
+        if df is None or df.empty:
+            return empty
+        df = df[["date", "open", "high", "low", "close", "volume"]].copy()
+        df["date"] = df["date"].astype(str)
+        for c in ["open", "high", "low", "close", "volume"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception as e:
+        logger.warning("akshare 新浪指数 %s 拉取失败: %s", qlib_code, str(e)[:120])
+        return empty
+
+
 def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 365) -> dict:
-    """通过 baostock 同步指数到 qlib bin。
+    """同步指数到 qlib bin（baostock 为主，akshare 兜底缺失指数）。
 
     指数清单由 config.quant.sync_indices 配置，默认含 8 大指数。
-    指数同步不扩展日历（chenditc 日历已完整），仅按现有日历对齐写入。
+    指数同步不扩展日历（以现有 day.txt 为准对齐写入）。
 
     Args:
         provider_uri: qlib 数据目录
@@ -118,16 +182,34 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
     success = 0
     failed = 0
     indices_synced = []
+    sources_used: set[str] = set()
+
+    # 前端进度：逐指数更新（worker 已 init_progress("indices")）
+    from app.services.data.sync_progress import update_progress
+
+    total_ind = len(index_list)
 
     # 拉取日期范围：从日历起始到今天
     start_date = calendar[0]
     end_date = datetime.now().strftime("%Y-%m-%d")
 
-    for qlib_code in index_list:
+    from app.services.data.baostock_client import BaostockQuotaError
+
+    for idx, qlib_code in enumerate(index_list):
+        update_progress(
+            pct=5 + int(90 * idx / max(total_ind, 1)), status="running",
+            message=f"同步指数 {idx + 1}/{total_ind}（{qlib_code}）...",
+        )
         try:
             df = _fetch_index_via_baostock(qlib_code, start_date, end_date)
+            source_used = "baostock"
             if df is None or df.empty:
-                logger.warning("指数 %s 无数据", qlib_code)
+                # baostock 无此指数（如科创50）→ akshare 兜底
+                logger.info("指数 %s baostock 无数据，尝试 akshare 兜底", qlib_code)
+                df = _fetch_index_via_akshare(qlib_code, start_date, end_date)
+                source_used = "akshare"
+            if df is None or df.empty:
+                logger.warning("指数 %s 无数据（baostock+akshare 均无）", qlib_code)
                 failed += 1
                 continue
 
@@ -153,20 +235,26 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
                         values[cal_index[d]] = float(val)
                 _write_bin(bin_path, values, 0)
 
-            logger.info("指数 %s 同步完成: %d 条数据", qlib_code, len(df))
+            logger.info("指数 %s 同步完成(%s): %d 条数据", qlib_code, source_used, len(df))
             success += 1
             indices_synced.append(qlib_code)
+            sources_used.add(source_used)
 
+        except BaostockQuotaError as e:
+            # 当日请求配额耗尽，中止整个指数同步，避免逐只无谓重试
+            logger.error("指数同步中止: %s", e)
+            break
         except Exception as e:
             logger.error("指数 %s 同步失败: %s", qlib_code, e)
             failed += 1
 
-    logger.info("指数同步完成(baostock): 成功%d, 失败%d, 共%d", success, failed, len(index_list))
+    source = "+".join(sorted(sources_used)) if sources_used else "none"
+    logger.info("指数同步完成: 成功%d, 失败%d, 共%d", success, failed, len(index_list))
     return {
         "ok": True,
         "success": success,
         "failed": failed,
         "indices": indices_synced,
         "total": len(index_list),
-        "source": "baostock",
+        "source": source,
     }

@@ -12,17 +12,23 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!token.value)
 
-  /** 探测后端鉴权是否开启 */
-  async function fetchStatus() {
-    try {
-      const data = await getAuthStatus()
-      authEnabled.value = data?.auth_enabled ?? false
-    } catch (e) {
-      // 探测失败时保守地认为未开启，避免本地开发被锁死
-      authEnabled.value = false
-    } finally {
-      statusLoaded.value = true
+  /** 探测后端鉴权是否开启（单例：并发调用共享同一次请求） */
+  let statusPromise = null
+  function fetchStatus() {
+    if (!statusPromise) {
+      statusPromise = (async () => {
+        try {
+          const data = await getAuthStatus()
+          authEnabled.value = data?.auth_enabled ?? false
+        } catch (e) {
+          // 探测失败时保守地认为未开启，避免本地开发被锁死
+          authEnabled.value = false
+        } finally {
+          statusLoaded.value = true
+        }
+      })()
     }
+    return statusPromise
   }
 
   /** 登录 */
@@ -55,8 +61,15 @@ export const useAuthStore = defineStore('auth', () => {
   const needAuth = computed(() => authEnabled.value && !token.value)
 
   return {
-    token, authEnabled, user, statusLoaded,
-    isAuthenticated, needAuth,
-    fetchStatus, login, fetchUser, logout,
+    token,
+    authEnabled,
+    user,
+    statusLoaded,
+    isAuthenticated,
+    needAuth,
+    fetchStatus,
+    login,
+    fetchUser,
+    logout,
   }
 })

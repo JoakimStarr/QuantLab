@@ -50,6 +50,9 @@ mining:
   automl:
     combo_method: lightgbm
   llm:
+    # AI 策略选因子的达标阈值（区别于 ic_threshold=0.03 的挖掘线，
+    # A 股截面 IC 0.02-0.03 已可用，用 0.03 达标池过小 AI 无法生成策略）
+    strategy_ic_threshold: 0.02
     allowed_ops:
     - Ref
     - Mean
@@ -84,6 +87,24 @@ mining:
     - $pb_mrq
     - $ps_ttm
     - $pcf_ncf_ttm
+    # 季频财报字段（fundamental_sync PIT 广播后可用）
+    - $netprofit
+    - $revenue
+    - $netprofit_deduct
+    - $roe
+    - $roa
+    - $gross_margin
+    - $net_margin
+    - $debt_ratio
+    - $ocf
+    - $eps
+    - $bvps
+    - $revenue_yoy
+    - $netprofit_yoy
+    - $ocf_to_np
+    - $current_ratio
+    - $quick_ratio
+    - $equity_multiplier
     candidates_per_run: 10
     diversity_max_factors: 20
     eval_timeout_seconds: 60

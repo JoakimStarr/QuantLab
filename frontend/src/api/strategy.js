@@ -25,6 +25,10 @@ export function getBacktestResult(resultId) {
   return request.get('/strategies/backtest-results/' + resultId)
 }
 
+export function deleteBacktestResult(resultId) {
+  return request.delete('/strategies/backtest-results/' + resultId)
+}
+
 export function getAllBacktestStatuses() {
   return request.get('/strategies/backtest-statuses')
 }

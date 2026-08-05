@@ -16,14 +16,19 @@ _MIN_STRATEGY_FACTORS = 2
 
 
 async def _load_qualified_factors(limit: int = 30) -> list[dict]:
-    """加载因子库中已达标（|IC|>=阈值 且 icir 不为空）的因子，按 ICIR 降序。"""
+    """加载因子库中已达标（|IC|>=阈值 且 icir 不为空）的因子，按 ICIR 降序。
+
+    阈值用 AI 策略独立的 strategy_ic_threshold（默认 0.02），
+    区别于挖掘的 ic_threshold（0.03）——A 股截面 IC 0.02-0.03 已属可用，
+    用挖掘阈值会导致达标池过小、AI 无从选因子。
+    """
     from sqlalchemy import select, func
     from app.core.config import settings
     from app.core.database import async_session
     from app.models.factor import Factor
     from app.services.factor.library import _to_dict
 
-    threshold = settings.mining.get("llm", {}).get("ic_threshold", 0.03)
+    threshold = settings.mining.get("llm", {}).get("strategy_ic_threshold", 0.02)
     async with async_session() as session:
         result = await session.execute(
             select(Factor)
@@ -74,11 +79,41 @@ async def _load_correlation_hint(factor_ids: list[int]) -> str:
         return None
 
 
+async def _existing_strategy_suffix(factor_ids: list[int], method: str) -> int:
+    """统计同因子组合 + 同组合方式的已有策略数量（用于名称加序号去重）。
+
+    LLM 有偏好高分因子的倾向，连续生成可能选同一组因子 → 生成同名策略。
+    返回已存在的同组合策略数，0 表示无重复。
+    """
+    from sqlalchemy import select
+    from app.core.database import async_session
+    from app.models.strategy import Strategy
+
+    target = sorted(factor_ids)
+    async with async_session() as session:
+        result = await session.execute(
+            select(Strategy.factor_ids, Strategy.combination_method)
+            .where(Strategy.status != "archived")
+        )
+        n = 0
+        for fid_json, cm in result.all():
+            try:
+                fids = sorted(json.loads(fid_json))
+            except Exception:
+                continue
+            if fids == target and (cm or "equal_weight") == (method or "equal_weight"):
+                n += 1
+    return n
+
+
 async def generate_strategy_with_ai(
     universe: str = None,
     start: str = None,
     end: str = None,
     prefer_factor_ids: list[int] = None,
+    style: str = None,
+    risk_tolerance: str = None,
+    rebalance_pref: str = None,
 ) -> dict:
     """AI 生成策略：参考因子评价自动推荐因子组合与参数。
 
@@ -102,6 +137,16 @@ async def generate_strategy_with_ai(
         constraints.append(f"股票池: {universe}")
     if start and end:
         constraints.append(f"回测区间: {start} ~ {end}")
+    # 用户偏好：风格/风险偏好/调仓频率
+    style_label = {"momentum": "动量", "reversal": "反转", "lowvol": "低波动",
+                   "value": "价值", "growth": "成长", "volprice": "量价"}.get(style or "", "")
+    if style_label:
+        constraints.append(f"偏好风格: {style_label}（优先选该风格因子）")
+    risk_label = {"conservative": "稳健", "balanced": "平衡", "aggressive": "激进"}.get(risk_tolerance or "", "")
+    if risk_label:
+        constraints.append(f"风险偏好: {risk_label}（稳健=低换手低回撤、小 topk；激进=更高收益弹性）")
+    if rebalance_pref in ("day", "week", "month"):
+        constraints.append(f"调仓频率偏好: {rebalance_pref}")
     constraint_str = "；".join(constraints) or None
 
     messages = build_strategy_gen_prompt(
@@ -127,6 +172,10 @@ async def generate_strategy_with_ai(
 
     selected = [f for f in factors if f["id"] in factor_ids]
     name = "AI策略-" + "+".join(f["name"][:6] for f in selected)[:30]
+    # 同因子组合策略去重：已有相同组合则名称加序号，避免生成完全重复的策略
+    dup = await _existing_strategy_suffix(factor_ids, method)
+    if dup:
+        name = f"{name}-{dup + 1}"
     rationale = raw.get("rationale") or "AI 根据因子 IC/ICIR 与相关性自动推荐"
 
     strategy = await create_strategy(
@@ -206,7 +255,9 @@ async def review_backtest_with_ai(strategy_id: int, result_id: int = None) -> di
         results = await list_backtest_results(strategy_id, limit=1)
         if not results:
             raise ValueError(f"策略 {strategy_id} 没有回测结果可复盘")
-        result = results[0]
+        # 列表接口自 v2.4 起返回轻量摘要（不含 trades/nav_curve），
+        # 复盘需完整数据，这里按 id 拉取全量记录。
+        result = await get_backtest_result(results[0]["id"]) or results[0]
 
     metrics = _extract_metrics(result)
     key_events = _extract_key_events(result)

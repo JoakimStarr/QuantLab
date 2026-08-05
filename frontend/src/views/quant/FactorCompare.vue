@@ -34,12 +34,7 @@
           style="width: 100%"
           :loading="factorsLoading"
         >
-          <el-option
-            v-for="item in allFactors"
-            :key="item.id"
-            :label="formatFactorLabel(item)"
-            :value="item.id"
-          >
+          <el-option v-for="item in allFactors" :key="item.id" :label="formatFactorLabel(item)" :value="item.id">
             <div class="factor-option">
               <span class="factor-option__name">{{ item.name }}</span>
               <span class="factor-option__meta">
@@ -150,6 +145,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme } from '@/utils/chartTheme'
@@ -194,9 +190,7 @@ const comparing = ref(false)
 
 // 已选因子名称摘要（折叠时展示）
 const selectedNames = computed(() => {
-  return selectedFactorIds.value
-    .map(id => allFactors.value.find(f => f.id === id)?.name || `#${id}`)
-    .join('、')
+  return selectedFactorIds.value.map((id) => allFactors.value.find((f) => f.id === id)?.name || `#${id}`).join('、')
 })
 
 // 类别映射
@@ -205,7 +199,7 @@ const categoryMap = {
   llm: { label: 'LLM', badge: 'success' },
   symbolic: { label: '符号', badge: 'warning' },
   text: { label: '文本', badge: 'info' },
-  automl: { label: 'AutoML', badge: 'danger' }
+  automl: { label: 'AutoML', badge: 'danger' },
 }
 const categoryLabel = (c) => categoryMap[c]?.label || c || '—'
 const categoryBadgeClass = (c) => `badge--${categoryMap[c]?.badge || 'muted'}`
@@ -215,7 +209,7 @@ const decayOption = computed(() => {
   void themeRev.value
   const factors = factorList.value
   const series = Object.entries(decayData.value).map(([fid, points], idx) => {
-    const factor = factors.find(f => String(f.id) === String(fid))
+    const factor = factors.find((f) => String(f.id) === String(fid))
     const color = colors[idx % colors.length]
     return {
       name: factor?.name || `因子${fid}`,
@@ -225,7 +219,7 @@ const decayOption = computed(() => {
       symbolSize: 7,
       lineStyle: { width: 2, color },
       itemStyle: { color },
-      data: points.map(p => [p.lag, Number(p.ic)])
+      data: points.map((p) => [p.lag, Number(p.ic)]),
     }
   })
   return {
@@ -233,18 +227,30 @@ const decayOption = computed(() => {
       trigger: 'axis',
       formatter: (params) => {
         let html = `Lag: ${params[0]?.axisValue}<br/>`
-        params.forEach(p => {
+        params.forEach((p) => {
           html += `${p.marker} ${p.seriesName}: ${Number(p.value[1]).toFixed(4)}<br/>`
         })
         return html
-      }
+      },
     },
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     textStyle: { color: chartTheme.axisText() },
     grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
-    xAxis: { type: 'value', name: 'Lag', nameLocation: 'middle', nameGap: 30, axisLabel: { color: chartTheme.axisText() } },
-    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
-    series
+    xAxis: {
+      type: 'value',
+      name: 'Lag',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: chartTheme.axisText() },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'IC',
+      nameLocation: 'middle',
+      nameGap: 40,
+      axisLabel: { color: chartTheme.axisText() },
+    },
+    series,
   }
 })
 
@@ -254,15 +260,15 @@ const seriesOption = computed(() => {
   const factors = factorList.value
   // 收集所有日期并排序
   const allDates = new Set()
-  Object.values(seriesData.value).forEach(points => {
-    points.forEach(p => allDates.add(p.date))
+  Object.values(seriesData.value).forEach((points) => {
+    points.forEach((p) => allDates.add(p.date))
   })
   const dates = [...allDates].sort()
 
   const series = Object.entries(seriesData.value).map(([fid, points], idx) => {
-    const factor = factors.find(f => String(f.id) === String(fid))
+    const factor = factors.find((f) => String(f.id) === String(fid))
     const color = colors[idx % colors.length]
-    const map = new Map(points.map(p => [p.date, Number(p.ic)]))
+    const map = new Map(points.map((p) => [p.date, Number(p.ic)]))
     return {
       name: factor?.name || `因子${fid}`,
       type: 'line',
@@ -271,10 +277,10 @@ const seriesOption = computed(() => {
       lineStyle: { width: 1.5, color },
       itemStyle: { color },
       connectNulls: true,
-      data: dates.map(d => {
+      data: dates.map((d) => {
         const v = map.get(d)
         return v === undefined ? null : v
-      })
+      }),
     }
   })
 
@@ -284,9 +290,15 @@ const seriesOption = computed(() => {
     legend: { top: 0, textStyle: { color: chartTheme.axisText() } },
     grid: { left: '3%', right: '4%', bottom: '12%', top: 40, containLabel: true },
     xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: chartTheme.axisText() } },
-    yAxis: { type: 'value', name: 'IC', nameLocation: 'middle', nameGap: 40, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: {
+      type: 'value',
+      name: 'IC',
+      nameLocation: 'middle',
+      nameGap: 40,
+      axisLabel: { color: chartTheme.axisText() },
+    },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, textStyle: { color: chartTheme.axisText() } }],
-    series
+    series,
   }
 })
 
@@ -320,7 +332,7 @@ function normalizeSeries(data) {
   const ts = data?.ic_timeseries || data?.ic_series || data?.series
   if (Array.isArray(ts)) {
     const map = {}
-    ts.forEach(item => {
+    ts.forEach((item) => {
       const fid = String(item.factor_id)
       if (!map[fid]) map[fid] = []
       map[fid].push({ date: item.date, ic: Number(item.ic) })
@@ -356,9 +368,9 @@ async function loadAllFactors() {
 // 同步 URL ids → 选择器（保证从分享链接进入时选择器已预选）
 function syncSelectionFromIds(ids) {
   if (!ids || !ids.length) return
-  const nums = ids.map(id => Number(id)).filter(n => !Number.isNaN(n))
+  const nums = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n))
   // 只保留列表中存在的 id，避免显示空白 tag
-  const validIds = nums.filter(n => allFactors.value.some(f => f.id === n))
+  const validIds = nums.filter((n) => allFactors.value.some((f) => f.id === n))
   selectedFactorIds.value = validIds.length ? validIds : nums
 }
 
@@ -386,8 +398,10 @@ async function startCompare() {
       factorList.value = compareResult
     }
     seriesData.value = normalizeSeries(compareResult)
-    const decayPromises = factorIds.value.map(id =>
-      getFactorDecay(id).then(res => [id, normalizeDecay(res)]).catch(() => [id, []])
+    const decayPromises = factorIds.value.map((id) =>
+      getFactorDecay(id)
+        .then((res) => [id, normalizeDecay(res)])
+        .catch(() => [id, []])
     )
     const decayResults = await Promise.all(decayPromises)
     const decayMap = {}
@@ -422,8 +436,10 @@ async function loadCompareData(ids) {
       factorList.value = compareResult
     }
     seriesData.value = normalizeSeries(compareResult)
-    const decayPromises = ids.map(id =>
-      getFactorDecay(id).then(res => [id, normalizeDecay(res)]).catch(() => [id, []])
+    const decayPromises = ids.map((id) =>
+      getFactorDecay(id)
+        .then((res) => [id, normalizeDecay(res)])
+        .catch(() => [id, []])
     )
     const decayResults = await Promise.all(decayPromises)
     const decayMap = {}
@@ -446,7 +462,10 @@ async function loadData() {
 
   const idsParam = route.query.ids
   const ids = idsParam
-    ? String(idsParam).split(',').map(s => s.trim()).filter(Boolean)
+    ? String(idsParam)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
     : []
   if (ids.length === 0) {
     loading.value = false
@@ -586,23 +605,23 @@ onMounted(loadData)
   line-height: 1.6;
 
   &--primary {
-    background: rgba(31, 75, 160, 0.1);
+    background: var(--primary-soft);
     color: var(--primary);
   }
   &--success {
-    background: rgba(31, 157, 107, 0.1);
+    background: var(--success-soft);
     color: var(--success);
   }
   &--warning {
-    background: rgba(200, 128, 28, 0.1);
+    background: var(--warning-soft);
     color: var(--warning);
   }
   &--info {
-    background: rgba(47, 125, 194, 0.1);
+    background: var(--info-soft);
     color: var(--info);
   }
   &--danger {
-    background: rgba(210, 69, 69, 0.1);
+    background: var(--danger-soft);
     color: var(--danger);
   }
   &--muted {

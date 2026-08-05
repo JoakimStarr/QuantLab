@@ -6,7 +6,7 @@
 
 <script setup>
 defineProps({
-  narrow: Boolean
+  narrow: Boolean,
 })
 </script>
 

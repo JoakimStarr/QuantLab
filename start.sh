@@ -206,8 +206,9 @@ if [ "$MODE" = "dev" ]; then
         (cd "$SCRIPT_DIR/frontend" && npm install) || { red "npm install 失败"; exit 1; }
     fi
 
-    # 启动后端（tee 同时输出到终端和日志文件，dev 模式可见实时日志；
-    # set -m 创建进程组使 kill -- -PID 能工作）
+    # 启动后端（结构化日志由应用写入 logs/quantlab.log + logs/error.log，
+    # console handler 默认同步输出到终端；不再 tee 到 backend.log，
+    # 避免同一内容写三份：终端 + quantlab.log + backend.log）
     # 注：长同步任务（baostock 全量回填/EOD/repair）已迁移到独立 worker 子进程
     # （.venv/bin/python -m app.services.data.sync_worker，start_new_session 脱离本进程组），
     # 因此 --reload 触发重启时会立即退出，不会像以前那样"等待后台任务完成"而卡死。
@@ -216,10 +217,18 @@ if [ "$MODE" = "dev" ]; then
     set -m
     (
         cd "$SCRIPT_DIR/backend"
-        "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 | tee "$SCRIPT_DIR/logs/backend.log"
+        "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT"
     ) &
     BACKEND_PID=$!
     set +m
+
+    # 等后端健康检查通过后，再启动前端（避免前端启动时后端尚未就绪）
+    echo ""
+    wait_for_port "$BACKEND_PORT"  "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
+        red "后端启动失败，查看日志: tail -f logs/backend.log"
+        exit 1
+    }
+    echo ""
 
     # 启动前端
     blue "[2/2] 启动前端 (port $FRONTEND_PORT)..."
@@ -231,13 +240,7 @@ if [ "$MODE" = "dev" ]; then
     FRONTEND_PID=$!
     set +m
 
-    # 等待服务真正就绪（后端做 HTTP 健康检查，前端只检查端口）
-    echo ""
-    wait_for_port "$BACKEND_PORT"  "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
-        red "后端启动失败，查看日志: tail -f logs/backend.log"
-        exit 1
-    }
-    echo ""
+    # 前端只检查端口
     wait_for_port "$FRONTEND_PORT" "前端" 30 || {
         red "前端启动失败，查看日志: tail -f logs/frontend.log"
         exit 1
@@ -250,7 +253,7 @@ if [ "$MODE" = "dev" ]; then
     echo "  Backend:  http://localhost:$BACKEND_PORT"
     echo "  API Docs: http://localhost:$BACKEND_PORT/docs"
     echo "  Frontend: http://localhost:$FRONTEND_PORT"
-    echo "  Logs:     logs/backend.log  logs/frontend.log"
+    echo "  Logs:     logs/quantlab.log  logs/error.log  (前端日志页可视化查看)"
     green "========================================="
     yellow "按 Ctrl+C 停止所有服务"
     echo ""

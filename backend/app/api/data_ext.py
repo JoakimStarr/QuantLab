@@ -1,5 +1,6 @@
 """数据管理扩展 API：同步进度、数据预览、同步历史、数据源切换"""
 import logging
+import math
 import os
 import re
 from datetime import datetime
@@ -9,16 +10,28 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.errors import AppError
+from app.models.stock_index import StockIndex
 from app.models.sync_history import SyncHistory
 from app.schemas.common import ApiResponse
 from app.schemas.quant import RepairRequest
-from app.services.data.sync_progress import get_progress, sync_is_active
+from app.services.data.sync_progress import busy_message, get_progress, writes_bins_active
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
 _stock_catalog_cache: list[dict] | None = None
 _stock_catalog_updated_at: datetime | None = None
+
+
+def _clean_num(v):
+    """NaN/None/非数值 → None，其余转 float（回填进行中或停牌日 bin 会读到 NaN）。"""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) else f
 
 
 def _read_eod_result() -> dict | None:
@@ -138,14 +151,18 @@ async def data_preview_api(
                 date_str = dt.strftime("%Y-%m-%d")
             else:
                 date_str = str(dt)[:10]
+            # 回填进行中或停牌日会读到 NaN，统一转 null，避免 int(NaN) 崩溃
+            open_v, close_v = _clean_num(row.get("$open")), _clean_num(row.get("$close"))
+            high_v, low_v = _clean_num(row.get("$high")), _clean_num(row.get("$low"))
+            volume_v = _clean_num(row.get("$volume"))
             rows.append({
                 "date": date_str,
                 "code": inst,
-                "open": round(float(row.get("$open", 0)), 2),
-                "close": round(float(row.get("$close", 0)), 2),
-                "high": round(float(row.get("$high", 0)), 2),
-                "low": round(float(row.get("$low", 0)), 2),
-                "volume": int(row.get("$volume", 0)),
+                "open": round(open_v, 2) if open_v is not None else None,
+                "close": round(close_v, 2) if close_v is not None else None,
+                "high": round(high_v, 2) if high_v is not None else None,
+                "low": round(low_v, 2) if low_v is not None else None,
+                "volume": int(volume_v) if volume_v is not None else None,
             })
         return rows
 
@@ -397,11 +414,12 @@ async def eod_sync_api(
     universe: str = Query("csi300", description="股票池: csi300/csi500/all"),
     days: int = Query(5, ge=1, le=30, description="同步最近N天数据"),
     overwrite: bool = Query(False, description="是否覆盖已有日期数据"),
+    source: str = Query("baostock", description="数据源: baostock（主源，一次拉全市场）/ akshare（兜底，逐只爬）"),
 ):
-    """增量同步EOD数据（基于akshare国内源，拉取最近N天日K数据）- 独立 worker 后台执行
+    """增量同步EOD数据（拉取最近N天日K数据）- 独立 worker 后台执行
 
-    与 baostock 全量同步互补：akshare 国内源访问快，
-    适合日常增量更新最近几个交易日的 OHLCV 数据。
+    与 baostock 全量同步互补：增量更新最近几个交易日的 OHLCV 数据。
+    默认 baostock（一次拉全市场）；akshare 作为国内源兜底（逐只爬）。
 
     同步在独立 worker 子进程（.venv/bin/python -m app.services.data.sync_worker）
     中运行，与 web 进程解耦：uvicorn --reload 重启不会等它、也不会误杀它。
@@ -411,20 +429,24 @@ async def eod_sync_api(
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if sync_is_active():
+    if writes_bins_active():
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "message": busy_message(),
             "status": 409,
         })
 
+    if source not in ("baostock", "akshare"):
+        raise AppError("VALIDATION_ERROR", "source 仅支持 baostock/akshare", 422)
+
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("eod", universe, days=days, overwrite=overwrite)
+    spawn_sync_worker("eod", universe, days=days, overwrite=overwrite, source=source)
     return ApiResponse(ok=True, data={
-        "message": f"EOD增量同步已提交（universe={universe}, days={days}），独立进程后台执行中",
+        "message": f"EOD增量同步已提交（universe={universe}, days={days}, source={source}），独立进程后台执行中",
         "universe": universe,
         "days": days,
         "overwrite": overwrite,
+        "source": source,
     })
 
 
@@ -439,6 +461,36 @@ async def eod_result_api():
     return ApiResponse(ok=True, data=_read_eod_result())
 
 
+@router.post("/sync-full")
+async def sync_full_api(
+    years: int = Query(5, ge=0, le=30, description="A股回填年数（0=仅增量补最新）"),
+    universe: str = Query("all", description="股票池（仅状态标签，回填本质是全市场）"),
+):
+    """一键全同步：按依赖顺序串联 A股回填 → 指数 → 宏观 → 财报 → 外盘（独立 worker 后台执行）。
+
+    顺序约束：bin 必须对齐最终日历 day.txt。A股回填先确立日历，指数/宏观/财报/外盘
+    再按最终日历广播写 bin，否则 qlib 读位错位、因子全 NaN。
+    """
+    from app.services.quant.qlib_init import is_qlib_available
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+
+    if writes_bins_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": busy_message("full"),
+            "status": 409,
+        })
+
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("full", universe, years=years)
+    return ApiResponse(ok=True, data={
+        "message": f"一键全同步已提交（A股回填 {years} 年 → 指数 → 宏观 → 财报 → 外盘），独立进程后台执行中",
+        "universe": universe,
+        "years": years,
+    })
+
+
 @router.post("/sync-indices")
 async def sync_indices_api():
     """同步指数数据到 qlib bin（独立 worker 后台执行）
@@ -450,16 +502,47 @@ async def sync_indices_api():
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if sync_is_active():
+    if writes_bins_active():
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": "正在同步/修复中，请稍候（存在活跃同步任务）",
+            "message": busy_message(),
             "status": 409,
         })
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("indices", "indices")
     return ApiResponse(ok=True, data={"message": "指数同步已提交，独立进程后台执行中"})
+
+
+@router.get("/indices")
+async def indices_api(db=Depends(get_db)):
+    """已注册指数清单（stock_index 主表）：代码/名称/数据源 + qlib bin 状态。
+
+    指数与股票是两类 instrument：指数只写 OHLCV 字段，没有 18 个股票
+    BIN_FIELDS，也不在 stock_daily/财报中。数据校验通过本表区分二者，
+    避免对指数按股票校验产生误报。
+    """
+    result = await db.execute(select(StockIndex).order_by(StockIndex.code))
+    rows = result.scalars().all()
+    feat_root = os.path.join(settings.qlib_provider_path, "features")
+    items = []
+    for r in rows:
+        code_dir = os.path.join(feat_root, r.code)
+        fields: list[str] = []
+        if os.path.isdir(code_dir):
+            fields = sorted(
+                f[: -len(".day.bin")]
+                for f in os.listdir(code_dir)
+                if f.endswith(".day.bin")
+            )
+        items.append({
+            "code": r.code,
+            "name": r.name,
+            "source": r.source,
+            "has_bin": os.path.isdir(code_dir),
+            "bin_fields": fields,
+        })
+    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
 
 
 @router.get("/integrity-check")
@@ -502,11 +585,10 @@ async def repair_api(
     from app.models.stock_data_status import StockDataStatus
 
     universe = req.universe or settings.quant.get("universe", "csi300")
-    if sync_is_active():
-        active = get_progress()
+    if writes_bins_active():
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": f"正在同步/修复中，请稍候（当前 universe={active.get('universe') if active else '?'}）",
+            "message": busy_message("repair"),
             "status": 409,
         })
 
@@ -544,4 +626,30 @@ async def sync_industry_api():
         "code": "INDUSTRY_SYNC_DISABLED",
         "message": "行业同步暂未开放，后期规划",
         "status": 503,
+    })
+
+
+@router.post("/fundamental/sync")
+async def fundamental_sync_api(
+    broadcast: bool = Query(False, description="是否同步后 PIT 广播写 qlib bin（建议数据校验/补齐阶段执行）"),
+):
+    """季频财报同步（akshare 逐股全量 → PG 窄表，独立 worker 后台执行）。
+
+    akshare 财务摘要按股一次返回全部季度，全市场约 5400 次请求（2-3 小时）。
+    broadcast=False（默认）只拉数据入库 PG，不写 bin——回填期间也安全；
+    bin 广播（$roe/$netprofit_yoy 等）留到数据校验/补齐阶段（日历对齐后）。
+    """
+    from app.services.data.sync_worker import spawn_sync_worker
+
+    if broadcast and writes_bins_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": busy_message() + "；财报 bin 广播需等当前同步完成（日历对齐）后执行",
+            "status": 409,
+        })
+    spawn_sync_worker("fundamental", "all", broadcast=broadcast)
+    return ApiResponse(ok=True, data={
+        "message": "财报同步已提交（独立进程后台执行，全市场逐股拉取）"
+                   + ("" if not broadcast else "，含 PIT 广播写 bin"),
+        "broadcast": broadcast,
     })

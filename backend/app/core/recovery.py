@@ -21,10 +21,29 @@ def _auto_retry_enabled() -> bool:
     return enabled or env_flag
 
 
+def _live_worker_for(universe: str) -> bool:
+    """该 universe 是否有真正存活的同步 worker 在跑。
+
+    同步 worker 跑在独立进程组（start_new_session），web 进程重启/重载不会杀它。
+    recover_stale_sync 只在 web 启动时运行，若 worker 仍在跑却把 DB 状态标成 failed，
+    会导致前端读 DB 看不到 syncing（进度条不显示），而 sync_is_active()（读进度文件）
+    仍会阻塞其他同步 → 状态永久错位。因此标记前必须先确认 worker 已死。
+    """
+    from app.services.data.sync_progress import get_progress, sync_is_active
+
+    prog = get_progress()
+    if not prog:
+        return False
+    if prog.get("universe") != universe:
+        return False
+    return sync_is_active()
+
+
 async def recover_stale_sync():
     """启动时恢复卡死的同步任务。
 
     将所有 status=syncing 的记录标记为 failed（容器重启中断的同步），
+    但**跳过仍有存活 worker 的记录**（独立进程组里的 worker 不受 web 重启影响）。
     记录详细的恢复日志（universe / 上次更新时间 / 中断时长），
     并在开启自动重试时对新失败的任务触发后台重试。
     """
@@ -38,6 +57,12 @@ async def recover_stale_sync():
             select(StockDataStatus).where(StockDataStatus.status == "syncing")
         )
         for rec in result.scalars().all():
+            if _live_worker_for(rec.universe):
+                logger.info(
+                    "recover: universe=%s 的同步 worker 仍存活，跳过恢复（保留 syncing）",
+                    rec.universe,
+                )
+                continue
             prev_updated = rec.last_updated
             stale_seconds = (now - prev_updated).total_seconds() if prev_updated else None
             rec.status = "failed"

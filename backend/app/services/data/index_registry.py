@@ -1,0 +1,71 @@
+"""指数主数据注册/查询（stock_index 表）。
+
+数据校验/补齐用它区分"指数目录"与"股票目录"：指数只写 OHLCV，
+没有 18 个股票 BIN_FIELDS，也没有 stock_daily / 财报数据，不应按股票校验。
+
+所有函数都是 async（访问 PostgreSQL），无 baostock 配额消耗。
+"""
+import logging
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from app.core.database import async_session
+from app.models.stock_index import StockIndex
+
+logger = logging.getLogger(__name__)
+
+
+async def register_index(code: str, name: str | None = None, source: str | None = None) -> bool:
+    """注册一个指数（幂等：已存在则忽略）。
+
+    Args:
+        code: qlib 指数代码，小写（如 sh000001）
+        name: 指数名称（如 上证指数）
+        source: 数据源（baostock/akshare）
+
+    Returns:
+        bool: True 表示新增，False 表示已存在
+    """
+    code = (code or "").strip().lower()
+    if not code:
+        return False
+    stmt = pg_insert(StockIndex).values(code=code, name=name, source=source)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
+    async with async_session() as session:
+        res = await session.execute(stmt)
+        await session.commit()
+        inserted = (res.rowcount or 0) > 0
+    if inserted:
+        logger.info("已注册指数 %s (%s, source=%s)", code, name, source)
+    return inserted
+
+
+async def register_indices(items: list[dict]) -> int:
+    """批量注册指数（幂等）。
+
+    Args:
+        items: [{"code": "sh000001", "name": "上证指数", "source": "baostock"}]
+
+    Returns:
+        int: 本次新增条数
+    """
+    added = 0
+    for it in items:
+        if await register_index(it.get("code"), it.get("name"), it.get("source")):
+            added += 1
+    return added
+
+
+async def load_index_codes() -> set[str]:
+    """返回全部已注册指数代码集合（小写，如 {'sh000001', 'sz399001'}）。"""
+    async with async_session() as session:
+        rows = await session.execute(select(StockIndex.code))
+        return {r[0].lower() for r in rows}
+
+
+async def load_index_map() -> dict[str, dict]:
+    """返回 code -> {name, source} 映射（小写 code）。"""
+    async with async_session() as session:
+        rows = await session.execute(select(StockIndex.code, StockIndex.name, StockIndex.source))
+        return {r[0].lower(): {"name": r[1], "source": r[2]} for r in rows}

@@ -62,13 +62,13 @@ def test_error_log_locatable_by_request_id(tmp_path):
     assert "ZeroDivisionError" in (err.get("exception") or "")
 
     # 通过 /logs 的解析逻辑按 request_id 检索到该错误（message 键已映射）
-    from app.api.logs import _read_log_file
+    from app.api.logs import _scan_log
 
-    parsed = _read_log_file(err_file, is_json=True, max_lines=50)
-    hit = [e for e in parsed if e.get("request_id") == "req-err-abc12345" and e.get("level") == "error"]
-    assert len(hit) == 1
-    assert "division failed" in (hit[0]["message"] or "")
-    assert "ZeroDivisionError" in (hit[0]["traceback"] or "")
+    items, total = _scan_log(err_file, is_json=True, request_id="req-err-abc12345")
+    assert total == 2  # error 与 warning 两条都带该 request_id
+    err = next(e for e in items if e["level"] == "error")
+    assert "division failed" in (err["message"] or "")
+    assert "ZeroDivisionError" in (err["traceback"] or "")
 
 
 def test_plain_error_without_exc_info_ok(tmp_path):

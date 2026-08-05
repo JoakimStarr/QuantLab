@@ -26,6 +26,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.database import async_session
+from app.core.executor import run_io_cpu
 from app.models.macro import MacroIndicator
 from app.services.data.eod_incremental import _get_calendar, _write_bin
 from app.services.data.sync_progress import (
@@ -68,15 +69,19 @@ MACRO_INDICATORS: dict[str, dict] = {
 # 与东财 datacenter 互补，扩展新指标只需在此加一条配置。
 # 配置项:
 #   ak_func   akshare 函数名
-#   ak_kwargs 调用参数，日期占位符 <today> / <5y> 在拉取时替换（YYYYMMDD 格式）
+#   ak_kwargs 调用参数，日期占位符 <today> / <Ny>（N=年数，如 <10y>）在拉取时替换（YYYYMMDD 格式）
 #   date_col  日期/月份列名
 #   date_freq day=日频（date 列） / month=月频（月份列，如 "2026年06月份"、"202604"、"2026-06"）
 #   delay     发布延迟（天），PIT 对齐防 look-ahead
 #   fields    {field_name: {source: akshare 列名, label, unit}}
+#
+# 取数窗口：日频指标（国债/期货/汇率）用 <30y>（覆盖 2000 至今），
+# 各数据源返回自身实际可提供的范围（沪铜 2005、沪金 2008、原油 2018 起等），
+# 超出数据源历史的部分自动缺失，不影响入库（upsert 幂等）。
 AKSHARE_INDICATORS: dict[str, dict] = {
     "TREASURY": {
         "ak_func": "bond_zh_us_rate",
-        "ak_kwargs": {"start_date": "<5y>"},
+        "ak_kwargs": {"start_date": "<30y>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -150,9 +155,25 @@ AKSHARE_INDICATORS: dict[str, dict] = {
             "commodity_idx": {"source": "最新值", "label": "中国大宗商品价格指数", "unit": ""},
         },
     },
+    "HSGT": {
+        # 北向资金（沪深港通）日频：市场级每日，广播全市场同一数组（走宏观管线）
+        "ak_func": "stock_hsgt_hist_em",
+        "ak_kwargs": {"symbol": "北向资金"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 1,  # 北向当日盘后公布，+1 天防 look-ahead
+        "fields": {
+            "hsgt_net_buy": {"source": "当日成交净买额", "label": "北向净买入额", "unit": "亿元"},
+            "hsgt_buy": {"source": "买入成交额", "label": "北向买入额", "unit": "亿元"},
+            "hsgt_sell": {"source": "卖出成交额", "label": "北向卖出额", "unit": "亿元"},
+            "hsgt_cum_net": {"source": "历史累计净买额", "label": "北向历史累计净买额", "unit": "亿元"},
+            "hsgt_inflow": {"source": "当日资金流入", "label": "北向当日资金流入", "unit": "亿元"},
+            "hsgt_hold_mv": {"source": "持股市值", "label": "北向持股总市值", "unit": "亿元"},
+        },
+    },
     "COPPER": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "CU0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "CU0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -162,7 +183,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "FX": {
         "ak_func": "currency_boc_sina",
-        "ak_kwargs": {"symbol": "美元", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "美元", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -203,7 +224,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "CRUDE_OIL": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "SC0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "SC0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -241,7 +262,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "FUTURES_IF": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "IF0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "IF0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -252,7 +273,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "FUTURES_IC": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "IC0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "IC0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -263,7 +284,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "FUTURES_TF": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "TF0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "TF0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -273,7 +294,7 @@ AKSHARE_INDICATORS: dict[str, dict] = {
     },
     "GOLD": {
         "ak_func": "futures_main_sina",
-        "ak_kwargs": {"symbol": "AU0", "start_date": "<5y>", "end_date": "<today>"},
+        "ak_kwargs": {"symbol": "AU0", "start_date": "<30y>", "end_date": "<today>"},
         "date_col": "日期",
         "date_freq": "day",
         "delay": 0,
@@ -360,13 +381,17 @@ def _build_macro_rows(df: pd.DataFrame, indicator_key: str) -> list[dict]:
 
 
 def _resolve_ak_kwargs(cfg: dict) -> dict:
-    """解析 akshare 调用 kwargs，替换日期占位符（<today>/<5y>）。"""
+    """解析 akshare 调用 kwargs，替换日期占位符（<today> / <Ny>，N=年数）。"""
     kwargs = dict(cfg.get("ak_kwargs") or {})
     today = datetime.now()
     if kwargs.get("end_date") == "<today>":
         kwargs["end_date"] = today.strftime("%Y%m%d")
-    if kwargs.get("start_date") == "<5y>":
-        kwargs["start_date"] = (today - timedelta(days=5 * 365)).strftime("%Y%m%d")
+    start = kwargs.get("start_date")
+    if isinstance(start, str):
+        m = re.fullmatch(r"<(\d+)y>", start)
+        if m:
+            years = int(m.group(1))
+            kwargs["start_date"] = (today - timedelta(days=365 * years)).strftime("%Y%m%d")
     return kwargs
 
 
@@ -552,66 +577,110 @@ def broadcast_to_all_stocks(provider_uri: str, field_name: str, values: np.ndarr
     return written
 
 
-async def sync_macro_indicators(provider_uri: str | None = None) -> dict:
-    """宏观指标同步主入口：抓取 → 入库 → forward-fill → 广播写 bin。
+async def _fetch_all_macro_rows(progress_cb=None) -> tuple[list[dict], dict]:
+    """拉取全部宏观指标（东财 datacenter + akshare）→ 归一化窄表行。
 
-    注意：广播写 bin 会遍历 features/*/ 数千个目录做文件 IO，
-    必须经 run_io_cpu 放到线程池执行，绝不能在事件循环里直接跑
-    （否则 /health 等所有请求都会卡住）。
+    Args:
+        progress_cb: 可选进度回调 progress_cb(pct, message)；None 时不报进度
+            （fetch-only 模式可能在其他同步进行中触发，不能碰全局进度）
+    Returns:
+        (rows, summary): rows 为窄表行列表，summary 为 {indicator: 拉取行数}
     """
-    from app.core.executor import run_io_cpu
+    all_rows: list[dict] = []
+    summary: dict[str, int] = {}
+    ind_order = list(MACRO_INDICATORS) + list(AKSHARE_INDICATORS)
+    total_ind = len(ind_order)
+    for i, indicator_key in enumerate(ind_order):
+        if progress_cb:
+            progress_cb(
+                5 + int(35 * i / total_ind),
+                f"拉取宏观指标 {i + 1}/{total_ind}（{indicator_key}）...",
+            )
+        if indicator_key in MACRO_INDICATORS:
+            cfg = MACRO_INDICATORS[indicator_key]
+            df = await run_io_cpu(fetch_eastmoney_macro, cfg["report_name"])
+            rows = _build_macro_rows(df, indicator_key) if not df.empty else []
+        else:
+            rows = await run_io_cpu(_fetch_akshare_macro, indicator_key, AKSHARE_INDICATORS[indicator_key])
+        all_rows.extend(rows)
+        summary[indicator_key] = len(rows)
+        logger.info("宏观 %s 拉取 %d 行", indicator_key, len(rows))
+    return all_rows, summary
 
+
+async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
+    """把 PG 窄表的宏观数据 forward-fill 广播写入全部股票 bin 字段。
+
+    与拉取解耦：bin 广播依赖最终日历（day.txt 对齐 bin 长度），
+    应在数据校验/补齐阶段（日历已定）调用，避免回填期间写入错位长度。
+
+    Args:
+        provider_uri: qlib 数据目录
+        progress_cb: 可选进度回调 progress_cb(pct, message)，调用方决定是否上报
+    Returns:
+        写成功的股票数（跨全部字段累计）
+    """
     qlib_dir = provider_uri or settings.qlib_provider_path
-    init_progress("macro", "eastmoney")
+    all_field_specs = [
+        (ind, fname, fcfg)
+        for ind, cfg in MACRO_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
+    ] + [
+        (ind, fname, fcfg)
+        for ind, cfg in AKSHARE_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
+    ]
+    total_fields = len(all_field_specs)
+    total_written = 0
+    for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
+        if progress_cb:
+            progress_cb(
+                45 + int(55 * (j + 1) / total_fields),
+                f"广播字段 {j + 1}/{total_fields}（{field_name}）...",
+            )
+        series = await _load_macro_series(indicator_key, field_name)
+        if series.empty:
+            logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
+            continue
+        values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)
+        n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
+        total_written += n
+        logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
+    return total_written
 
+
+async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool = True) -> dict:
+    """宏观指标同步主入口：抓取 → 入库 →（可选）forward-fill 广播写 bin。
+
+    broadcast=False（fetch-only，API 默认）：只拉数据入库 PG，不写 bin，
+    **不碰全局同步进度**——可能在其他同步（如 baostock 回填）进行中触发，
+    写共享进度文件会覆盖/清除回填的进度显示与 sync_is_active 状态。
+
+    broadcast=True（数据校验/补齐阶段调用）：拉取 + 广播，带全局进度；
+    此时通常无其他同步在跑，日历也已对齐到最终长度。
+    """
+    qlib_dir = provider_uri or settings.qlib_provider_path
+
+    # fetch-only：不走全局进度，避免与运行中的回填互相覆盖
+    if not broadcast:
+        all_rows, summary = await _fetch_all_macro_rows()
+        inserted = await upsert_macro(all_rows)
+        logger.info("宏观拉取完成（仅入库）: 新增 %d 行", inserted)
+        return {"ok": True, "source": "eastmoney+akshare", "inserted": inserted,
+                "fields_written": 0, "by_indicator": summary}
+
+    init_progress("macro", "eastmoney", writes_bins=True)
     summary: dict[str, int] = {}
     try:
-        all_rows: list[dict] = []
-        # 东财 + akshare 统一拉取（逐指标更新进度，方便前端显示）
-        ind_order = list(MACRO_INDICATORS) + list(AKSHARE_INDICATORS)
-        total_ind = len(ind_order)
-        for i, indicator_key in enumerate(ind_order):
-            update_progress(
-                pct=5 + int(35 * i / total_ind), status="running",
-                message=f"拉取宏观指标 {i + 1}/{total_ind}（{indicator_key}）...",
-            )
-            if indicator_key in MACRO_INDICATORS:
-                cfg = MACRO_INDICATORS[indicator_key]
-                df = await run_io_cpu(fetch_eastmoney_macro, cfg["report_name"])
-                rows = _build_macro_rows(df, indicator_key) if not df.empty else []
-            else:
-                rows = await run_io_cpu(_fetch_akshare_macro, indicator_key, AKSHARE_INDICATORS[indicator_key])
-            all_rows.extend(rows)
-            summary[indicator_key] = len(rows)
-            logger.info("宏观 %s 拉取 %d 行", indicator_key, len(rows))
-
+        all_rows, summary = await _fetch_all_macro_rows(
+            progress_cb=lambda pct, msg: update_progress(pct=pct, status="running", message=msg),
+        )
         update_progress(pct=42, status="running", message="写入数据库...")
         inserted = await upsert_macro(all_rows)
         logger.info("宏观入库: 新增 %d 行", inserted)
 
-        # forward-fill + 广播写 bin（东财 + akshare 全字段，同步 IO 重活走线程池）
-        all_field_specs = [
-            (ind, fname, fcfg)
-            for ind, cfg in MACRO_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
-        ] + [
-            (ind, fname, fcfg)
-            for ind, cfg in AKSHARE_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
-        ]
-        total_fields = len(all_field_specs)
-        total_written = 0
-        for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
-            update_progress(
-                pct=45 + int(55 * (j + 1) / total_fields), status="running",
-                message=f"广播字段 {j + 1}/{total_fields}（{field_name}）...",
-            )
-            series = await _load_macro_series(indicator_key, field_name)
-            if series.empty:
-                logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
-                continue
-            values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)
-            n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
-            total_written += n
-            logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
+        total_written = await broadcast_macro_to_bins(
+            qlib_dir,
+            progress_cb=lambda pct, msg: update_progress(pct=pct, status="running", message=msg),
+        )
 
         finish_progress(True)
         await asyncio.sleep(3)
@@ -626,10 +695,13 @@ async def sync_macro_indicators(provider_uri: str | None = None) -> dict:
         raise
 
 
-async def run_macro_sync_task() -> None:
-    """后台任务包装：同步宏观指标并更新状态。"""
+async def run_macro_sync_task(broadcast: bool = False) -> None:
+    """后台任务包装：同步宏观指标并更新状态。
+
+    默认只拉数据入库（broadcast=False），bin 广播由数据校验/补齐阶段触发。
+    """
     try:
-        result = await sync_macro_indicators()
+        result = await sync_macro_indicators(broadcast=broadcast)
         logger.info("宏观同步后台任务完成: %s", result)
     except Exception as e:
         logger.exception("宏观同步后台任务失败: %s", e)

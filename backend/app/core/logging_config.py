@@ -9,6 +9,7 @@
 import contextvars
 import logging
 import logging.config
+import os
 import sys
 from pathlib import Path
 
@@ -62,7 +63,8 @@ def _add_caller_info(logger, method_name, event_dict):
     return event_dict
 
 
-def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool = True) -> None:
+def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool = True,
+                  console: bool = True) -> None:
     """配置根日志器。
 
     Args:
@@ -70,8 +72,15 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
         level: 日志级别
         json_format: True 使用 JSON 格式（structlog JSONRenderer），
                      False 使用 ConsoleRenderer（文本格式）
+        console: True 时同时输出到 stdout（开发实时可见）。
+                 文件日志（quantlab.log / error.log）始终保留，是 UI 与归档的来源。
     """
     log_path = Path(log_dir)
+    if not log_path.is_absolute():
+        # 相对路径一律相对项目根解析（与 config.py 同款推导 parents[3]），
+        # 避免因启动 CWD 不同导致日志写入目录与 logs API 读取目录错位。
+        root = os.environ.get("PROJECT_ROOT") or Path(__file__).resolve().parents[3]
+        log_path = Path(root) / log_path
     log_path.mkdir(parents=True, exist_ok=True)
     # 更新模块级变量，供 logs API 路由使用
     globals()["log_dir"] = log_path
@@ -111,11 +120,6 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
     }
 
     handlers = {
-        "console": {
-            "class": "logging.StreamHandler",
-            "stream": sys.stdout,
-            "formatter": "structlog",
-        },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(log_path / "quantlab.log"),
@@ -134,6 +138,12 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
             "formatter": "structlog",
         },
     }
+    if console:
+        handlers["console"] = {
+            "class": "logging.StreamHandler",
+            "stream": sys.stdout,
+            "formatter": "structlog",
+        }
 
     config = {
         "version": 1,
@@ -142,12 +152,14 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
         "handlers": handlers,
         "root": {
             "level": level.upper(),
-            "handlers": ["console", "file", "error_file"],
+            "handlers": ["file", "error_file"] + (["console"] if console else []),
         },
     }
 
     logging.config.dictConfig(config)
-    logging.getLogger(__name__).info("日志系统已初始化: level=%s, json_format=%s, dir=%s", level, json_format, log_path)
+    logging.getLogger(__name__).info(
+        "日志系统已初始化: level=%s, json_format=%s, dir=%s, console=%s",
+        level, json_format, log_path, console)
 
 
 def set_log_level(level: str) -> None:
@@ -164,6 +176,7 @@ _CLEANUP_PATTERNS = {
     "quantlab.log.*": "retention_days",
     "audit.jsonl.*": "retention_days",
     "error.log.*": "error_retention_days",
+    "sync_worker_*.log.*": "retention_days",
 }
 
 
@@ -173,9 +186,9 @@ def cleanup_old_logs(log_dir: str | Path = None,
     """删除过期的日志轮转备份，保留足够长的错误日志用于定位问题。
 
     规则：
-    - 只清理带轮转后缀的备份文件（quantlab.log.1、error.log.2 等），
+    - 只清理带轮转后缀的备份文件（quantlab.log.1、error.log.2、sync_worker_repair.log.1 等），
       当前正在写入的文件（无后缀）永不删除
-    - 普通日志（quantlab.log/audit.jsonl 备份）保留 retention_days 天
+    - 普通日志（quantlab.log/audit.jsonl/sync_worker_*.log 备份）保留 retention_days 天
     - 错误日志（error.log 备份）保留 error_retention_days 天（更长），
       保证普通日志清掉后仍能回溯历史错误与 traceback
     - 错误日志内容同时可由 /logs API 按 level=ERROR 检索

@@ -173,11 +173,14 @@ async def seed_alpha158_api():
 @router.post("/backfill-alpha158-metrics")
 async def backfill_alpha158_metrics_api(
     factor_ids: list[int] = Query(None, description="指定重算的因子 ID 列表；不传则只补算缺指标的 Alpha158 因子"),
+    start_date: str = Query(None, description="评价区间起始日期"),
+    end_date: str = Query(None, description="评价区间结束日期"),
 ):
     """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
     传 factor_ids：仅重算所选因子的指标（支持任意类别，覆盖已有值）。
     不传：只补算历史遗留中指标为 NULL 的 Alpha158 因子。
+    start_date/end_date：指定评价区间（不传则用默认回测区间）。
     进度通过 WebSocket `alpha158_progress` 事件推送。
     """
     from app.services.factor.alpha158 import backfill_alpha158_metrics
@@ -190,6 +193,7 @@ async def backfill_alpha158_metrics_api(
 
     result = await backfill_alpha158_metrics(
         progress_callback=progress_cb, factor_ids=factor_ids,
+        eval_start=start_date, eval_end=end_date,
     )
     try:
         await ws_manager.broadcast("alpha158_progress", {
@@ -363,11 +367,14 @@ async def deep_analysis_api(
 
 
 @router.post("/{factor_id}/ai-explain")
-async def ai_explain_factor_api(factor_id: int):
-    """AI 因子解释：为因子生成金融逻辑描述并写回 description。"""
+async def ai_explain_factor_api(factor_id: int, force: bool = Query(False)):
+    """AI 因子解释：为因子生成完整金融逻辑描述（幂等，force=True 强制重新生成）。
+
+    写回 ai_explanation（结构化 JSON），description 只存 summary 一句话简述。
+    """
     from app.services.factor.ai_explain import explain_and_update_factor
     try:
-        result = await explain_and_update_factor(factor_id)
+        result = await explain_and_update_factor(factor_id, force=force)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
         raise AppError("FACTOR_NOT_FOUND", str(e), 404)
@@ -377,8 +384,37 @@ async def ai_explain_factor_api(factor_id: int):
 
 
 @router.post("/ai-explain-batch")
-async def ai_explain_factors_batch_api(factor_ids: list[int] = Query(...)):
-    """批量 AI 因子解释（逐个调用 LLM，失败跳过）。"""
+async def ai_explain_factors_batch_api(factor_ids: list[int] = Query(...), force: bool = Query(False)):
+    """批量 AI 因子解释（幂等：已有解释且非 force 时跳过，不重复调 LLM）。"""
     from app.services.factor.ai_explain import explain_factors_batch
-    results = await explain_factors_batch(factor_ids)
+    results = await explain_factors_batch(factor_ids, force=force)
     return ApiResponse(ok=True, data={"items": results, "total": len(results)})
+
+
+@router.get("/{factor_id}/ai-detail")
+async def ai_detail_factor_api(factor_id: int):
+    """获取因子的完整 AI 解释与追问历史（供前端弹窗展示）。"""
+    from app.services.factor.ai_explain import get_factor_ai_detail
+    try:
+        result = await get_factor_ai_detail(factor_id)
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("FACTOR_NOT_FOUND", str(e), 404)
+    except Exception as e:
+        logger.exception("AI 详情获取失败 factor_id=%s", factor_id)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 详情获取失败: {e}", 500)
+
+
+@router.post("/{factor_id}/ai-chat")
+async def ai_chat_factor_api(factor_id: int, payload: dict = None):
+    """继续追问：基于已有 AI 解释回答用户问题，对话历史持久化。"""
+    from app.services.factor.ai_explain import chat_followup
+    question = (payload or {}).get("question", "")
+    try:
+        result = await chat_followup(factor_id, question)
+        return ApiResponse(ok=True, data=result)
+    except ValueError as e:
+        raise AppError("AI_EXPLAIN_ERROR", str(e), 400)
+    except Exception as e:
+        logger.exception("AI 追问失败 factor_id=%s", factor_id)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 追问失败: {e}", 500)

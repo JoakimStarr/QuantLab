@@ -30,7 +30,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 defineProps({
   items: { type: Array, default: () => [] },
   selected: { type: String, default: '' },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
 })
 defineEmits(['update:selected'])
 
@@ -72,17 +72,35 @@ function pctClass(v) {
   padding: 14px 16px;
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-in-out);
-  &:hover { border-color: var(--primary); }
-  &.is-active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+  &:hover {
+    border-color: var(--primary);
+  }
+  &.is-active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary);
+  }
 }
-.market-overview-card__name { font-size: 13px; color: var(--text-tertiary); }
+.market-overview-card__name {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
 .market-overview-card__price {
-  font-size: 20px; font-weight: 600; color: var(--text-primary);
-  font-variant-numeric: tabular-nums; margin-top: 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
 }
 .market-overview-card__pct {
-  font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px;
-  &.is-up { color: var(--chart-up); }
-  &.is-down { color: var(--chart-down); }
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  &.is-up {
+    color: var(--chart-up);
+  }
+  &.is-down {
+    color: var(--chart-down);
+  }
 }
 </style>

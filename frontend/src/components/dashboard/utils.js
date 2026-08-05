@@ -1,9 +1,11 @@
 // Dashboard 子组件通用工具：类型/状态标签、时间判断、数值格式化
 
 export const typeLabel = { llm: 'LLM', symbolic: '符号', text: '文本', automl: 'AutoML' }
-export const typeBadgeClass = (t) => ({ llm: 'primary', symbolic: 'warning', text: 'info', automl: 'danger' }[t] || 'info')
+export const typeBadgeClass = (t) =>
+  ({ llm: 'primary', symbolic: 'warning', text: 'info', automl: 'danger' })[t] || 'info'
 export const statusLabel = { pending: '等待', running: '运行中', done: '完成', failed: '失败' }
-export const statusBadgeClass = (s) => ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' }[s] || 'info')
+export const statusBadgeClass = (s) =>
+  ({ pending: 'info', running: 'warning', done: 'success', failed: 'danger' })[s] || 'info'
 
 export function isToday(dateStr) {
   if (!dateStr) return false

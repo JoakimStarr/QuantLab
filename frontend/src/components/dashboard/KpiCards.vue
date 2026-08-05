@@ -46,7 +46,7 @@ function go(name) {
 const props = defineProps({
   stats: { type: Object, default: () => ({}) },
   loading: { type: Boolean, default: false },
-  dataStatus: { type: Object, default: () => ({}) }
+  dataStatus: { type: Object, default: () => ({}) },
 })
 
 // KPI 数字滚动动画
@@ -65,12 +65,16 @@ function animate(targets) {
   }
   requestAnimationFrame(tick)
 }
-watch(() => ({
-  factor: props.stats?.factorTotal ?? 0,
-  strategy: props.stats?.strategies?.length ?? 0,
-  mining: props.stats?.miningTotal ?? 0,
-  backtest: props.stats?.backtestTotal ?? 0
-}), (targets) => animate(targets), { deep: true, immediate: true })
+watch(
+  () => ({
+    factor: props.stats?.factorTotal ?? 0,
+    strategy: props.stats?.strategies?.length ?? 0,
+    mining: props.stats?.miningTotal ?? 0,
+    backtest: props.stats?.backtestTotal ?? 0,
+  }),
+  (targets) => animate(targets),
+  { deep: true, immediate: true }
+)
 
 const kpiCards = computed(() => {
   const s = props.stats || {}
@@ -78,11 +82,11 @@ const kpiCards = computed(() => {
   const recentMining = s.recentMining || []
   const recentBacktests = s.recentBacktests || []
   const factorBySource = s.factorBySource || { builtin: 0, llm: 0, symbolic: 0 }
-  const activeStrategies = strategies.filter(x => !x.archived && x.status !== 'archived').length
+  const activeStrategies = strategies.filter((x) => !x.archived && x.status !== 'archived').length
   const archivedStrategies = strategies.length - activeStrategies
-  const todayMining = recentMining.filter(t => isToday(t.created_at)).length
-  const runningMining = recentMining.filter(t => t.status === 'running').length
-  const last7dBacktests = recentBacktests.filter(b => isWithinDays(b.created_at || b.end_date, 7)).length
+  const todayMining = recentMining.filter((t) => isToday(t.created_at)).length
+  const runningMining = recentMining.filter((t) => t.status === 'running').length
+  const last7dBacktests = recentBacktests.filter((b) => isWithinDays(b.created_at || b.end_date, 7)).length
 
   return [
     {
@@ -92,7 +96,7 @@ const kpiCards = computed(() => {
       sub: `内置 ${factorBySource.builtin} / LLM ${factorBySource.llm} / 符号 ${factorBySource.symbolic}`,
       icon: Coin,
       iconColor: 'var(--primary)',
-      to: 'FactorLibrary'
+      to: 'FactorLibrary',
     },
     {
       key: 'strategy',
@@ -101,7 +105,7 @@ const kpiCards = computed(() => {
       sub: `活跃 ${activeStrategies} / 归档 ${archivedStrategies}`,
       icon: TrendCharts,
       iconColor: 'var(--success)',
-      to: 'QuantStrategy'
+      to: 'QuantStrategy',
     },
     {
       key: 'mining',
@@ -110,7 +114,7 @@ const kpiCards = computed(() => {
       sub: `今日 ${todayMining} / 运行中 ${runningMining}`,
       icon: MagicStick,
       iconColor: 'var(--warning)',
-      to: 'Mining'
+      to: 'Mining',
     },
     {
       key: 'backtest',
@@ -119,8 +123,8 @@ const kpiCards = computed(() => {
       sub: `近7日 ${last7dBacktests}`,
       icon: DataAnalysis,
       iconColor: 'var(--danger)',
-      to: 'QuantStrategy'
-    }
+      to: 'QuantStrategy',
+    },
   ]
 })
 
@@ -146,12 +150,16 @@ const freshnessText = computed(() => {
 </script>
 
 <style scoped lang="scss">
-.kpi-section { width: 100%; }
+.kpi-section {
+  width: 100%;
+}
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
-  @media (max-width: 768px) { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 768px) {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 .kpi-card {
   position: relative;
@@ -162,7 +170,10 @@ const freshnessText = computed(() => {
 }
 .kpi-card--clickable {
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
 }
 .kpi-card--clickable:hover {
   border-color: var(--primary);
@@ -173,21 +184,47 @@ const freshnessText = computed(() => {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-.kpi-card__label { font-size: 14px; color: var(--text-tertiary); }
-.kpi-card__value {
-  font-size: 32px; font-weight: 600; color: var(--text-primary);
-  font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 8px;
+.kpi-card__label {
+  font-size: 14px;
+  color: var(--text-tertiary);
 }
-.kpi-card__sub { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
+.kpi-card__value {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  margin-top: 8px;
+}
+.kpi-card__sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+}
 .kpi-card__icon {
-  position: absolute; top: 20px; right: 20px;
+  position: absolute;
+  top: 20px;
+  right: 20px;
   font-size: 22px;
 }
 .kpi-freshness {
-  display: flex; align-items: center; gap: 12px;
-  margin-top: 12px; padding: 8px 4px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 8px 4px;
 }
-.kpi-freshness__label { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
-.kpi-freshness__text { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
-.kpi-freshness :deep(.el-progress) { flex: 1; }
+.kpi-freshness__label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.kpi-freshness__text {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.kpi-freshness :deep(.el-progress) {
+  flex: 1;
+}
 </style>

@@ -33,9 +33,10 @@ provide('wsClient', wsClient)
 
 // 需缓存的页面名（route.name 且 meta.keepAlive），组件名需与之匹配
 const keepAliveNames = computed(() =>
-  router.getRoutes()
-    .filter(r => r.meta?.keepAlive && r.name)
-    .map(r => r.name)
+  router
+    .getRoutes()
+    .filter((r) => r.meta?.keepAlive && r.name)
+    .map((r) => r.name)
 )
 
 onMounted(() => {

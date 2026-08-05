@@ -1,6 +1,6 @@
 """VectorBT 回测后端：用 vectorbt（vbt 1.1.0，git master）的 Portfolio.from_signals 矢量化回测。
 
-组合层语义与 backtest_engine.run_backtest(backend="self") 对齐：
+组合层语义与 backtest_engine.run_backtest(backend="vbt") 对齐：
 - 每个调仓日对 topk 等权买入（size_type="Value"，入选股各投入组合总值的 1/topk）
 - n_drop>0 时在 topk 内保留上期末持仓（dropout 平滑），其余买入分数最高的 topk
 - 交易成本：open_cost/close_cost 折算为 fees；严格 A 股涨跌停/T+1 约束请用 backend="qlib"
@@ -27,6 +27,7 @@ def run_vbt_backtest(
     rebalance_freq: str = "day",
     portfolio_method: str = None,
     vbt_kwargs: dict = None,
+    capital: float = None,
 ) -> dict:
     """用 VectorBT from_signals 运行 top-k dropout 回测（backend = "vbt"）。
 
@@ -34,6 +35,7 @@ def run_vbt_backtest(
         score_df: MultiIndex (datetime, instrument) 含 'score' 列
         rebalance_freq: day/week/month
         vbt_kwargs: 透传给 vbt.Portfolio.from_signals 的额外参数（如 {'fees': 0.001}）
+        capital: 初始资金（vbt 用 Value 模式按 topk 等权投入，capital 仅记录）
 
     Returns:
         与 run_backtest 相同格式: {returns, benchmark, turnover, portfolios,

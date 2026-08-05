@@ -14,10 +14,10 @@ const generateUUID = generateId
 const request = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
-  paramsSerializer: { indexes: null }
+  paramsSerializer: { indexes: null },
 })
 
-request.interceptors.request.use(config => {
+request.interceptors.request.use((config) => {
   config.headers['X-Request-ID'] = generateId()
   // 附加鉴权 token
   const token = localStorage.getItem(TOKEN_KEY)
@@ -38,7 +38,7 @@ function isTimeoutError(error) {
 }
 
 request.interceptors.response.use(
-  response => {
+  (response) => {
     const data = response.data
     if (!data.ok) {
       // 业务错误：显示具体错误信息和操作建议
@@ -50,7 +50,7 @@ request.interceptors.response.use(
     }
     return data.data
   },
-  error => {
+  (error) => {
     // 请求被取消，不显示提示
     if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
       return Promise.reject(error)

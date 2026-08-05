@@ -14,6 +14,7 @@
     python -m app.services.data.sync_worker --kind backfill --universe all --years 5
     python -m app.services.data.sync_worker --kind eod --universe csi300 --days 5
     python -m app.services.data.sync_worker --kind repair --universe all --include-baostock
+    python -m app.services.data.sync_worker --kind full --universe all --years 5
 """
 import argparse
 import asyncio
@@ -35,20 +36,19 @@ def spawn_sync_worker(
     include_baostock: bool = False,
     overwrite: bool = False,
     source: str = None,
+    broadcast: bool = False,
 ) -> subprocess.Popen:
     """启动一个独立的同步 worker 子进程并立即返回。
 
     start_new_session=True 使 worker 脱离 web 进程的进程组：
     - uvicorn --reload 重启时不会等待/杀掉它
     - web 进程崩溃也不影响它继续跑
-    日志追加写 logs/sync_worker_<kind>.log。
+    日志由 worker 自身写入 logs/sync_worker_<kind>.log（RotatingFileHandler 轮转）。
     """
     from app.core.config import settings
 
     backend_dir = str(settings.PROJECT_ROOT / "backend")
-    log_dir = settings.PROJECT_ROOT / "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(str(log_dir), f"sync_worker_{kind}.log")
+    log_path = str(settings.PROJECT_ROOT / "logs" / f"sync_worker_{kind}.log")
 
     cmd = [sys.executable, "-m", "app.services.data.sync_worker",
            "--kind", kind, "--universe", universe]
@@ -62,24 +62,21 @@ def spawn_sync_worker(
         cmd += ["--overwrite"]
     if source:
         cmd += ["--source", source]
+    if broadcast:
+        cmd += ["--broadcast"]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
     env["PYTHONUNBUFFERED"] = "1"
 
-    log_f = open(log_path, "ab")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=backend_dir,
-            stdout=log_f,
-            stderr=log_f,
-            start_new_session=True,
-            env=env,
-        )
-    except Exception:
-        log_f.close()
-        raise
+    # stdout/stderr 不重定向到日志文件：worker 内部用 RotatingFileHandler
+    # 自行轮转写入，避免裸 fd 追加绕过轮转导致单文件无限增长
+    proc = subprocess.Popen(
+        cmd,
+        cwd=backend_dir,
+        start_new_session=True,
+        env=env,
+    )
     logger.info("sync_worker 已启动 kind=%s universe=%s pid=%s log=%s",
                 kind, universe, proc.pid, log_path)
 
@@ -99,6 +96,17 @@ def spawn_sync_worker(
 
 
 async def _run(args: argparse.Namespace) -> None:
+    if args.kind == "fundamental":
+        # akshare 财报不连 baostock，不需要爬取锁，可与回填并行。
+        # run_financial_sync 自管进度：fetch-only 不写全局进度（避免覆盖回填），
+        # broadcast 模式（数据校验/补齐阶段）才写进度。
+        from app.services.data.fundamental_sync import run_financial_sync
+
+        logger.info("fundamental worker 启动 pid=%s broadcast=%s", os.getpid(), args.broadcast)
+        result = await run_financial_sync(broadcast=args.broadcast)
+        logger.info("财报同步完成: %s", result)
+        return
+
     from app.services.data.sync_progress import (
         clear_progress, finish_progress, init_progress, set_worker_pid,
     )
@@ -129,16 +137,18 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
     # data_source 按任务类型区分（baostock 特指全量回填，其余用 kind 名），
     # 前端据此显示任务标签。
     data_source = "baostock" if args.kind == "backfill" else args.kind
-    init_progress(args.universe, data_source)
+    # backfill/eod/repair/indices 都会写 qlib bin，读 bin 的操作（挖掘/校验）应被阻塞
+    init_progress(args.universe, data_source, writes_bins=True)
     set_worker_pid(os.getpid())
 
     # 仅数据源用到 baostock 时才 login/logout（保证退出前必然登出）：
-    # - backfill / indices / eod(source=baostock) / repair(include_baostock) 需要
-    # - repair(仅从 PG 重建) / eod(source=akshare) 不需要 baostock，
+    # - backfill / indices / eod(source=baostock) / repair(include_baostock) / full 需要
+    # - repair(仅从 PG 重建) / eod(source=akshare) / fundamental 不需要 baostock，
     #   即使 baostock 被风控拉黑也不受影响（离线重建路径保持可用）。
     need_bst = (
         args.kind == "backfill"
         or args.kind == "indices"
+        or args.kind == "full"
         or (args.kind == "repair" and args.include_baostock)
         or (args.kind == "eod" and (args.source or "baostock") == "baostock")
     )
@@ -181,15 +191,32 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                 from app.services.data.repair import run_repair
 
                 await run_repair(args.include_baostock, args.universe)
+            elif args.kind == "full":
+                from app.services.data.full_sync import run_full_sync
+
+                await run_full_sync(years=args.years or 5, universe=args.universe)
             elif args.kind == "indices":
                 from app.core.config import settings
-                from app.services.data.index_sync import sync_indices_to_qlib
+                from app.services.data.index_registry import register_indices
+                from app.services.data.index_sync import INDEX_NAMES, sync_indices_to_qlib
 
                 result = sync_indices_to_qlib(settings.qlib_provider_path, days=365)
                 if result.get("ok"):
                     logger.info("指数同步完成: %s", result)
+                    # 同步成功的指数注册到 stock_index 主表，供数据校验区分指数/股票
+                    try:
+                        items = [
+                            {"code": c, "name": INDEX_NAMES.get(c), "source": result.get("source") or "baostock"}
+                            for c in result.get("indices") or []
+                        ]
+                        n = await register_indices(items)
+                        if n:
+                            logger.info("已注册 %d 个新指数到 stock_index", n)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("注册指数到 stock_index 失败: %s", e)
                 else:
                     logger.error("指数同步返回错误: %s", result)
+                finish_progress(bool(result.get("ok")), result.get("error"))
 
         # 留出前端轮询读取 done/failed 状态的窗口
         await asyncio.sleep(3)
@@ -211,27 +238,40 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
 
 
 def main() -> None:
+    from app.core.config import settings
+
     parser = argparse.ArgumentParser(description="QuantLab 数据同步独立 worker")
-    parser.add_argument("--kind", choices=["backfill", "eod", "repair", "indices"], default="backfill")
+    parser.add_argument("--kind", choices=["backfill", "eod", "repair", "indices", "fundamental", "full"], default="backfill")
     parser.add_argument("--universe", default="csi300")
     parser.add_argument("--years", type=int, default=None)
     parser.add_argument("--days", type=int, default=None)
     parser.add_argument("--include-baostock", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--source", choices=["baostock", "akshare"], default=None)
+    parser.add_argument("--broadcast", action="store_true", help="fundamental: 拉取后同时 PIT 广播写 bin（校验/补齐阶段用）")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # 轮转文件日志：100MB × 5，与 quantlab.log 规则一致，过期备份由
+    # logging_config.cleanup_old_logs 定期清理（模式 sync_worker_*.log.*）
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = settings.PROJECT_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        str(log_dir / f"sync_worker_{args.kind}.log"),
+        maxBytes=100 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
     )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:
         sys.exit(130)
-    except Exception as e:
+    except Exception:
         # 数据库状态由 run_baostock_backfill_task / run_repair 内部兜底标记 failed
-        print(f"[sync_worker] {args.kind} 失败: {e}", file=sys.stderr)
         logging.getLogger(__name__).exception("sync_worker %s 异常退出", args.kind)
         sys.exit(1)
 

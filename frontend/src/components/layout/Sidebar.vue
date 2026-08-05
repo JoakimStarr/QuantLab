@@ -18,18 +18,14 @@
         class="nav-item"
         :class="{ 'nav-item--active': isActive(item) }"
       >
-        <el-icon :size="18" class="nav-icon"><component :is="item.icon" /></el-icon>
+        <el-icon :size="18" class="nav-icon"><component :is="resolveIcon(item.icon)" /></el-icon>
         <span class="nav-label">{{ item.title }}</span>
       </router-link>
     </nav>
 
     <!-- 底部：主题切换 + 版本号 -->
     <div class="sidebar-footer">
-      <button
-        class="theme-toggle"
-        :title="isDark ? '切换到亮色模式' : '切换到暗色模式'"
-        @click="toggleTheme"
-      >
+      <button class="theme-toggle" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'" @click="toggleTheme">
         <el-icon :size="16">
           <Sunny v-if="isDark" />
           <Moon v-else />
@@ -43,15 +39,17 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { DataAnalysis, Sunny, Moon } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { getVersion, getAppName } from '@/config/app'
+import { resolveIcon } from '@/utils/icons'
 
 const appStore = useAppStore()
 const route = useRoute()
 
 const isDark = computed(() => appStore.theme === 'dark')
 
-// 从全局配置读取版本与名称（main.js 已 await initAppConfig）
+// 从全局配置读取版本与名称（initAppConfig 挂载后异步加载，ref 响应式自动更新）
 const appVersion = computed(() => getVersion())
 const appName = computed(() => getAppName())
 
@@ -59,10 +57,8 @@ const appName = computed(() => getAppName())
 const menuItems = [
   { path: '/', title: '研究首页', icon: 'DataAnalysis' },
   { path: '/quant/factors', title: '因子库', icon: 'Coin' },
-  { path: '/quant/factor-compare', title: '因子对比', icon: 'DataLine' },
   { path: '/quant/strategy', title: '策略回测', icon: 'TrendCharts' },
   { path: '/quant/strategy-library', title: '策略库', icon: 'Collection' },
-  { path: '/quant/backtest-compare', title: '回测对比', icon: 'Histogram' },
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
   { path: '/quant/macro', title: '宏观指标', icon: 'Odometer' },

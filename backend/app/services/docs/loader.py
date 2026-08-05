@@ -124,14 +124,30 @@ def _slugify(filename: str) -> str:
     return re.sub(r"[_\s]+", "-", name).lower()
 
 
+def _first_heading(content: str) -> str:
+    """提取正文第一个 H1 标题作为文档标题回退（清理行内 markdown）。
+
+    百科文档多为英文文件名 + 中文 H1（如 event-driven.md 的
+    "# 事件驱动对冲基金入门：一文读懂来自突发事件的阿尔法"），
+    无 frontmatter title 时用 H1 而非文件名，保证 Docs 页面显示中文标题。
+    """
+    for line in content.splitlines():
+        m = re.match(r"^#\s+(.*)$", line.strip())
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
 def _parse_meta(path: Path) -> dict:
     """解析 MD 文件的元数据。优先 frontmatter，回退到内置表。"""
     content = path.read_text(encoding="utf-8")
+    body = _strip_frontmatter(content)
+    heading = _first_heading(body)
 
     # 内置元数据作为 base，frontmatter 解析后若提供再覆盖
     builtin = _BUILTIN_META.get(path.name, {})
     base = {
-        "title": builtin.get("title") or path.stem,
+        "title": builtin.get("title") or heading or path.stem,
         "slug": builtin.get("slug") or _slugify(path.name),
         "order": builtin.get("order", 999),
         "group": builtin.get("group", "未分类"),
@@ -151,7 +167,6 @@ def _parse_meta(path: Path) -> dict:
         except (TypeError, ValueError):
             pass
 
-    body = _strip_frontmatter(content)
     return {**base, "content": body}
 
 
@@ -171,6 +186,7 @@ def _wiki_category(path: Path) -> str | None:
 def _parse_wiki_meta(path: Path, cat: str) -> dict:
     """解析 quant-wiki 文档元数据：路径式 slug（防 425 篇撞名）+ 中文分类 group。"""
     content = path.read_text(encoding="utf-8")
+    body = _strip_frontmatter(content)
     fm = _parse_frontmatter(content)
     rel = path.relative_to(DOCS_DIR)
     inner = "__".join(rel.parts[3:])  # quant-wiki/docs/<cat>/... 之后的子路径
@@ -178,12 +194,12 @@ def _parse_wiki_meta(path: Path, cat: str) -> dict:
     if slug.endswith(".md"):
         slug = slug[:-3]
     return {
-        "title": fm.get("title") or path.stem,
+        "title": fm.get("title") or _first_heading(body) or path.stem,
         "slug": slug,
         "group": _WIKI_CATEGORIES[cat],
         "order": 100 + _WIKI_ORDER[cat],
         "summary": fm.get("summary", ""),
-        "content": _strip_frontmatter(content),
+        "content": body,
     }
 
 

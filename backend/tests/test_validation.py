@@ -26,7 +26,7 @@ def _write_bin(path, values):
 ALL_FIELDS = [
     "open", "high", "low", "close", "preclose", "volume", "amount",
     "turn", "tradestatus", "pct_chg", "is_st", "pe_ttm", "pb_mrq",
-    "ps_ttm", "pcf_ncf_ttm", "adjustflag", "change", "tradable",
+    "ps_ttm", "pcf_ncf_ttm", "adjustflag", "change", "tradable", "factor",
 ]
 
 
@@ -49,11 +49,11 @@ def _make_qlib_dir(tmp_path, calendar_days=10, stocks=None, fields=None):
 
 # ---------------------------------------------------------------- fieldset
 def test_fieldset_bin_superset():
-    """stock_daily 16 列应被 18 个 bin 字段覆盖，change/tradable 为预期衍生。"""
+    """stock_daily 16 列应被 bin 字段覆盖，change/tradable/factor 为预期衍生。"""
     result = check_fieldset()
     assert result["status"] == "ok"
     assert result["missing_in_bin"] == []
-    assert set(result["derived_expected"]) <= {"change", "tradable"}
+    assert set(result["derived_expected"]) <= {"change", "tradable", "factor"}
 
 
 # ------------------------------------------------------------- calendar diff
@@ -73,6 +73,27 @@ def test_calendar_diff_empty():
     assert diff["missing_in_day_txt"] == []
     assert diff["missing_in_stock_daily"] == []
     assert diff["pg_missing_dates"] == []
+
+
+# ----------------------------------------------- 今日未发布日期的过滤
+def test_exclude_pending_today():
+    from datetime import datetime
+    from app.services.data.validation import _exclude_pending_today
+
+    # 缺的是今天，且当前时间早于 baostock 发布时间点（18:00）→ 过滤（数据尚未发布）
+    assert _exclude_pending_today(
+        ["2026-08-05"], now=datetime(2026, 8, 5, 10, 20)
+    ) == []
+    # 缺的是今天，但已过发布时间点 → 保留（真缺口）
+    assert _exclude_pending_today(
+        ["2026-08-05"], now=datetime(2026, 8, 5, 20, 0)
+    ) == ["2026-08-05"]
+    # 缺的不是今天 → 不受影响
+    assert _exclude_pending_today(
+        ["2026-08-04"], now=datetime(2026, 8, 5, 10, 20)
+    ) == ["2026-08-04"]
+    # 空列表
+    assert _exclude_pending_today([], now=datetime(2026, 8, 5, 10, 20)) == []
 
 
 # ------------------------------------------------------------------- fields

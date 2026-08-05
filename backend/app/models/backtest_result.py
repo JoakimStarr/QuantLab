@@ -12,11 +12,18 @@ class BacktestResult(Base):
     start_date = Column(String, nullable=False)
     end_date = Column(String, nullable=False)
 
-    # 回测参数（v2.4.1 起持久化，用于参数扫描查重缓存）
+    # ===== 回测参数快照（v2.4.1 起持久化，保证每条结果自带完整配置） =====
     # 策略默认回测时从 strategy 取值写入；参数扫描时为各候选组合
     topk = Column(Integer, nullable=True)
     n_drop = Column(Integer, nullable=True)
     rebalance_freq = Column(String, nullable=True)
+    # 组合方式（equal_weight/ic_weight/ir_weight）、正交化开关、基准、回测引擎
+    combination_method = Column(String, nullable=True)
+    orthogonalize = Column(Integer, nullable=True)
+    benchmark = Column(String, nullable=True)
+    backend = Column(String, nullable=True)
+    # 初始资金（元）
+    initial_capital = Column(Float, nullable=True)
 
     # 核心绩效指标
     annual_return = Column(Float, nullable=True)

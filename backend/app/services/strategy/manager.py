@@ -70,7 +70,7 @@ async def _load_factor_expressions(factor_ids: list[int]) -> dict:
 def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method: str,
                            topk: int, n_drop: int, benchmark: str, rebalance_freq: str,
                            start: str, end: str, orthogonalize: int = 0,
-                           backend: str = "qlib") -> dict:
+                           backend: str = "qlib", capital: float = None) -> dict:
     """同步执行回测计算（在 executor 中调用，不阻塞事件循环）。"""
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values
@@ -93,7 +93,8 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
             score_df = score_df[~bj_mask]
             logger.info("回测过滤北交所股票: %d -> %d", before, len(score_df.index.get_level_values("instrument").unique()))
     bt = run_backtest(score_df, start=start, end=end, topk=topk, n_drop=n_drop,
-                      benchmark=benchmark, rebalance_freq=rebalance_freq, backend=backend)
+                      benchmark=benchmark, rebalance_freq=rebalance_freq, backend=backend,
+                      capital=capital)
     returns = bt.get("returns")
     bench = bt.get("benchmark")
     metrics = analyze_portfolio(returns, bench)
@@ -114,7 +115,7 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
 
 
 async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = None,
-                                backend: str = "qlib") -> dict:
+                                backend: str = "qlib", capital: float = None) -> dict:
     """执行策略回测（CPU 密集计算放入线程池，不阻塞事件循环）。
 
     流程：加载因子元数据(async) -> 回测计算(executor) -> 落库(async)
@@ -127,6 +128,20 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     period = settings.quant.get("default_backtest_period", {})
     start = start or period.get("start", "2020-01-01")
     end = end or period.get("end", "2024-12-31")
+    # 回测区间不超过数据实际范围：前端常传 end=今天，但当日日K 数据 baostock
+    # 要到收盘后（~17:30）才入库；且 qlib 回测需要 end 之后一天的数据计算
+    # 最后一期收益，end 落在数据末日会越界（index N out of bounds with size N）。
+    # 因此收敛到倒数第二个交易日。
+    try:
+        from app.services.data.eod_incremental import _get_calendar
+        data_cal = _get_calendar(settings.qlib_provider_path)
+        if len(data_cal) >= 2:
+            data_end = data_cal[-2]
+            if end > data_end:
+                logger.info("回测 end %s 收敛到数据倒数第二日 %s", end, data_end)
+                end = data_end
+    except Exception as e:  # noqa: BLE001
+        logger.debug("回测 end 收敛失败（保持原值）: %s", e)
     factor_ids = strategy["factor_ids"] if strategy["factor_ids"] else []
     if not factor_ids:
         raise ValueError("策略未关联任何因子")
@@ -168,7 +183,7 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         factor_exprs, weights, strategy["combination_method"],
         strategy["topk"], strategy["n_drop"], strategy["benchmark"],
         strategy["rebalance_freq"], start, end, strategy.get("orthogonalize", 0),
-        backend,
+        backend, capital,
     )
     metrics = computed["metrics"]
     nav_curve = computed["nav_curve"]
@@ -186,6 +201,11 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             strategy_id=strategy_id, start_date=start, end_date=end,
             topk=strategy["topk"], n_drop=strategy["n_drop"],
             rebalance_freq=strategy["rebalance_freq"],
+            combination_method=strategy["combination_method"],
+            orthogonalize=strategy.get("orthogonalize", 0),
+            benchmark=strategy["benchmark"],
+            backend=backend,
+            initial_capital=capital or settings.quant.get("initial_capital", 100000000),
             annual_return=metrics.get("annual_return"),
             annual_volatility=metrics.get("annual_volatility"),
             sharpe=metrics.get("sharpe"),
@@ -197,7 +217,8 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             benchmark_return=metrics.get("benchmark_return"),
             excess_return=metrics.get("excess_return"),
             nav_curve=json.dumps(nav_curve),
-            metrics=json.dumps({**metrics, "topk": strategy["topk"], "n_drop": strategy["n_drop"]}),
+            metrics=json.dumps({**metrics, "topk": strategy["topk"], "n_drop": strategy["n_drop"],
+                                "initial_capital": capital or settings.quant.get("initial_capital", 100000000)}),
             trades=json.dumps(trades, ensure_ascii=False),
         )
         session.add(result)
@@ -208,17 +229,31 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
 
 async def list_backtest_results(strategy_id: int = None, limit: int = 20) -> list[dict]:
     async with async_session() as session:
-        q = select(BacktestResult).order_by(BacktestResult.created_at.desc()).limit(limit)
+        q = select(BacktestResult).where(BacktestResult.is_deleted == 0)
+        q = q.order_by(BacktestResult.created_at.desc()).limit(limit)
         if strategy_id:
             q = q.where(BacktestResult.strategy_id == strategy_id)
         result = await session.execute(q)
-        return [_result_dict(r) for r in result.scalars().all()]
+        return [_result_summary(r) for r in result.scalars().all()]
 
 
 async def get_backtest_result(result_id: int) -> dict:
     async with async_session() as session:
         r = await session.get(BacktestResult, result_id)
-        return _result_dict(r) if r else None
+        if r is None or r.is_deleted:
+            return None
+        return _result_dict(r)
+
+
+async def delete_backtest_result(result_id: int) -> bool:
+    """软删除回测结果（is_deleted=1），前端可手动清理重复/过期记录。"""
+    async with async_session() as session:
+        r = await session.get(BacktestResult, result_id)
+        if r is None:
+            return False
+        r.is_deleted = 1
+        await session.commit()
+        return True
 
 
 def _strategy_dict(r: Strategy) -> dict:
@@ -238,6 +273,11 @@ def _result_dict(r: BacktestResult) -> dict:
         "id": r.id, "strategy_id": r.strategy_id,
         "start_date": r.start_date, "end_date": r.end_date,
         "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
+        "combination_method": r.combination_method,
+        "orthogonalize": r.orthogonalize,
+        "benchmark": r.benchmark,
+        "backend": r.backend,
+        "initial_capital": r.initial_capital,
         "annual_return": r.annual_return, "annual_volatility": r.annual_volatility,
         "sharpe": r.sharpe, "sortino": r.sortino,
         "max_drawdown": r.max_drawdown, "calmar": r.calmar,
@@ -247,5 +287,31 @@ def _result_dict(r: BacktestResult) -> dict:
         "nav_curve": json.loads(r.nav_curve) if r.nav_curve else None,
         "metrics": json.loads(r.metrics) if r.metrics else None,
         "trades": json.loads(r.trades) if r.trades else [],
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def _result_summary(r: BacktestResult) -> dict:
+    """列表接口的轻量摘要：不含 trades/nav_curve/metrics 大字段。
+
+    逐笔成交明细可达 2000 条、净值曲线可达数千点，单条 JSON 300KB+；
+    列表场景（策略回测页/回测对比选择器/首页最近回测）只用到标量指标，
+    省略大字段可把列表载荷从 344KB/条 降到 <1KB/条，点击"结果"不再二次下载全量。
+    """
+    return {
+        "id": r.id, "strategy_id": r.strategy_id,
+        "start_date": r.start_date, "end_date": r.end_date,
+        "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
+        "combination_method": r.combination_method,
+        "orthogonalize": r.orthogonalize,
+        "benchmark": r.benchmark,
+        "backend": r.backend,
+        "initial_capital": r.initial_capital,
+        "annual_return": r.annual_return, "annual_volatility": r.annual_volatility,
+        "sharpe": r.sharpe, "sortino": r.sortino,
+        "max_drawdown": r.max_drawdown, "calmar": r.calmar,
+        "turnover": r.turnover,
+        "win_rate": r.win_rate,
+        "benchmark_return": r.benchmark_return, "excess_return": r.excess_return,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }

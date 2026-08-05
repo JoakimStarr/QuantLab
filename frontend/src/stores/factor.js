@@ -9,9 +9,9 @@ export const useFactorStore = defineStore('factor', () => {
   const lastFetch = ref(null)
 
   const factorCount = computed(() => factors.value.length)
-  const activeFactors = computed(() => factors.value.filter(f => f.status === 'active'))
+  const activeFactors = computed(() => factors.value.filter((f) => f.status === 'active'))
 
-  async function fetchList(force = false, params = { limit: 500 }) {
+  async function fetchList(force = false, params = { limit: 500, status: '' }) {
     if (!force && factors.value.length > 0 && lastFetch.value) {
       const age = Date.now() - lastFetch.value
       if (age < 5 * 60 * 1000) return factors.value

@@ -1,9 +1,11 @@
 <template>
   <PageContainer narrow>
-    <div class="page-header mb-6">
-      <h2 class="page-title">数据管理</h2>
-      <p class="page-desc">管理 qlib 数据源同步与新鲜度</p>
-    </div>
+    <header class="page-header">
+      <div class="page-header__lead">
+        <h1 class="page-header__title">数据管理</h1>
+        <p class="page-header__subtitle">管理 qlib 数据源同步与新鲜度</p>
+      </div>
+    </header>
 
     <!-- KPI 概览 -->
     <div class="kpi-grid mb-6">
@@ -17,51 +19,54 @@
         <div class="kpi-value">{{ currentStatus.latest_date || '--' }}</div>
         <div class="kpi-sub">{{ daysSinceUpdate }} 天前更新</div>
       </div>
-        <div class="kpi-card">
-          <div class="kpi-label">数据时间范围</div>
-          <div class="kpi-value" style="font-size: 15px; line-height: 1.6;">
-            {{ qlib.earliest_date || '--' }}<br/>~ {{ currentStatus.latest_date || '--' }}
-          </div>
-          <div class="kpi-sub">{{ qlib.calendar_count ? qlib.calendar_count + ' 个交易日' : '--' }}</div>
+      <div class="kpi-card">
+        <div class="kpi-label">数据时间范围</div>
+        <div class="kpi-value" style="font-size: var(--font-size-lg); line-height: 1.6">
+          {{ qlib.earliest_date || '--' }}<br />~ {{ currentStatus.latest_date || '--' }}
         </div>
-        <div class="kpi-card">
-          <div class="kpi-label">数据覆盖率</div>
-          <div class="kpi-value">{{ coveragePercent }}%</div>
-          <div class="kpi-sub">{{ currentStatus.stock_count?.toLocaleString() || 0 }} 只股票有数据</div>
+        <div class="kpi-sub">{{ qlib.calendar_count ? qlib.calendar_count + ' 个交易日' : '--' }}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">磁盘占用</div>
+        <div class="kpi-value" style="font-size: var(--font-size-lg); line-height: 1.6">
+          {{ qlib.disk_usage ? humanSize(qlib.disk_usage.dir_size_bytes) : '--' }}<br />剩余
+          {{ qlib.disk_usage ? humanSize(qlib.disk_usage.free_bytes) : '--' }}
         </div>
+        <div class="kpi-sub">qlib 数据目录</div>
+      </div>
     </div>
 
-      <!-- 数据损坏告警横幅：latest_date 被置空 + last_error 标记数据损坏时显示 -->
-      <el-alert
-        v-if="isDataCorrupt"
-        class="mb-6 corrupt-alert"
-        title="数据损坏 — 已标记下次同步全量重建"
-        type="warning"
-        :closable="false"
-        show-icon
-      >
-        <template #default>
-          检测到数据完整性问题，latest_date 已置空。下次定时同步（工作日 18:00）将自动走 chenditc 全量重建路径。
-          如需立即重建，点击右侧「智能同步」按钮。
-        </template>
-      </el-alert>
+    <!-- 数据损坏告警横幅：latest_date 被置空 + last_error 标记数据损坏时显示 -->
+    <el-alert
+      v-if="isDataCorrupt"
+      class="mb-6 corrupt-alert"
+      title="数据损坏 — 已标记下次同步全量重建"
+      type="warning"
+      :closable="false"
+      show-icon
+    >
+      <template #default>
+        检测到数据完整性问题，latest_date 已置空。建议点击下方「数据校验」查看具体差异，并通过「一键补齐」从数据库重建；
+        若 bin 已严重损坏，可删除 data/qlib_bin/cn_data 后重新点击「开始同步」全量回填。
+      </template>
+    </el-alert>
 
-      <!-- 数据覆盖率进度条 -->
-      <SectionCard v-if="currentStatus.stock_count || qlib.earliest_date" class="mb-6">
-        <div class="coverage-section">
-          <div class="coverage-header">
-            <span class="coverage-title">数据新鲜度</span>
-            <span class="coverage-value">{{ coveragePercent }}%</span>
-          </div>
-          <el-progress :percentage="coveragePercent" :color="coverageColor" :stroke-width="10" :show-text="false" />
-          <div class="coverage-detail">
-            <span>股票数: {{ currentStatus.stock_count?.toLocaleString() || 0 }}</span>
-            <span v-if="qlib.calendar_count">交易日: {{ qlib.calendar_count }}</span>
-            <span v-if="qlib.earliest_date">范围: {{ qlib.earliest_date }} ~ {{ currentStatus.latest_date }}</span>
-            <span v-if="currentStatus.latest_date">更新: {{ daysSinceUpdate }} 天前</span>
-          </div>
+    <!-- 数据覆盖率进度条 -->
+    <SectionCard v-if="currentStatus.stock_count || qlib.earliest_date" class="mb-6">
+      <div class="coverage-section">
+        <div class="coverage-header">
+          <span class="coverage-title">数据新鲜度</span>
+          <span class="coverage-value">{{ coveragePercent }}%</span>
         </div>
-      </SectionCard>
+        <el-progress :percentage="coveragePercent" :color="coverageColor" :stroke-width="10" :show-text="false" />
+        <div class="coverage-detail">
+          <span>股票数: {{ currentStatus.stock_count?.toLocaleString() || 0 }}</span>
+          <span v-if="qlib.calendar_count">交易日: {{ qlib.calendar_count }}</span>
+          <span v-if="qlib.earliest_date">范围: {{ qlib.earliest_date }} ~ {{ currentStatus.latest_date }}</span>
+          <span v-if="currentStatus.latest_date">更新: {{ daysSinceUpdate }} 天前</span>
+        </div>
+      </div>
+    </SectionCard>
 
     <!-- 数据源操作 -->
     <SectionCard class="mb-6">
@@ -91,7 +96,9 @@
               </div>
               <div v-if="errorSuggestion" class="error-suggestion">{{ errorSuggestion }}</div>
               <div class="error-actions">
-                <el-button size="small" type="primary" @click="retrySync" :loading="syncing" :disabled="!qlib.available">重试同步</el-button>
+                <el-button size="small" type="primary" @click="retrySync" :loading="syncing" :disabled="!qlib.available"
+                  >重试同步</el-button
+                >
               </div>
             </div>
           </div>
@@ -107,11 +114,30 @@
               {{ syncing ? '同步中...' : '开始同步' }}
             </el-button>
           </div>
-          <el-button type="success" @click="showEodDialog = true" :loading="eodSyncing" :disabled="!qlib.available || eodSyncing">
+          <el-button
+            type="success"
+            @click="showEodDialog = true"
+            :loading="eodSyncing"
+            :disabled="!qlib.available || eodSyncing"
+          >
             {{ eodSyncing ? '增量同步中...' : '增量同步' }}
           </el-button>
-          <el-button type="warning" @click="doSyncIndices" :loading="indexSyncing" :disabled="!qlib.available || indexSyncing">
+          <el-button
+            type="warning"
+            @click="doSyncIndices"
+            :loading="indexSyncing"
+            :disabled="!qlib.available || indexSyncing"
+          >
             {{ indexSyncing ? '指数同步中...' : '同步指数' }}
+          </el-button>
+          <el-button
+            type="success"
+            plain
+            @click="doSyncFundamental"
+            :loading="fundamentalSyncing"
+            :disabled="!qlib.available || fundamentalSyncing"
+          >
+            {{ fundamentalSyncing ? '财报同步中...' : '同步财报' }}
           </el-button>
           <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
             {{ integrityChecking ? '校验中...' : '数据校验' }}
@@ -138,52 +164,145 @@
       </div>
     </div>
 
+    <!-- 外盘隔夜情绪因子（akshare，手动触发，广播到 bin 供因子表达式引用） -->
+    <SectionCard class="mb-6">
+      <div class="card-header">
+        <div class="card-title-group">
+          <span class="card-header__title">外盘隔夜情绪因子</span>
+          <span class="badge badge-info">akshare</span>
+          <span v-if="externalMarket.synced_at" class="text-muted" style="font-size: var(--font-size-sm)">
+            最近更新: {{ formatTime(externalMarket.synced_at) }}
+          </span>
+          <span v-else class="text-muted" style="font-size: var(--font-size-sm)">尚未同步</span>
+        </div>
+        <el-button type="primary" @click="doSyncExternalMarket" :loading="externalSyncing">
+          {{ externalSyncing ? '拉取中...' : '拉取外盘数据' }}
+        </el-button>
+      </div>
+      <p class="text-muted" style="font-size: var(--font-size-sm); margin: 8px 0 12px">
+        拉取标普500/纳斯达克/道琼斯/恒生指数隔夜涨跌幅，对齐 A股日历后广播为因子字段 （<code>$us_sp500_ret</code>
+        等）。每个交易日外盘收盘后手动触发一次。
+      </p>
+      <el-table
+        v-if="Object.keys(externalMarket.items || {}).length"
+        :data="Object.values(externalMarket.items)"
+        size="small"
+        stripe
+      >
+        <el-table-column label="指数" min-width="120">
+          <template #default="{ row }">
+            <span class="font-mono">{{ row.label }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最新交易日" width="130" align="center">
+          <template #default="{ row }">{{ row.last_date || '--' }}</template>
+        </el-table-column>
+        <el-table-column label="收盘" width="110" align="right">
+          <template #default="{ row }">{{ row.close ?? '--' }}</template>
+        </el-table-column>
+        <el-table-column label="当日涨跌" width="110" align="right">
+          <template #default="{ row }">
+            <span :class="row.ret >= 0 ? 'text-success' : 'text-danger'">
+              {{ row.ret != null ? (row.ret * 100).toFixed(2) + '%' : '--' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.ok ? 'success' : 'danger'">{{ row.ok ? '正常' : '失败' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error" class="error-text">{{ row.error }}</span>
+            <span v-else class="text-muted">已广播 {{ row.stocks_written }} 只股票</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无外盘数据，点击「拉取外盘数据」获取" :image-size="60" />
+    </SectionCard>
+
     <!-- 数据状态详情 -->
     <SectionCard title="数据状态详情">
-        <div class="quick-preview-bar">
-          <span class="quick-preview-label">快速预览:</span>
-          <el-button size="small" @click="loadPreview('csi300')">沪深300</el-button>
-          <el-button size="small" @click="loadPreview('csi500')">中证500</el-button>
-          <el-button size="small" @click="loadPreview('all')">全部A股</el-button>
-          <el-button size="small" @click="loadPreview('sh600000')">浦发银行</el-button>
-        </div>
+      <div class="quick-preview-bar">
+        <span class="quick-preview-label">快速预览:</span>
+        <el-button size="small" @click="loadPreview('csi300')">沪深300</el-button>
+        <el-button size="small" @click="loadPreview('csi500')">中证500</el-button>
+        <el-button size="small" @click="loadPreview('all')">全部A股</el-button>
+        <el-button size="small" @click="loadPreview('sh600000')">浦发银行</el-button>
+      </div>
 
       <el-table :data="statusList" size="small" stripe empty-text="暂无数据" max-height="400">
         <el-table-column prop="universe" label="股票池" width="120" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="font-mono">{{ row.universe }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="latest_date" label="最新日期" width="130" align="center" />
         <el-table-column prop="stock_count" label="股票数" width="100" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="num">{{ row.stock_count?.toLocaleString() || '--' }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="row_count" label="记录数" width="100" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="num">{{ row.row_count?.toLocaleString() || '--' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="100" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="status-badge sm" :class="getStatusClass(row.status)">{{ row.status }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="last_error" label="错误信息" min-width="200" show-overflow-tooltip>
-          <template #default="{row}">
+          <template #default="{ row }">
             <span v-if="row.last_error" class="error-text">{{ row.last_error }}</span>
             <span v-else class="text-muted">--</span>
           </template>
         </el-table-column>
         <el-table-column label="更新时间" width="180" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="time">{{ formatTime(row.last_updated) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="100" align="center" fixed="right">
-          <template #default="{row}">
+          <template #default="{ row }">
             <el-button size="small" link type="primary" @click="loadPreview(row.universe)">预览</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </SectionCard>
+
+    <!-- 指数数据（stock_index 主表：与股票区分，只含 OHLCV，不参与股票校验） -->
+    <SectionCard title="指数数据" class="mt-6">
+      <div class="card-header">
+        <div class="card-title-group">
+          <span class="text-muted" style="font-size: var(--font-size-sm)">
+            features/ 下的指数目录（共 {{ indicesList.length }} 个），只含 OHLCV 字段，校验时跳过股票专属要求
+          </span>
+        </div>
+        <el-button size="small" @click="loadIndices" :loading="indicesLoading">刷新</el-button>
+      </div>
+      <el-table :data="indicesList" size="small" stripe empty-text="暂无指数注册" max-height="300">
+        <el-table-column prop="code" label="代码" width="120" align="center">
+          <template #default="{ row }">
+            <span class="font-mono">{{ row.code }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" min-width="120" />
+        <el-table-column prop="source" label="数据源" width="100" align="center" />
+        <el-table-column label="bin 状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.has_bin ? 'success' : 'warning'">
+              {{ row.has_bin ? '已同步' : '缺失' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="bin 字段" min-width="220">
+          <template #default="{ row }">
+            <span class="text-muted" style="font-size: var(--font-size-sm)">
+              {{ (row.bin_fields || []).join(', ') || '--' }}
+            </span>
           </template>
         </el-table-column>
       </el-table>
@@ -195,17 +314,31 @@
         <div class="stat-cell">
           <div class="stat-label">最近 30 天成功率</div>
           <div class="stat-value">
-            <span :class="syncStats.success_rate?.rate >= 0.8 ? 'text-success' : syncStats.success_rate?.rate >= 0.5 ? 'text-warning' : 'text-danger'">
+            <span
+              :class="
+                syncStats.success_rate?.rate >= 0.8
+                  ? 'text-success'
+                  : syncStats.success_rate?.rate >= 0.5
+                    ? 'text-warning'
+                    : 'text-danger'
+              "
+            >
               {{ ((syncStats.success_rate?.rate || 0) * 100).toFixed(1) }}%
             </span>
-            <span class="stat-sub">成功 {{ syncStats.success_rate?.ok || 0 }} / 失败 {{ syncStats.success_rate?.failed || 0 }} / 共 {{ syncStats.success_rate?.total || 0 }}</span>
+            <span class="stat-sub"
+              >成功 {{ syncStats.success_rate?.ok || 0 }} / 失败 {{ syncStats.success_rate?.failed || 0 }} / 共
+              {{ syncStats.success_rate?.total || 0 }}</span
+            >
           </div>
         </div>
         <div class="stat-cell">
           <div class="stat-label">平均耗时</div>
           <div class="stat-value">
             {{ formatDuration(syncStats.duration_stats?.avg) }}
-            <span class="stat-sub">p50 {{ formatDuration(syncStats.duration_stats?.p50) }} / p95 {{ formatDuration(syncStats.duration_stats?.p95) }}</span>
+            <span class="stat-sub"
+              >p50 {{ formatDuration(syncStats.duration_stats?.p50) }} / p95
+              {{ formatDuration(syncStats.duration_stats?.p95) }}</span
+            >
           </div>
         </div>
         <div class="stat-cell">
@@ -223,13 +356,9 @@
       <div v-if="syncStats.failure_reasons?.length" class="failure-reasons mt-3">
         <div class="stat-label mb-1">失败原因</div>
         <div class="reason-chips">
-          <el-tag
-            v-for="r in syncStats.failure_reasons"
-            :key="r.reason"
-            size="small"
-            type="danger"
-            class="mr-1"
-          >{{ r.reason }} ×{{ r.count }}</el-tag>
+          <el-tag v-for="r in syncStats.failure_reasons" :key="r.reason" size="small" type="danger" class="mr-1"
+            >{{ r.reason }} ×{{ r.count }}</el-tag
+          >
         </div>
       </div>
     </SectionCard>
@@ -240,26 +369,30 @@
         <el-table-column prop="version" label="版本" width="120" />
         <el-table-column prop="release_date" label="发布日期" width="120" />
         <el-table-column prop="file_size_mb" label="文件大小" width="100" align="right">
-          <template #default="{row}">{{ row.file_size_mb ? row.file_size_mb + ' MB' : '--' }}</template>
+          <template #default="{ row }">{{ row.file_size_mb ? row.file_size_mb + ' MB' : '--' }}</template>
         </el-table-column>
         <el-table-column label="状态" width="100" align="center">
-          <template #default="{row}">
+          <template #default="{ row }">
             <span class="status-badge sm" :class="getStatusClass(row.status)">{{ row.status }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="started_at" label="开始时间" width="180">
-          <template #default="{row}"><span class="time">{{ formatTime(row.started_at) }}</span></template>
+          <template #default="{ row }"
+            ><span class="time">{{ formatTime(row.started_at) }}</span></template
+          >
         </el-table-column>
         <el-table-column prop="finished_at" label="完成时间" width="180">
-          <template #default="{row}"><span class="time">{{ formatTime(row.finished_at) }}</span></template>
+          <template #default="{ row }"
+            ><span class="time">{{ formatTime(row.finished_at) }}</span></template
+          >
         </el-table-column>
-          <el-table-column label="耗时" width="90" align="center">
-            <template #default="{row}">
-              <span class="time">{{ formatDuration(row.duration_seconds) }}</span>
-            </template>
-          </el-table-column>
+        <el-table-column label="耗时" width="90" align="center">
+          <template #default="{ row }">
+            <span class="time">{{ formatDuration(row.duration_seconds) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="error" label="错误" min-width="200" show-overflow-tooltip>
-          <template #default="{row}">
+          <template #default="{ row }">
             <span v-if="row.error" class="error-text">{{ row.error }}</span>
             <span v-else class="text-muted">--</span>
           </template>
@@ -269,46 +402,53 @@
 
     <!-- 数据预览对话框 -->
     <el-dialog v-model="previewVisible" title="数据预览" width="80%" :close-on-click-modal="true">
-        <div class="preview-toolbar">
-          <el-input
-            v-model="previewCodeInput"
-            placeholder="输入股票代码如 sh600000 或股票池 csi300"
-            style="width: 260px"
-            @keyup.enter="loadPreview(previewCodeInput)"
-          />
-          <el-button @click="loadPreview(previewCodeInput)" size="small">查询</el-button>
-          <el-button @click="loadPreview()" size="small">最近数据</el-button>
-          <span class="preview-hint-inline">
-            {{ previewCode ? '当前: ' + previewCode : '最近数据' }}
-            ({{ previewData.length }} 条)
-          </span>
-        </div>
-        <el-table :data="previewData" size="small" stripe max-height="500" v-loading="previewLoading">
-          <el-table-column
-            v-for="col in previewColumns"
-            :key="col"
-            :prop="col"
-            :label="col"
-            min-width="120"
-            show-overflow-tooltip
-          />
-          <template #empty>
-            <div class="preview-empty">
-              <p v-if="!previewLoading">暂无数据，请检查股票代码是否正确，或尝试输入其他代码</p>
-              <p v-else>加载中...</p>
-            </div>
-          </template>
-        </el-table>
-      </el-dialog>
-  
+      <div class="preview-toolbar">
+        <el-input
+          v-model="previewCodeInput"
+          placeholder="输入股票代码如 sh600000 或股票池 csi300"
+          style="width: 260px"
+          @keyup.enter="loadPreview(previewCodeInput)"
+        />
+        <el-button @click="loadPreview(previewCodeInput)" size="small">查询</el-button>
+        <el-button @click="loadPreview()" size="small">最近数据</el-button>
+        <span class="preview-hint-inline">
+          {{ previewCode ? '当前: ' + previewCode : '最近数据' }}
+          ({{ previewData.length }} 条)
+        </span>
+      </div>
+      <el-table :data="previewData" size="small" stripe max-height="500" v-loading="previewLoading">
+        <el-table-column
+          v-for="col in previewColumns"
+          :key="col"
+          :prop="col"
+          :label="col"
+          min-width="120"
+          show-overflow-tooltip
+        />
+        <template #empty>
+          <div class="preview-empty">
+            <p v-if="!previewLoading">暂无数据，请检查股票代码是否正确，或尝试输入其他代码</p>
+            <p v-else>加载中...</p>
+          </div>
+        </template>
+      </el-table>
+    </el-dialog>
+
     <!-- 增量EOD同步对话框 -->
     <el-dialog v-model="showEodDialog" title="增量EOD同步" width="460px" :close-on-click-modal="false">
       <div class="eod-sync-form">
         <p class="eod-hint">
-          基于 <strong>baostock</strong>（主源, 一次拉全市场）或 <strong>akshare</strong>（兜底, 逐只爬）拉取最近 N 天的日K数据，<br>
+          基于 <strong>baostock</strong>（主源, 一次拉全市场）或 <strong>akshare</strong>（兜底, 逐只爬）拉取最近 N
+          天的日K数据，<br />
           增量追加到 qlib bin 目录。baostock 含 ST 标记和估值字段，推荐使用。
         </p>
         <el-form label-width="90px" label-position="left">
+          <el-form-item label="数据源">
+            <el-select v-model="eodForm.source" style="width: 100%">
+              <el-option label="baostock（主源，一次拉全市场）" value="baostock" />
+              <el-option label="akshare（兜底，逐只爬）" value="akshare" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="股票池">
             <el-select v-model="eodForm.universe" style="width: 100%">
               <el-option label="沪深300" value="csi300" />
@@ -321,7 +461,9 @@
           </el-form-item>
           <el-form-item label="覆盖已有">
             <el-switch v-model="eodForm.overwrite" />
-            <span class="eod-warn-hint">开启后将用 baostock/akshare 数据覆盖已有日期（可能因复权差异导致价格断裂）</span>
+            <span class="eod-warn-hint"
+              >开启后将用 baostock/akshare 数据覆盖已有日期（可能因复权差异导致价格断裂）</span
+            >
           </el-form-item>
         </el-form>
         <div v-if="eodResult" class="eod-result">
@@ -339,20 +481,26 @@
       </div>
       <template #footer>
         <el-button @click="showEodDialog = false">关闭</el-button>
-        <el-button type="primary" @click="doEodSync" :loading="eodSyncing" :disabled="eodSyncing">
-          开始同步
-        </el-button>
+        <el-button type="primary" @click="doEodSync" :loading="eodSyncing" :disabled="eodSyncing"> 开始同步 </el-button>
       </template>
     </el-dialog>
 
     <!-- 数据完整性校验弹窗 -->
-    <el-dialog v-model="showIntegrityDialog" title="数据完整性校验" width="760px">
+    <el-dialog
+      v-model="showIntegrityDialog"
+      title="数据完整性校验"
+      width="760px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
       <div v-if="integrityChecking" v-loading="true" style="min-height: 200px"></div>
       <div v-else-if="validationReport" class="integrity-result">
         <el-alert
           :title="validationReport.summary"
           :type="validationReport.ok ? 'success' : 'warning'"
-          :closable="false" show-icon style="margin-bottom: 12px"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
         />
         <div v-if="validationReport.sync_state?.syncing" class="calendar-sync-note">
           <el-tag size="small" type="warning">回填中</el-tag>
@@ -360,30 +508,61 @@
         </div>
         <div class="check-list">
           <div v-for="(chk, name) in validationReport.checks" :key="name" class="check-item">
-            <el-tag :type="checkStatusTagType(chk.status)" size="small" class="check-status">{{ checkStatusLabel(chk.status) }}</el-tag>
+            <el-tag :type="checkStatusTagType(chk.status)" size="small" class="check-status">{{
+              checkStatusLabel(chk.status)
+            }}</el-tag>
             <span class="check-name">{{ checkName(name) }}</span>
             <span class="check-msg">{{ chk.message }}</span>
           </div>
         </div>
         <div v-if="driftNeedsRepair" class="drift-box">
           <div class="drift-title">待修复差异</div>
-          <el-tag v-if="validationReport.checks.fields.bad_size_stocks" size="small">bin 长度异常 {{ validationReport.checks.fields.bad_size_stocks }} 只</el-tag>
-          <el-tag v-if="validationReport.drift.stocks_with_gaps" size="small">疑似损坏 {{ validationReport.drift.stocks_with_gaps }} 只</el-tag>
-          <el-tag v-if="validationReport.drift.missing_calendar_days" size="small">day.txt 缺 {{ validationReport.drift.missing_calendar_days }} 天</el-tag>
-          <el-tag v-if="validationReport.drift.missing_field_files" size="small">字段文件缺 {{ validationReport.drift.missing_field_files }} 个</el-tag>
-          <el-tag v-if="validationReport.drift.db_without_bin" size="small">DB 无 bin {{ validationReport.drift.db_without_bin }} 只</el-tag>
-          <el-tag v-if="validationReport.drift.range_mismatch" size="small">区间错位 {{ validationReport.drift.range_mismatch }} 只</el-tag>
-          <el-tag v-if="validationReport.drift.bin_without_db" size="small" type="info">bin 无 DB 记录 {{ validationReport.drift.bin_without_db }} 只</el-tag>
-          <el-tag v-if="validationReport.drift.pg_missing_dates" size="small" type="warning">缺 {{ validationReport.drift.pg_missing_dates }} 个交易日（需 baostock）</el-tag>
+          <el-tag v-if="validationReport.checks.fields.bad_size_stocks" size="small"
+            >bin 长度异常 {{ validationReport.checks.fields.bad_size_stocks }} 只</el-tag
+          >
+          <el-tag v-if="validationReport.drift.stocks_with_gaps" size="small"
+            >疑似损坏 {{ validationReport.drift.stocks_with_gaps }} 只</el-tag
+          >
+          <el-tag v-if="validationReport.drift.missing_calendar_days" size="small"
+            >day.txt 缺 {{ validationReport.drift.missing_calendar_days }} 天</el-tag
+          >
+          <el-tag v-if="validationReport.drift.missing_field_files" size="small"
+            >字段文件缺 {{ validationReport.drift.missing_field_files }} 个</el-tag
+          >
+          <el-tag v-if="validationReport.drift.db_without_bin" size="small"
+            >DB 无 bin {{ validationReport.drift.db_without_bin }} 只</el-tag
+          >
+          <el-tag v-if="validationReport.drift.range_mismatch" size="small"
+            >区间错位 {{ validationReport.drift.range_mismatch }} 只</el-tag
+          >
+          <el-tag v-if="validationReport.drift.bin_without_db" size="small" type="info"
+            >bin 无 DB 记录 {{ validationReport.drift.bin_without_db }} 只</el-tag
+          >
+          <el-tag v-if="validationReport.drift.pg_missing_dates" size="small" type="warning"
+            >缺 {{ validationReport.drift.pg_missing_dates }} 个交易日（需 baostock）</el-tag
+          >
+          <el-tag v-if="validationReport.drift.macro_bad_size" size="small"
+            >宏观字段长度异常 {{ validationReport.drift.macro_bad_size }} 个</el-tag
+          >
+          <el-tag v-if="validationReport.drift.macro_missing" size="small"
+            >宏观字段缺失 {{ validationReport.drift.macro_missing }} 个</el-tag
+          >
         </div>
         <div v-if="integrityResult && integrityResult.calendar_sync" class="calendar-sync-note">
-          <el-tag size="small" type="info">只读说明</el-tag>
+          <el-tag size="small" type="info">数据对齐</el-tag>
           <span class="calendar-sync-text">{{ integrityResult.calendar_sync }}</span>
         </div>
         <div class="integrity-stats" v-if="validationReport.rows !== undefined">
-          <div class="stat-item"><span class="stat-label">qlib 抽样行数</span><span class="stat-value">{{ validationReport.rows }}</span></div>
-          <div class="stat-item"><span class="stat-label">抽样股票</span><span class="stat-value">{{ validationReport.total_stocks }}</span></div>
-          <div class="stat-item"><span class="stat-label">bin 股票数</span><span class="stat-value">{{ validationReport.checks.coverage.stocks_in_bin }}</span></div>
+          <div class="stat-item">
+            <span class="stat-label">qlib 抽样行数</span><span class="stat-value">{{ validationReport.rows }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">抽样股票</span><span class="stat-value">{{ validationReport.total_stocks }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">bin 股票数</span
+            ><span class="stat-value">{{ validationReport.checks.coverage.stocks_in_bin }}</span>
+          </div>
         </div>
       </div>
       <div v-else-if="integrityResult && !integrityResult.ok">
@@ -393,11 +572,16 @@
         <el-button @click="showIntegrityDialog = false">关闭</el-button>
         <el-button
           v-if="driftNeedsRepair && !validationReport?.sync_state?.syncing"
-          type="warning" @click="doRepair" :loading="repairing" :disabled="repairing"
+          type="warning"
+          @click="doRepair"
+          :loading="repairing"
+          :disabled="repairing"
         >
           {{ repairLabel }}
         </el-button>
-        <el-button type="primary" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="integrityChecking">重新校验</el-button>
+        <el-button type="primary" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="integrityChecking"
+          >重新校验</el-button
+        >
       </template>
     </el-dialog>
 
@@ -421,13 +605,7 @@
             <span class="repair-item-desc">{{ item.desc }}</span>
           </div>
         </div>
-        <el-alert
-          v-if="repairNeedsBaostock"
-          type="warning"
-          :closable="false"
-          show-icon
-          class="repair-baostock-alert"
-        >
+        <el-alert v-if="repairNeedsBaostock" type="warning" :closable="false" show-icon class="repair-baostock-alert">
           <template #title>需从 baostock 补拉 {{ repairBaostockDays }} 个缺失交易日</template>
           将消耗网络请求与 baostock 每日配额（≤50k 次/天），耗时较长，请耐心等待。
         </el-alert>
@@ -445,10 +623,18 @@
     </el-dialog>
 
     <!-- 补齐进度弹窗 -->
-    <el-dialog v-model="showRepairProgressDialog" width="480px" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog
+      v-model="showRepairProgressDialog"
+      width="480px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
       <template #header>
         <div class="repair-progress-header">
-          <div class="repair-progress-icon" :class="{ 'is-done': repairProgressDone, 'is-failed': repairProgressFailed }">
+          <div
+            class="repair-progress-icon"
+            :class="{ 'is-done': repairProgressDone, 'is-failed': repairProgressFailed }"
+          >
             <el-icon v-if="!repairProgressDone && !repairProgressFailed" class="is-loading"><Loading /></el-icon>
             <el-icon v-else-if="repairProgressDone"><CircleCheckFilled /></el-icon>
             <el-icon v-else><CircleCloseFilled /></el-icon>
@@ -488,9 +674,28 @@ defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getQuantDataStatus, syncQuantData, getQlibStatus, getDataPreview, getSyncHistory, getSyncStats, eodSync, getEodResult, syncIndices, syncIndustry, getSyncProgress, validateData, repairData } from '@/api/quant'
+import {
+  getQuantDataStatus,
+  syncQuantData,
+  syncFullData,
+  getQlibStatus,
+  getDataPreview,
+  getSyncHistory,
+  getSyncStats,
+  eodSync,
+  getEodResult,
+  syncIndices,
+  getIndices,
+  getSyncProgress,
+  validateData,
+  repairData,
+  getExternalMarket,
+  syncExternalMarket,
+  syncFundamental,
+} from '@/api/quant'
 import { chartTheme } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
 
@@ -500,7 +705,7 @@ const statusList = ref([])
 const route = useRoute()
 const loading = ref(false)
 const syncing = ref(false)
-const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0 })
+const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0, disk_usage: null })
 const syncProgress = ref(null)
 let progressTimer = null
 // 轮询连续拿不到进度（data=null）的次数，超过阈值停止轮询，避免空转泄漏
@@ -512,29 +717,35 @@ const previewCode = ref('')
 const previewCodeInput = ref('')
 const syncHistory = ref([])
 const syncStats = ref(null)
+const indicesList = ref([])
+const indicesLoading = ref(false)
 const showEodDialog = ref(false)
 const eodSyncing = ref(false)
 const eodResult = ref(null)
-const eodForm = reactive({ universe: 'csi300', days: 5, overwrite: false })
+const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, overwrite: false })
 const syncYears = ref(5)
 const indexSyncing = ref(false)
-const industrySyncing = ref(false)
-  const integrityChecking = ref(false)
-  const showIntegrityDialog = ref(false)
-  const integrityResult = ref(null)
-  const validationReport = ref(null)
-  const repairing = ref(false)
-  const showRepairDialog = ref(false)
-  const repairItems = ref([])
-  const showRepairProgressDialog = ref(false)
+const fundamentalSyncing = ref(false)
+const externalMarket = ref({ synced_at: null, items: {} })
+const externalSyncing = ref(false)
+const integrityChecking = ref(false)
+const showIntegrityDialog = ref(false)
+const integrityResult = ref(null)
+const validationReport = ref(null)
+const repairing = ref(false)
+const showRepairDialog = ref(false)
+const repairItems = ref([])
+const showRepairProgressDialog = ref(false)
 const currentStatus = computed(() => statusList.value[0] || {})
 
 // 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
 // （兼容旧版 smart_sync 路径写入的状态；baostock 回填失败时 status=failed + last_error 由 sync_runner 标记）
 const isDataCorrupt = computed(() => {
-  return currentStatus.value.latest_date === null
-    && !!currentStatus.value.last_error
-    && currentStatus.value.last_error.includes('数据损坏')
+  return (
+    currentStatus.value.latest_date === null &&
+    !!currentStatus.value.last_error &&
+    currentStatus.value.last_error.includes('数据损坏')
+  )
 })
 
 const daysSinceUpdate = computed(() => {
@@ -545,6 +756,7 @@ const daysSinceUpdate = computed(() => {
 
 const syncProgressText = computed(() => {
   if (syncProgress.value?.data_source === 'repair') return '正在执行数据补齐（独立进程后台运行），请耐心等待...'
+  if (syncProgress.value?.data_source === 'full') return '正在执行一键全同步（A股→指数→宏观→财报→外盘），请耐心等待...'
   return '正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...'
 })
 
@@ -601,9 +813,21 @@ function formatDuration(seconds) {
   return h + 'h' + (m > 0 ? m + 'm' : '')
 }
 
+function humanSize(bytes) {
+  if (!bytes && bytes !== 0) return '--'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = bytes
+  let i = 0
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024
+    i++
+  }
+  return `${size.toFixed(size >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
+}
+
 async function loadPreview(code) {
   previewCode.value = code || ''
-    previewCodeInput.value = code || ''
+  previewCodeInput.value = code || ''
   previewVisible.value = true
   previewLoading.value = true
   try {
@@ -646,8 +870,9 @@ async function loadQlib() {
     const data = await getQlibStatus()
     qlib.available = data?.available || false
     qlib.provider_uri = data?.provider_uri || ''
-      qlib.earliest_date = data?.earliest_date || null
-      qlib.calendar_count = data?.calendar_count || 0
+    qlib.earliest_date = data?.earliest_date || null
+    qlib.calendar_count = data?.calendar_count || 0
+    qlib.disk_usage = data?.disk_usage || null
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('qlib 状态检查失败')
   }
@@ -662,9 +887,21 @@ async function loadSyncStats() {
   }
 }
 
+async function loadIndices() {
+  indicesLoading.value = true
+  try {
+    const data = await getIndices()
+    indicesList.value = data?.items || []
+  } catch (e) {
+    if (e !== 'cancel') indicesList.value = []
+  } finally {
+    indicesLoading.value = false
+  }
+}
+
 async function loadAll() {
   loading.value = true
-  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadSyncStats()])
+  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadSyncStats(), loadIndices()])
   loading.value = false
 }
 
@@ -672,11 +909,12 @@ async function smartSync() {
   syncing.value = true
   syncProgress.value = null
   try {
-    await syncQuantData({ years: syncYears.value })
-    ElMessage.success(`数据同步已提交（baostock 回填 ${syncYears.value} 年，后台执行）`)
+    // 一键全同步：A股回填 → 指数 → 宏观 → 财报 → 外盘（独立进程顺序执行）
+    await syncFullData(syncYears.value)
+    ElMessage.success(`一键全同步已提交（A股回填 ${syncYears.value} 年 → 指数 → 宏观 → 财报 → 外盘，后台执行）`)
     startProgressPolling()
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('数据同步提交失败')
+    if (e !== 'cancel') ElMessage.error('同步提交失败')
     syncing.value = false
   }
 }
@@ -688,33 +926,42 @@ function startProgressPolling() {
   progressTimer = setInterval(pollSyncProgress, 1000)
 }
 
-const taskLabel = (src) => ({
-  repair: '数据补齐',
-  backfill: '数据回填',
-  baostock: '数据同步',
-  eod: '增量同步',
-  eastmoney: '宏观同步',
-  indices: '指数同步',
-}[src] || '后台任务')
+const taskLabel = (src) =>
+  ({
+    repair: '数据补齐',
+    backfill: '数据回填',
+    baostock: '数据同步',
+    eod: '增量同步',
+    eastmoney: '宏观同步',
+    indices: '指数同步',
+    fundamental: '财报同步',
+    full: '一键全同步',
+  })[src] || '后台任务'
 
 async function pollSyncProgress() {
   try {
     const data = await getSyncProgress()
     syncProgress.value = data
     if (data?.status === 'done' || data?.status === 'failed') {
-      if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+      if (progressTimer) {
+        clearInterval(progressTimer)
+        progressTimer = null
+      }
       nullPollCount = 0
       syncing.value = false
       const label = taskLabel(data?.data_source)
       if (data?.status === 'done') {
-        ElMessage.success(label + '完成')
+        // 补齐/同步完成提示带上任务真实结果（如 "修复完成: bins(6ok/0failed/1skipped)..."）
+        ElMessage.success(label + '完成' + (data?.message && data.message !== '正在同步...' ? `（${data.message}）` : ''))
         // 补齐完成后自动重新校验，刷新报告
         if (data?.data_source === 'repair' && showIntegrityDialog.value) {
           doIntegrityCheck()
         }
         // 补齐进度弹窗：成功后 2.5s 自动关闭；失败保持打开展示错误
         if (showRepairProgressDialog.value && data?.data_source === 'repair') {
-          setTimeout(() => { showRepairProgressDialog.value = false }, 2500)
+          setTimeout(() => {
+            showRepairProgressDialog.value = false
+          }, 2500)
         }
       } else {
         ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
@@ -726,7 +973,10 @@ async function pollSyncProgress() {
       // 连续一段时间无进度（worker 未写入/已退出且无残留文件），停止轮询
       nullPollCount += 1
       if (nullPollCount > 30) {
-        if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+        if (progressTimer) {
+          clearInterval(progressTimer)
+          progressTimer = null
+        }
         nullPollCount = 0
         syncing.value = false
         if (showRepairProgressDialog.value) showRepairProgressDialog.value = false
@@ -739,13 +989,12 @@ async function pollSyncProgress() {
   }
 }
 
-
 async function doEodSync() {
   eodSyncing.value = true
   eodResult.value = null
   try {
     // EOD 同步是后台任务，提交后立即返回（无实际结果），需轮询 /eod-result 获取真实结果
-    await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite)
+    await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite, eodForm.source)
     ElMessage.success('增量同步已提交，后台执行中')
     await loadEodResult()
     eodSyncing.value = false
@@ -759,7 +1008,7 @@ async function doEodSync() {
 async function loadEodResult() {
   // 后台任务完成后轮询真实结果（最多等 60s，避免进度未写入时拿到 null）
   for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise((r) => setTimeout(r, 1000))
     try {
       const data = await getEodResult()
       if (data && data.ok !== false && data.success !== undefined) {
@@ -778,7 +1027,9 @@ async function doSyncIndices() {
   try {
     await syncIndices()
     ElMessage.success('指数同步已提交，后台执行中')
-    setTimeout(loadAll, 3000)
+    syncing.value = true
+    syncProgress.value = null
+    startProgressPolling()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('指数同步失败: ' + (e?.message || e))
   } finally {
@@ -786,15 +1037,41 @@ async function doSyncIndices() {
   }
 }
 
-async function doSyncIndustry() {
-  industrySyncing.value = true
+// 季频财报同步（默认只拉数据入库；进度显示在同步进度条）
+async function doSyncFundamental() {
+  fundamentalSyncing.value = true
   try {
-    const data = await syncIndustry()
-    ElMessage.success(`行业分类同步成功：${data?.industries ?? 0} 个行业, ${data?.stocks ?? 0} 只股票`)
+    await syncFundamental(false)
+    ElMessage.success('财报同步已提交（全市场逐股拉取，约 2-3 小时）')
+    syncing.value = true
+    syncProgress.value = null
+    startProgressPolling()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('财报同步提交失败: ' + (e?.message || e))
+  } finally {
+    fundamentalSyncing.value = false
+  }
+}
+
+async function loadExternalMarket() {
+  try {
+    const data = await getExternalMarket()
+    externalMarket.value = data || { synced_at: null, items: {} }
   } catch {
     /* 拦截器已提示 */
+  }
+}
+
+async function doSyncExternalMarket() {
+  externalSyncing.value = true
+  try {
+    await syncExternalMarket()
+    await loadExternalMarket()
+    ElMessage.success('外盘因子已更新并广播到 bin')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('外盘拉取失败: ' + (e?.message || e))
   } finally {
-    industrySyncing.value = false
+    externalSyncing.value = false
   }
 }
 
@@ -808,7 +1085,8 @@ async function doIntegrityCheck() {
     // day.txt 与数据库不一致时由「日历同步」检查项报告，可用「一键补齐」修复。
     const data = await validateData()
     validationReport.value = data
-    integrityResult.value = { ...data, calendar_sync: '校验只读，未改动任何数据' }
+    // 用后端返回的 checks_summary（数据对齐状态）替代硬编码文案
+    integrityResult.value = { ...data, calendar_sync: data?.checks_summary || '校验只读，未改动任何数据' }
     ElMessage.success(data?.summary || '校验完成')
   } catch (e) {
     integrityResult.value = { ok: false, error: String(e?.message || e) }
@@ -823,15 +1101,17 @@ const repairLabel = computed(() => {
   if (d?.needs_baostock) return `一键补齐（含 baostock ${d.pg_missing_dates} 天）`
   return '一键补齐'
 })
-const checkStatusLabel = (s) => ({ ok: '正常', warn: '警告', error: '异常' }[s] || s)
-const checkStatusTagType = (s) => ({ ok: 'success', warn: 'warning', error: 'danger' }[s] || 'info')
-const checkName = (n) => ({
-  fields: 'bin 字段完整性',
-  fieldset: '字段集合',
-  calendar: '日历同步',
-  coverage: '覆盖一致性',
-  qlib: 'qlib 可读性',
-}[n] || n)
+const checkStatusLabel = (s) => ({ ok: '正常', warn: '警告', error: '异常' })[s] || s
+const checkStatusTagType = (s) => ({ ok: 'success', warn: 'warning', error: 'danger' })[s] || 'info'
+const checkName = (n) =>
+  ({
+    fields: 'bin 字段完整性',
+    fieldset: '字段集合',
+    calendar: '日历同步',
+    coverage: '覆盖一致性',
+    qlib: 'qlib 可读性',
+    macro: '宏观字段对齐',
+  })[n] || n
 
 const repairNeedsBaostock = computed(() => !!validationReport.value?.drift?.needs_baostock)
 const repairBaostockDays = computed(() => validationReport.value?.drift?.pg_missing_dates || 0)
@@ -864,12 +1144,37 @@ function doRepair() {
   if (!d) return
   const f = validationReport.value?.checks?.fields || {}
   const items = []
-  if (d.missing_calendar_days) items.push({ key: 'calendar', level: 'warn', label: '日历缺失', desc: `day.txt 缺 ${d.missing_calendar_days} 天` })
-  if (f.bad_size_stocks) items.push({ key: 'size', level: 'error', label: '长度异常', desc: `bin 长度异常 ${f.bad_size_stocks} 只` })
-  if (d.stocks_with_gaps) items.push({ key: 'gaps', level: 'error', label: '疑似损坏', desc: `疑似损坏 ${d.stocks_with_gaps} 只` })
-  if (d.missing_field_files) items.push({ key: 'fields', level: 'warn', label: '字段缺失', desc: `字段文件缺 ${d.missing_field_files} 个` })
-  if (d.db_without_bin) items.push({ key: 'db2bin', level: 'warn', label: 'DB 无 bin', desc: `DB 有记录但 bin 缺失 ${d.db_without_bin} 只` })
-  if (d.range_mismatch) items.push({ key: 'range', level: 'error', label: '区间错位', desc: `区间错位 ${d.range_mismatch} 只` })
+  if (d.missing_calendar_days)
+    items.push({ key: 'calendar', level: 'warn', label: '日历缺失', desc: `day.txt 缺 ${d.missing_calendar_days} 天` })
+  if (f.bad_size_stocks)
+    items.push({ key: 'size', level: 'error', label: '长度异常', desc: `bin 长度异常 ${f.bad_size_stocks} 只` })
+  if (d.stocks_with_gaps)
+    items.push({ key: 'gaps', level: 'error', label: '疑似损坏', desc: `疑似损坏 ${d.stocks_with_gaps} 只` })
+  if (d.missing_field_files)
+    items.push({ key: 'fields', level: 'warn', label: '字段缺失', desc: `字段文件缺 ${d.missing_field_files} 个` })
+  if (d.db_without_bin)
+    items.push({
+      key: 'db2bin',
+      level: 'warn',
+      label: 'DB 无 bin',
+      desc: `DB 有记录但 bin 缺失 ${d.db_without_bin} 只`,
+    })
+  if (d.range_mismatch)
+    items.push({ key: 'range', level: 'error', label: '区间错位', desc: `区间错位 ${d.range_mismatch} 只` })
+  if (d.macro_bad_size)
+    items.push({
+      key: 'macro_size',
+      level: 'error',
+      label: '宏观字段异常',
+      desc: `宏观字段长度异常 ${d.macro_bad_size} 个`,
+    })
+  if (d.macro_missing)
+    items.push({
+      key: 'macro_missing',
+      level: 'warn',
+      label: '宏观字段缺失',
+      desc: `宏观字段缺失 ${d.macro_missing} 个`,
+    })
   if (!items.length) items.push({ key: 'misc', level: 'warn', label: '数据不一致', desc: 'bin 数据存在不一致' })
   repairItems.value = items
   showRepairDialog.value = true
@@ -934,38 +1239,117 @@ async function retrySync() {
   }
 }
 
-onMounted(() => { loadAll() })
+// 页面打开时探测是否有独立 worker 正在跑（读 /sync-progress 实时文件）。
+// 即使 stock_data_status 因 web 重启被 recover_stale_sync 误标 failed，
+// 只要 worker 存活就恢复进度显示；不依赖 DB 状态。
+async function checkRunningSync() {
+  try {
+    const data = await getSyncProgress()
+    // 与后端 sync_is_active() 判定一致：非终态且存在进度即视为活跃
+    const terminal = ['done', 'failed', 'idle', null]
+    if (data && !terminal.includes(data.status) && !syncing.value) {
+      syncing.value = true
+      syncProgress.value = data
+      startProgressPolling()
+    }
+  } catch (e) {
+    // 静默失败，交给 loadStatus 的 DB 状态路径兜底
+  }
+}
+
+onMounted(() => {
+  loadAll()
+  loadExternalMarket()
+  checkRunningSync()
+})
 
 watch(
   () => route.query.preview,
   (code) => {
     if (code) loadPreview(String(code))
   },
-  { immediate: true },
+  { immediate: true }
 )
-onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
+onBeforeUnmount(() => {
+  if (progressTimer) clearInterval(progressTimer)
+})
 </script>
 
 <style scoped lang="scss">
-.page-header { animation: fadeInUp 0.5s var(--ease-out-expo); }
-.page-title { font-size: var(--font-size-2xl); font-weight: 700; color: var(--text-primary); }
-.page-desc { font-size: var(--font-size-sm); color: var(--text-secondary); margin-top: 4px; }
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  animation: fadeInUp 0.5s var(--ease-out-expo);
+
+  &__lead {
+    flex: 1;
+    min-width: 0;
+  }
+  &__title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-xs);
+  }
+  &__subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+
+  &__title {
+    font-size: var(--font-size-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+}
+.card-title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
 
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
-  @media (max-width: 767px) { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 767px) {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .kpi-card {
   background: var(--bg-card);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 20px;
-  .kpi-label { font-size: 13px; color: var(--text-tertiary); margin-bottom: 8px; }
-  .kpi-value { font-size: 28px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .kpi-sub { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; }
+  .kpi-label {
+    font-size: var(--font-size-base);
+    color: var(--text-tertiary);
+    margin-bottom: 8px;
+  }
+  .kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-sub {
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+    margin-top: 6px;
+  }
 }
 
 .source-header {
@@ -975,24 +1359,35 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   gap: 16px;
   flex-wrap: wrap;
 }
-.source-title { font-size: var(--font-size-lg); font-weight: 600; color: var(--text-primary); }
-.source-meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
-.meta-label { color: var(--text-tertiary); margin-right: 4px; }
-.source-meta code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--primary); }
-.path-prediction {
+.source-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.source-meta {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+}
+.meta-label {
+  color: var(--text-tertiary);
+  margin-right: 4px;
+}
+.source-meta code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--primary);
+}
+.source-actions {
+  display: flex;
   gap: 8px;
-  margin-bottom: 8px;
-  padding: 6px 12px;
-  background: var(--bg-secondary, #f6f8fb);
-  border-radius: 6px;
-  font-size: var(--font-size-sm, 13px);
+  flex-shrink: 0;
 }
-.path-prediction .path-reason {
-  color: var(--text-secondary, #5b6b85);
-}
-.source-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 .source-error {
   margin-top: 10px;
@@ -1000,50 +1395,83 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   background: var(--danger-soft-faint);
   border: 1px solid var(--danger-soft-border);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   color: var(--danger);
   display: flex;
   align-items: center;
   gap: 8px;
   .error-icon {
     display: inline-flex;
-    width: 18px; height: 18px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     background: var(--danger);
     color: #fff;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 700;
     flex-shrink: 0;
   }
 }
 
-.source-error { align-items: flex-start; }
-.error-content { flex: 1; min-width: 0; }
-.error-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.source-error {
+  align-items: flex-start;
+}
+.error-content {
+  flex: 1;
+  min-width: 0;
+}
+.error-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .error-category {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   flex-shrink: 0;
   background: var(--danger-soft-strong);
   color: var(--danger);
 }
-.error-category.network { background: var(--warning-soft-strong); color: var(--warning); }
-.error-category.disk_full { background: var(--danger-soft-strong); color: var(--danger); }
-.error-category.data_corrupt { background: var(--primary-soft-strong); color: var(--primary); }
-.error-category.interrupted { background: var(--warning-soft-strong); color: var(--warning); }
-.error-msg { font-size: 13px; color: var(--danger); word-break: break-word; }
-.error-suggestion { margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
-.error-actions { margin-top: 8px; }
+.error-category.network {
+  background: var(--warning-soft-strong);
+  color: var(--warning);
+}
+.error-category.disk_full {
+  background: var(--danger-soft-strong);
+  color: var(--danger);
+}
+.error-category.data_corrupt {
+  background: var(--primary-soft-strong);
+  color: var(--primary);
+}
+.error-category.interrupted {
+  background: var(--warning-soft-strong);
+  color: var(--warning);
+}
+.error-msg {
+  font-size: var(--font-size-base);
+  color: var(--danger);
+  word-break: break-word;
+}
+.error-suggestion {
+  margin-top: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+.error-actions {
+  margin-top: 8px;
+}
 
 .sync-progress {
   background: var(--bg-card);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 20px;
   .progress-bar {
     height: 4px;
@@ -1058,47 +1486,111 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
     border-radius: 2px;
     animation: progress-pulse 2s ease-in-out infinite;
   }
-  .progress-text { font-size: 13px; color: var(--text-secondary); }
-  .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .progress-status { font-size: 13px; color: var(--text-primary); }
-  .progress-pct { font-size: 13px; font-weight: 600; color: var(--primary); }
-  .progress-detail { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+  .progress-text {
+    font-size: var(--font-size-base);
+    color: var(--text-secondary);
+  }
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .progress-status {
+    font-size: var(--font-size-base);
+    color: var(--text-primary);
+  }
+  .progress-pct {
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--primary);
+  }
+  .progress-detail {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
 }
 
 @keyframes progress-pulse {
-  0%, 100% { width: 30%; opacity: 0.7; }
-  50% { width: 70%; opacity: 1; }
+  0%,
+  100% {
+    width: 30%;
+    opacity: 0.7;
+  }
+  50% {
+    width: 70%;
+    opacity: 1;
+  }
 }
 
 .status-badge {
   display: inline-block;
   padding: 4px 10px;
-  border-radius: 9999px;
-  font-size: 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  &.sm { padding: 2px 8px; font-size: 11px; }
-  &.success { background: var(--success-soft); color: var(--success); }
-  &.warning { background: var(--warning-soft); color: var(--warning); }
-  &.danger { background: var(--danger-soft); color: var(--danger); }
+  &.sm {
+    padding: 2px 8px;
+    font-size: var(--font-size-xs);
+  }
+  &.success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  &.warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  &.danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
 }
 
 .badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  &.badge-info { background: var(--primary-soft); color: var(--primary); }
+  &.badge-info {
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
 }
 
-.font-mono { font-family: var(--font-mono, monospace); font-size: 13px; }
-.num { font-variant-numeric: tabular-nums; font-weight: 500; }
-.time { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.error-text { color: var(--danger); font-size: 12px; }
-.text-muted { color: var(--text-tertiary); }
+.font-mono {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-base);
+}
+.num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.time {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.error-text {
+  color: var(--danger);
+  font-size: var(--font-size-sm);
+}
+.text-muted {
+  color: var(--text-tertiary);
+}
 
-.mt-6 { margin-top: 24px; }
-.preview-hint { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.mt-6 {
+  margin-top: 24px;
+}
+.preview-hint {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
 
 .preview-toolbar {
   display: flex;
@@ -1107,8 +1599,17 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
-.preview-hint-inline { font-size: 13px; color: var(--text-secondary); margin-left: auto; }
-.preview-empty { padding: 32px 0; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+.preview-hint-inline {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+.preview-empty {
+  padding: 32px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-base);
+}
 
 .quick-preview-bar {
   display: flex;
@@ -1117,59 +1618,174 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
-.quick-preview-label { font-size: 13px; color: var(--text-tertiary); margin-right: 4px; }
+.quick-preview-label {
+  font-size: var(--font-size-base);
+  color: var(--text-tertiary);
+  margin-right: 4px;
+}
 
-.coverage-section { padding: 4px 0; }
+.coverage-section {
+  padding: 4px 0;
+}
 .coverage-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
 }
-.coverage-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.coverage-value { font-size: 20px; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+.coverage-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.coverage-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
 .coverage-detail {
   display: flex;
   gap: 24px;
   margin-top: 12px;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   color: var(--text-secondary);
   flex-wrap: wrap;
 }
 
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.eod-sync-form { padding: 0 4px; }
-.eod-hint { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px; }
-.eod-result { margin-top: 16px; }
-.eod-dates { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.eod-dates-label { font-size: 13px; color: var(--text-secondary); }
-.eod-date-tag { font-family: var(--font-mono, monospace); }
-.eod-warn-hint { margin-left: 12px; font-size: 12px; color: var(--text-tertiary); }
-.sync-years-group { display: inline-flex; align-items: center; gap: 6px; }
-.sync-years-label { font-size: 13px; color: var(--text-secondary); }
+.eod-sync-form {
+  padding: 0 4px;
+}
+.eod-hint {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+.eod-result {
+  margin-top: 16px;
+}
+.eod-dates {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.eod-dates-label {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+}
+.eod-date-tag {
+  font-family: var(--font-mono, monospace);
+}
+.eod-warn-hint {
+  margin-left: 12px;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+.sync-years-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sync-years-label {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+}
 
-.sync-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.sync-stats-grid .stat-cell { display: flex; flex-direction: column; gap: 4px; }
-.sync-stats-grid .stat-label { font-size: 12px; color: var(--text-tertiary); }
-.sync-stats-grid .stat-value { font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.sync-stats-grid .stat-sub { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
-.path-chips, .reason-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.text-success { color: var(--success, #1f9d6b); }
-.text-warning { color: var(--warning, #c8801c); }
-.text-danger { color: var(--danger, #d24545); }
-.mr-1 { margin-right: 4px; }
-.mt-3 { margin-top: 12px; }
-.mb-1 { margin-bottom: 4px; }
+.sync-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.sync-stats-grid .stat-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sync-stats-grid .stat-label {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+.sync-stats-grid .stat-value {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sync-stats-grid .stat-sub {
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.path-chips,
+.reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.text-success {
+  color: var(--success, #1f9d6b);
+}
+.text-warning {
+  color: var(--warning, #c8801c);
+}
+.text-danger {
+  color: var(--danger, #d24545);
+}
+.mr-1 {
+  margin-right: 4px;
+}
+.mt-3 {
+  margin-top: 12px;
+}
+.mb-1 {
+  margin-bottom: 4px;
+}
 
-.integrity-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.integrity-stats .stat-item { display: flex; flex-direction: column; align-items: center; padding: 12px; background: var(--bg-tertiary, #f5f7fa); border-radius: 6px; }
-.integrity-stats .stat-label { font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px; }
-.integrity-stats .stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.integrity-stats .stat-value.warn { color: var(--warning); }
+.integrity-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.integrity-stats .stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  background: var(--bg-tertiary, #f5f7fa);
+  border-radius: 6px;
+}
+.integrity-stats .stat-label {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.integrity-stats .stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.integrity-stats .stat-value.warn {
+  color: var(--warning);
+}
 .calendar-sync-note {
   display: flex;
   align-items: center;
@@ -1179,8 +1795,16 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   background: var(--bg-tertiary, #f5f7fa);
   border-radius: 6px;
 }
-.calendar-sync-text { font-size: 13px; color: var(--text-secondary); }
-.check-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.calendar-sync-text {
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+}
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
 .check-item {
   display: flex;
   align-items: center;
@@ -1188,11 +1812,23 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   padding: 6px 10px;
   background: var(--bg-tertiary, #f5f7fa);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-base);
 }
-.check-item .check-status { flex-shrink: 0; }
-.check-item .check-name { flex-shrink: 0; color: var(--text-primary); font-weight: 600; min-width: 88px; }
-.check-item .check-msg { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-item .check-status {
+  flex-shrink: 0;
+}
+.check-item .check-name {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  min-width: 88px;
+}
+.check-item .check-msg {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .drift-box {
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -1203,7 +1839,12 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   gap: 6px;
   align-items: center;
 }
-.drift-box .drift-title { font-size: 13px; font-weight: 600; color: var(--warning); margin-right: 4px; }
+.drift-box .drift-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--warning);
+  margin-right: 4px;
+}
 
 .repair-dialog-header {
   display: flex;
@@ -1216,8 +1857,8 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  background: rgba(200, 128, 28, 0.14);
+  border-radius: var(--radius-lg);
+  background: var(--warning-soft-strong);
   color: var(--warning);
   font-size: 22px;
   flex-shrink: 0;
@@ -1228,11 +1869,13 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   color: var(--text-primary);
 }
 .repair-dialog-sub {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   margin-top: 2px;
 }
-.repair-dialog-body { padding: 4px 4px 0; }
+.repair-dialog-body {
+  padding: 4px 4px 0;
+}
 .repair-item-list {
   display: flex;
   flex-direction: column;
@@ -1246,32 +1889,42 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   padding: 10px 14px;
   background: var(--bg-tertiary, #f5f7fa);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .repair-item-badge {
   flex-shrink: 0;
   padding: 2px 10px;
-  border-radius: 9999px;
-  font-size: 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  &.is-error { background: rgba(210, 69, 69, 0.12); color: var(--danger); }
-  &.is-warn { background: rgba(200, 128, 28, 0.12); color: var(--warning); }
+  &.is-error {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.is-warn {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
 }
 .repair-item-desc {
-  font-size: 13px;
+  font-size: var(--font-size-base);
   color: var(--text-primary);
   word-break: break-all;
 }
-.repair-baostock-alert { margin-bottom: 12px; }
+.repair-baostock-alert {
+  margin-bottom: 12px;
+}
 .repair-tip {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 0;
   padding: 0 2px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
-  .el-icon { flex-shrink: 0; }
+  .el-icon {
+    flex-shrink: 0;
+  }
 }
 
 .repair-progress-header {
@@ -1285,13 +1938,19 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  background: rgba(31, 75, 160, 0.1);
+  border-radius: var(--radius-lg);
+  background: var(--primary-soft);
   color: var(--primary);
   font-size: 22px;
   flex-shrink: 0;
-  &.is-done { background: rgba(31, 157, 107, 0.12); color: var(--success); }
-  &.is-failed { background: rgba(210, 69, 69, 0.12); color: var(--danger); }
+  &.is-done {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  &.is-failed {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
 }
 .repair-progress-title {
   font-size: 16px;
@@ -1299,19 +1958,21 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   color: var(--text-primary);
 }
 .repair-progress-sub {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   margin-top: 2px;
   line-height: 1.5;
 }
-.repair-progress-body { padding: 8px 4px 0; }
+.repair-progress-body {
+  padding: 8px 4px 0;
+}
 .repair-progress-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   flex-wrap: wrap;
@@ -1324,8 +1985,10 @@ onBeforeUnmount(() => { if (progressTimer) clearInterval(progressTimer) })
   padding: 8px 10px;
   background: var(--bg-tertiary, #f5f7fa);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
-  .el-icon { flex-shrink: 0; }
+  .el-icon {
+    flex-shrink: 0;
+  }
 }
 </style>

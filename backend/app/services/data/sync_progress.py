@@ -31,6 +31,9 @@ class SyncProgress:
     error: Optional[str] = None
     # 独立 worker 子进程的 PID：用于 web 进程检测同步是否真的在跑（避免残留 syncing 僵尸）
     worker_pid: Optional[int] = None
+    # 是否写 qlib bin：True=回填/补齐/指数/EOD/广播（读 bin 的操作应被阻塞）；
+    # False=fetch-only 任务（如财报拉取只写 PG），不影响 bin 读取，可并行
+    writes_bins: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -114,8 +117,13 @@ class SyncProgressManager:
         self._lock = threading.Lock()
         self._progress: Optional[SyncProgress] = None
 
-    def init_progress(self, universe: str, data_source: str, total_mb: float = 0) -> None:
-        """初始化进度跟踪"""
+    def init_progress(self, universe: str, data_source: str, total_mb: float = 0,
+                      writes_bins: bool = False) -> None:
+        """初始化进度跟踪
+
+        writes_bins: 该任务是否写 qlib bin（读 bin 的操作应被阻塞）；
+            fetch-only 任务传 False，允许挖掘/校验等读 bin 操作并行。
+        """
         with self._lock:
             # 保留仍存活的 worker_pid：独立 worker 子进程内任务可能再次
             # init_progress（如 run_repair / run_baostock_backfill），若丢失 pid，
@@ -134,6 +142,7 @@ class SyncProgressManager:
                 status="downloading",
                 total_mb=total_mb,
                 started_at=datetime.now().isoformat(),
+                writes_bins=writes_bins,
             )
             if alive_pid:
                 self._progress.worker_pid = int(alive_pid)
@@ -239,9 +248,10 @@ def _get_manager() -> SyncProgressManager:
 # -- 模块级函数（向后兼容，保持原有签名） --
 
 
-def init_progress(universe: str, data_source: str, total_mb: float = 0) -> None:
+def init_progress(universe: str, data_source: str, total_mb: float = 0,
+                  writes_bins: bool = False) -> None:
     """初始化进度跟踪"""
-    _get_manager().init_progress(universe, data_source, total_mb)
+    _get_manager().init_progress(universe, data_source, total_mb, writes_bins=writes_bins)
 
 
 def update_progress(
@@ -305,9 +315,54 @@ def sync_is_active() -> bool:
     return True
 
 
+def writes_bins_active() -> bool:
+    """是否存在会写 qlib bin 的活跃同步任务（回填/补齐/指数/EOD/广播）。
+
+    fetch-only 任务（如财报拉取只写 PG，writes_bins=False）返回 False，
+    不阻塞挖掘/校验等读 bin 的操作。
+    """
+    if not sync_is_active():
+        return False
+    progress = get_progress()
+    return bool(progress and progress.get("writes_bins"))
+
+
 def clear_progress() -> None:
     """清除进度"""
     _get_manager().clear_progress()
+
+
+# 任务类型 → 可读标签（与前端 taskLabel 保持一致）
+_TASK_LABEL = {
+    "baostock": "baostock 全量回填",
+    "eod": "增量同步",
+    "repair": "数据补齐",
+    "indices": "指数同步",
+    "eastmoney": "宏观同步",
+    "fundamental": "财报同步",
+    "full": "一键全同步",
+}
+
+
+def busy_message(waiting_task: str = "") -> str:
+    """生成"同步忙"的友好提示。
+
+    说明当前活跃任务是谁（data_source + universe）、进度多少；
+    waiting_task="repair" 时额外说明为何补齐也必须等（与回填写同一批
+    qlib bin/day.txt 文件，串行是为了避免并发写坏 bin）。
+    """
+    progress = get_progress()
+    if not progress:
+        return "正在同步/修复中，请稍候"
+    universe = progress.get("universe") or "?"
+    source = progress.get("data_source") or "同步"
+    label = _TASK_LABEL.get(source, source)
+    pct = progress.get("progress_pct")
+    pct_str = f"，进度 {pct:.0f}%" if isinstance(pct, (int, float)) else ""
+    msg = f"正在同步/修复中，请稍候（当前任务: {label}，universe={universe}{pct_str}）"
+    if waiting_task == "repair":
+        msg += "；补齐会写入同一批 qlib bin/day.txt 文件，需等当前任务完成后才能执行"
+    return msg
 
 
 async def subscribe_progress() -> AsyncGenerator[dict, None]:

@@ -10,6 +10,7 @@
 import json
 import logging
 import asyncio
+import os
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -336,8 +337,10 @@ async def mine_with_symbolic(task_id: int) -> dict:
         # 构建扩展函数集
         function_set = _build_function_set()
 
-        # 有 GPU 时提高并行度（gplearn 使用 n_jobs 并行评估种群）
-        n_jobs = sym_cfg.get("n_jobs", -1 if _HAS_GPU else 1)
+        # 有 GPU 时用全核（gplearn 不支持 GPU，n_jobs 并行评估种群）；
+        # 无 GPU 时默认用一半核数（上限 4），n_jobs=1 串行演化太慢。
+        default_n_jobs = -1 if _HAS_GPU else min(4, max(1, (os.cpu_count() or 2) // 2))
+        n_jobs = sym_cfg.get("n_jobs", default_n_jobs)
         logger.info("符号回归: n_jobs=%d (GPU=%s)", n_jobs, _HAS_GPU)
 
         est = SymbolicRegressor(
@@ -421,18 +424,19 @@ async def mine_with_symbolic(task_id: int) -> dict:
             sig = metrics.get("significance") or {}
             p_adj_val = sig.get("p_adj")
             bh_ok = p_adj_val is None or p_adj_val < significance_alpha
-            # 使用 valid_ic 作为主筛选指标
+            # 使用 valid_ic 作为主筛选指标；不做全样本 IC 兜底（稳定性/显著性等未过
+            # 说明因子不稳健，全样本 IC 达标属过拟合信号）
             valid_ic_val = metrics.get("valid_ic")
             passed = metrics.get("passed", False)
-            if passed and valid_ic_val is not None and abs(valid_ic_val) >= ic_threshold and bh_ok:
-                pass
-            else:
-                # 兜底：全样本 IC（仍受 BH 校正约束）
-                ic = metrics.get("ic")
-                if ic is None or abs(ic) < ic_threshold or not bh_ok:
-                    continue
-                valid_ic_val = ic
-                logger.info("符号回归因子 %s 未通过多维验证，全样本 IC=%s 达标作为后备", expr[:40], ic)
+            if not (passed and valid_ic_val is not None
+                    and abs(valid_ic_val) >= ic_threshold and bh_ok):
+                if not bh_ok:
+                    logger.info("符号回归因子 %s 未通过 BH 校正: p_adj=%s", expr[:40], p_adj_val)
+                else:
+                    logger.info("符号回归因子 %s 未通过多维验证: valid_ic=%s, 原因: %s",
+                                expr[:40], valid_ic_val,
+                                "; ".join((metrics.get("fail_reasons") or [])[:3]))
+                continue
             # 过拟合标记与样本标注写入 metrics
             metrics["train_ic"] = train_ic
             metrics["gplearn_valid_ic"] = valid_ic

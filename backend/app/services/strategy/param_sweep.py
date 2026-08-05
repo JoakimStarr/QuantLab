@@ -121,7 +121,9 @@ def _db_row_to_result(r: BacktestResult) -> dict:
 
 async def _db_cache_put(strategy_id: int, start: str, end: str,
                         topk: int, n_drop: int, rebalance: str,
-                        result: dict) -> None:
+                        result: dict,
+                        combination_method: str = None, orthogonalize: int = 0,
+                        benchmark: str = None, backend: str = None) -> None:
     """把单个参数扫描结果写入 backtest_result 表。
 
     失败不阻塞扫描流程（缓存写入失败仅影响下次命中率）。
@@ -135,6 +137,10 @@ async def _db_cache_put(strategy_id: int, start: str, end: str,
             rec = BacktestResult(
                 strategy_id=strategy_id, start_date=start, end_date=end,
                 topk=topk, n_drop=n_drop, rebalance_freq=rebalance,
+                combination_method=combination_method,
+                orthogonalize=orthogonalize,
+                benchmark=benchmark,
+                backend=backend,
                 annual_return=metrics.get("annual_return"),
                 annual_volatility=metrics.get("annual_volatility"),
                 sharpe=metrics.get("sharpe"),
@@ -243,7 +249,7 @@ async def run_param_sweep(
         topk_list: 候选 topk 值
         rebalance_list: 候选调仓频率
         start/end: 回测区间
-        backend: 回测后端 qlib/self
+        backend: 回测后端 qlib/vbt
 
     Returns:
         [{"topk":10,"rebalance":"day","sharpe":...}, ..., {"best": {...}}]
@@ -343,7 +349,11 @@ async def run_param_sweep(
                 # 双写：内存 LRU + DB 持久化（DB 写失败不阻塞）
                 _bt_cache_put(cache_key, computed)
                 await _db_cache_put(strategy_id, start, end,
-                                    topk, n_drop, rebalance, computed)
+                                    topk, n_drop, rebalance, computed,
+                                    combination_method=s.combination_method,
+                                    orthogonalize=orthogonalize,
+                                    benchmark=s.benchmark,
+                                    backend=backend)
                 return cache_key, computed
             except Exception as e:
                 logger.error("参数扫描失败 topk=%d rebalance=%s: %s", topk, rebalance, e)

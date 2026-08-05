@@ -38,7 +38,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging(log_dir=settings.logging.dir, level=settings.logging.level)
+    setup_logging(
+        log_dir=settings.PROJECT_ROOT / settings.logging.dir,
+        level=settings.logging.level,
+        console=settings.logging.console,
+    )
     warn_insecure_config()
     settings.enforce_production_security()
     await init_db()
