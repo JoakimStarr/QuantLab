@@ -19,19 +19,13 @@ from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.baostock import StockDaily
 
+from app.services.data.data_clean import format_date_series
 from app.services.data.validation import check_coverage, check_fields, run_validation
 
 logger = logging.getLogger(__name__)
 
-# stock_daily 列 -> _build_out_df 需要的 baostock 风格列名
-_DB_TO_SRC_COL = {
-    "open": "open", "high": "high", "low": "low", "close": "close",
-    "preclose": "preclose", "volume": "volume", "amount": "amount",
-    "turn": "turn", "tradestatus": "tradestatus",
-    "pct_chg": "pctChg", "is_st": "isST",
-    "pe_ttm": "peTTM", "pb_mrq": "pbMRQ", "ps_ttm": "psTTM",
-    "pcf_ncf_ttm": "pcfNcfTTM", "adjustflag": "adjustflag",
-}
+# stock_daily 列 -> _build_out_df 需要的 baostock 风格列名（收敛到 data_fields.py）
+from app.services.data.data_fields import STOCK_DB_TO_SRC_COL as _DB_TO_SRC_COL
 
 
 def _db_rows_to_df(rows: list) -> "object":
@@ -42,7 +36,7 @@ def _db_rows_to_df(rows: list) -> "object":
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    df["date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+    df["date"] = format_date_series(df["trade_date"])
     out = pd.DataFrame({"date": df["date"]})
     for db_col, src_col in _DB_TO_SRC_COL.items():
         if src_col == "isST":

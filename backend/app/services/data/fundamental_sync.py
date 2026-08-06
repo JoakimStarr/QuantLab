@@ -19,16 +19,17 @@ import math
 import os
 import random
 import time
-from datetime import date, datetime, timedelta
+from datetime import date
 
 import pandas as pd
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.fundamental import FinancialIndicator
+from app.services.data.data_clean import to_float as _to_float
+from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _get_calendar, _write_bin
 
 logger = logging.getLogger(__name__)
@@ -76,22 +77,6 @@ def _compute_available_date(stat: date) -> date:
     if stat.month == 12:
         return stat.replace(year=stat.year + 1, month=4, day=30)
     return stat
-
-
-def _to_float(val) -> float | None:
-    """宽松转 float：容忍 None/NaN/千分位逗号。"""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        try:
-            return float(val) if not pd.isna(val) else None
-        except (TypeError, ValueError):
-            return None
-    s = str(val).strip().replace(",", "").replace("%", "").strip()
-    try:
-        return float(s)
-    except ValueError:
-        return None
 
 
 def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
@@ -154,20 +139,9 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
 
 async def upsert_financial(rows: list[dict]) -> int:
     """幂等写入 financial_indicator 窄表（ON CONFLICT DO NOTHING）。"""
-    if not rows:
-        return 0
-    inserted = 0
-    async with async_session() as session:
-        for i in range(0, len(rows), 500):
-            chunk = rows[i:i + 500]
-            stmt = pg_insert(FinancialIndicator.__table__).values(chunk)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["code", "report_date", "field_name"]
-            )
-            res = await session.execute(stmt)
-            inserted += res.rowcount or 0
-        await session.commit()
-    return inserted
+    return await bulk_upsert(
+        FinancialIndicator, rows, ["code", "report_date", "field_name"], batch=500,
+    )
 
 
 # ------------------------------------------------------------ 广播（PIT）

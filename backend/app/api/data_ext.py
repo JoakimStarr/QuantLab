@@ -1,6 +1,5 @@
 """数据管理扩展 API：同步进度、数据预览、同步历史、数据源切换"""
 import logging
-import math
 import os
 import re
 from datetime import datetime
@@ -14,24 +13,14 @@ from app.models.stock_index import StockIndex
 from app.models.sync_history import SyncHistory
 from app.schemas.common import ApiResponse
 from app.schemas.quant import RepairRequest
-from app.services.data.sync_progress import busy_message, get_progress, writes_bins_active
+from app.services.data.data_clean import to_float_strict as _clean_num
+from app.services.data.sync_progress import ensure_no_bin_sync, get_progress
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
 _stock_catalog_cache: list[dict] | None = None
 _stock_catalog_updated_at: datetime | None = None
-
-
-def _clean_num(v):
-    """NaN/None/非数值 → None，其余转 float（回填进行中或停牌日 bin 会读到 NaN）。"""
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return None if math.isnan(f) else f
 
 
 def _read_eod_result() -> dict | None:
@@ -429,12 +418,7 @@ async def eod_sync_api(
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message(),
-            "status": 409,
-        })
+    ensure_no_bin_sync()
 
     if source not in ("baostock", "akshare"):
         raise AppError("VALIDATION_ERROR", "source 仅支持 baostock/akshare", 422)
@@ -475,12 +459,7 @@ async def sync_full_api(
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message("full"),
-            "status": 409,
-        })
+    ensure_no_bin_sync("full")
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("full", universe, years=years)
@@ -502,12 +481,7 @@ async def sync_indices_api():
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message(),
-            "status": 409,
-        })
+    ensure_no_bin_sync()
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("indices", "indices")
@@ -532,12 +506,7 @@ async def sync_etf_api(years: int = Query(None, description="回看年数，默�
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message(),
-            "status": 409,
-        })
+    ensure_no_bin_sync()
 
     # years（如前端"同步 X 年"输入框）转自然日；days 显式传入时优先
     if days is None:
@@ -635,12 +604,7 @@ async def repair_api(
     from app.models.stock_data_status import StockDataStatus
 
     universe = req.universe or settings.quant.get("universe", "csi300")
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message("repair"),
-            "status": 409,
-        })
+    ensure_no_bin_sync("repair")
 
     existing = await db.execute(
         select(StockDataStatus).where(StockDataStatus.universe == universe)
@@ -678,12 +642,8 @@ async def fundamental_sync_api(
     """
     from app.services.data.sync_worker import spawn_sync_worker
 
-    if broadcast and writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message() + "；财报 bin 广播需等当前同步完成（日历对齐）后执行",
-            "status": 409,
-        })
+    if broadcast:
+        ensure_no_bin_sync(suffix="；财报 bin 广播需等当前同步完成（日历对齐）后执行")
     spawn_sync_worker("fundamental", "all", broadcast=broadcast)
     return ApiResponse(ok=True, data={
         "message": "财报同步已提交（独立进程后台执行，全市场逐股拉取）"

@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
+from app.services.data.data_clean import format_date_series
+
 logger = logging.getLogger(__name__)
 
 QLIB_BIN_DTYPE = "<f4"  # 小端 float32
@@ -309,7 +311,7 @@ def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
             rename_map = {"日期": "date", "涨跌幅": "pct_change"}
             rename_map.update(FIELD_MAP)
             df = df.rename(columns=rename_map)
-            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+            df["date"] = format_date_series(df["date"])
             keep = [c for c in keep_cols if c in df.columns]
             df = df[keep]
         else:
@@ -325,7 +327,7 @@ def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
                 symbol=sina_symbol, start_date=start_str, end_date=end_str, adjust="qfq",
             )
             if df is not None and not df.empty:
-                df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+                df["date"] = format_date_series(df["date"])
                 keep = [c for c in keep_cols if c in df.columns]
                 df = df[keep]
             else:
@@ -445,7 +447,7 @@ def incremental_sync_eod_baostock(
             continue
 
         # 统一日期格式为 YYYY-MM-DD（与日历一致）
-        df_all["date"] = pd.to_datetime(df_all["date"]).dt.strftime("%Y-%m-%d")
+        df_all["date"] = format_date_series(df_all["date"])
 
         # 数值列转 float（baostock 可能返回字符串/对象类型）
         num_cols = ["open", "high", "low", "close", "volume", "amount",

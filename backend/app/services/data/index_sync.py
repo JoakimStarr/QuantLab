@@ -47,8 +47,8 @@ INDEX_NAMES: dict[str, str] = {
     "sh000688": "科创50",
 }
 
-# qlib 指数字段（与 chenditc 指数 bin 一致：open/high/low/close/volume）
-INDEX_FIELDS = ["open", "high", "low", "close", "volume"]
+# qlib 指数字段（收敛到 data_fields.py）
+from app.services.data.data_fields import INDEX_FIELDS
 
 
 def _get_index_list(indices: list = None) -> list:

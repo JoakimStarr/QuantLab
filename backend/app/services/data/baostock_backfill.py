@@ -27,6 +27,8 @@ from app.services.data.baostock_client import (
     fetch_daily_all_a_stock_sync,
     from_baostock_code,
 )
+from app.services.data.data_clean import format_date_series, to_float_strict as _f
+from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _sync_stock_bin, _write_calendar, _compute_tradable, _get_calendar
 from app.services.data.sync_progress import (
     init_progress, update_progress, finish_progress, clear_progress,
@@ -39,24 +41,8 @@ from app.models.stock_data_status import StockDataStatus
 
 logger = logging.getLogger(__name__)
 
-# qlib bin 写入字段（baostock 全部日线字段；is_st/tradestatus/adjustflag 存为 float 0/1 或数值）
-BIN_FIELDS = [
-    "open", "high", "low", "close", "preclose",
-    "volume", "amount", "turn",
-    "tradestatus", "pct_chg", "is_st",
-    "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm",
-    "adjustflag",
-    "change", "tradable", "factor",
-]
-
-# baostock 日线列名 -> stock_daily 列名
-DAILY_COL_MAP = {
-    "open": "open", "high": "high", "low": "low", "close": "close",
-    "preclose": "preclose", "volume": "volume", "amount": "amount",
-    "turn": "turn", "tradestatus": "tradestatus", "pctChg": "pct_chg",
-    "isST": "is_st", "peTTM": "pe_ttm", "pbMRQ": "pb_mrq",
-    "psTTM": "ps_ttm", "pcfNcfTTM": "pcf_ncf_ttm", "adjustflag": "adjustflag",
-}
+# 字段清单与 baostock 列映射收敛到 data_fields.py（见 STOCK_BIN_FIELDS / BAOSTOCK_DAILY_COL_MAP）
+from app.services.data.data_fields import STOCK_BIN_FIELDS as BIN_FIELDS
 
 # 每个批次拉取的交易日数（控制内存）：1 = 每下载一天即写入，
 # 数据实时落盘、崩溃丢失少；调大可减少写盘次数但内存占用更高。
@@ -96,7 +82,7 @@ def _normalize_daily(df_all: pd.DataFrame) -> pd.DataFrame:
     df = df_all.copy()
     df["qlib_code"] = df["code"].apply(from_baostock_code)
     df["qlib_code_lower"] = df["qlib_code"].str.lower()
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df["date"] = format_date_series(df["date"])
     _numeric(df, ["open", "high", "low", "close", "preclose", "volume", "amount",
                   "turn", "pctChg", "peTTM", "pbMRQ", "psTTM", "pcfNcfTTM"])
     if "isST" in df.columns:
@@ -201,17 +187,6 @@ def _write_stock_bins(code_lower: str, rows: list, global_calendar: list,
     return rec
 
 
-def _f(v):
-    """float 转换，NaN/None -> None。"""
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return None
-    try:
-        f = float(v)
-        return None if np.isnan(f) else f
-    except (TypeError, ValueError):
-        return None
-
-
 def _i(v):
     """int 转换，NaN/None -> None。"""
     f = _f(v)
@@ -301,16 +276,8 @@ async def _insert_stock_daily(rows: list) -> set:
     # 统一转成 date 对象，避免个别记录类型漂移导致整批插入失败
     rows = [dict(r, trade_date=_as_date(r["trade_date"])) for r in rows]
     dates = {_fmt_ymd(r["trade_date"]) for r in rows}
-    # asyncpg 单条 SQL 最多 32767 个参数：18 字段 × 每行 = 18 参数，
-    # 每批最多 1000 行（18000 参数），超出则拆批，避免 InterfaceError。
-    BATCH_ROWS = 1000
-    async with async_session() as session:
-        for i in range(0, len(rows), BATCH_ROWS):
-            chunk = rows[i:i + BATCH_ROWS]
-            stmt = pg_insert(StockDaily.__table__).values(chunk)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"])
-            await session.execute(stmt)
-        await session.commit()
+    # asyncpg 单条 SQL 最多 32767 参数：约 19 字段 × 每行，每批 1000 行足够安全
+    await bulk_upsert(StockDaily, rows, ["code", "trade_date"], batch=1000)
     return dates
 
 

@@ -26,13 +26,9 @@ async def macro_sync_api(
     长任务走独立 worker 子进程（spawn_sync_worker），避免占用 web 事件循环
     导致 uvicorn --reload 等待后台任务卡死。
     """
-    from app.services.data.sync_progress import busy_message, writes_bins_active
-    if broadcast and writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message() + "；宏观 bin 广播需等当前同步完成（日历对齐）后执行",
-            "status": 409,
-        })
+    from app.services.data.sync_progress import ensure_no_bin_sync
+    if broadcast:
+        ensure_no_bin_sync(suffix="；宏观 bin 广播需等当前同步完成（日历对齐）后执行")
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("macro", "macro", broadcast=broadcast)

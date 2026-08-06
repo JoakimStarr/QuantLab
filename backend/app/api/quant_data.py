@@ -184,13 +184,8 @@ async def sync_external_market_api():
     轻量操作（4 个指数接口 + 广播写盘），直接在当前进程经 run_io_cpu 执行。
     建议在每个交易日 A股开盘后、外盘已收盘时手动触发一次。
     """
-    from app.services.data.sync_progress import busy_message, writes_bins_active
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message(),
-            "status": 409,
-        })
+    from app.services.data.sync_progress import ensure_no_bin_sync
+    ensure_no_bin_sync()
     from app.services.data.external_market import sync_external_market
     try:
         result = await sync_external_market()

@@ -22,23 +22,12 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# ETF bin 字段：OHLCV + amount + 衍生字段（无股票专属字段）
-ETF_BIN_FIELDS = ["open", "high", "low", "close", "volume", "amount",
-                  "change", "tradable", "factor"]
+from app.services.data.data_clean import format_date_series, to_float_strict as _f
+from app.services.data.data_fields import ETF_BIN_FIELDS
+from app.services.data.db_utils import bulk_upsert
 
 # 每批处理的交易日数：控制拉取/写 bin 的内存与单次落库量
 _CHUNK_DAYS = int(os.environ.get("QUANTLAB_ETF_CHUNK_DAYS", "20"))
-
-
-def _f(v):
-    """float 转换，NaN/None -> None。"""
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return None
-    try:
-        f = float(v)
-        return None if np.isnan(f) else f
-    except (TypeError, ValueError):
-        return None
 
 
 def _etf_out_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -101,7 +90,7 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list,
         df_all = df_all.copy()
         df_all["qlib_code"] = df_all["code"].apply(from_baostock_code)
         df_all["qlib_code_lower"] = df_all["qlib_code"].str.lower()
-        df_all["date"] = pd.to_datetime(df_all["date"]).dt.strftime("%Y-%m-%d")
+        df_all["date"] = format_date_series(df_all["date"])
         for c in ["open", "high", "low", "close", "volume", "amount", "pctChg", "tradestatus"]:
             if c in df_all.columns:
                 df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
@@ -159,27 +148,15 @@ async def _insert_etf_daily(rows: list, upsert: bool = False) -> None:
     if not rows:
         return
     from datetime import date as _date
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from app.core.database import async_session
     from app.models.baostock import EtfDaily
 
-    BATCH = 1000
-    async with async_session() as session:
-        for i in range(0, len(rows), BATCH):
-            chunk = rows[i:i + BATCH]
-            for r in chunk:
-                r["trade_date"] = _date.fromisoformat(r["trade_date"])
-            stmt = pg_insert(EtfDaily.__table__).values(chunk)
-            if upsert:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["code", "trade_date"],
-                    set_={k: getattr(stmt.excluded, k) for k in
-                          ("open", "high", "low", "close", "volume", "amount", "pct_chg")},
-                )
-            else:
-                stmt = stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"])
-            await session.execute(stmt)
-        await session.commit()
+    for r in rows:
+        r["trade_date"] = _date.fromisoformat(r["trade_date"])
+    await bulk_upsert(
+        EtfDaily, rows, ["code", "trade_date"],
+        batch=1000,
+        update_cols=["open", "high", "low", "close", "volume", "amount", "pct_chg"] if upsert else None,
+    )
 
 
 async def _register_synced_etfs(codes: list) -> int:

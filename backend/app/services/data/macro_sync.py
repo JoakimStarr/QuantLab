@@ -22,12 +22,13 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.macro import MacroIndicator
+from app.services.data.data_clean import to_float as _to_float
+from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _get_calendar, _write_bin
 from app.services.data.sync_progress import (
     init_progress, update_progress, finish_progress, clear_progress,
@@ -395,22 +396,6 @@ def _resolve_ak_kwargs(cfg: dict) -> dict:
     return kwargs
 
 
-def _to_float(val) -> float | None:
-    """宽松转 float：容忍 %、千分位逗号、None、NaN。"""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        try:
-            return float(val) if not pd.isna(val) else None
-        except (TypeError, ValueError):
-            return None
-    s = str(val).strip().replace(",", "").replace("%", "").strip()
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
 def _parse_macro_date(value, freq: str) -> date | None:
     """解析 akshare 日期/月份列 → date。
 
@@ -493,20 +478,9 @@ def _fetch_akshare_macro(indicator_key: str, cfg: dict) -> list[dict]:
 
 async def upsert_macro(rows: list[dict]) -> int:
     """幂等写入 macro_indicator 窄表（ON CONFLICT DO NOTHING）。"""
-    if not rows:
-        return 0
-    inserted = 0
-    async with async_session() as session:
-        for i in range(0, len(rows), 500):
-            chunk = rows[i:i + 500]
-            stmt = pg_insert(MacroIndicator.__table__).values(chunk)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["indicator", "report_date", "field_name"]
-            )
-            res = await session.execute(stmt)
-            inserted += res.rowcount or 0
-        await session.commit()
-    return inserted
+    return await bulk_upsert(
+        MacroIndicator, rows, ["indicator", "report_date", "field_name"], batch=500,
+    )
 
 
 async def _load_macro_series(indicator: str, field_name: str) -> pd.Series:

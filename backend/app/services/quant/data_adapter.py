@@ -24,6 +24,7 @@ import pandas as pd
 from app.core.config import settings
 from app.core.errors import DataFetchError
 from app.services.data.code_utils import to_qlib_code
+from app.services.data.data_clean import format_date_series
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ async def fetch_stock_daily(code: str, start: str, end: str) -> pd.DataFrame:
     df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
     if "date" not in df.columns:
         return pd.DataFrame()
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df["date"] = format_date_series(df["date"])
     keep = ["date", "open", "close", "high", "low", "volume"]
     keep = [c for c in keep if c in df.columns]
     return df[keep]

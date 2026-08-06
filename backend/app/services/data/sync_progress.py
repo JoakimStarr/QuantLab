@@ -333,6 +333,17 @@ def writes_bins_active() -> bool:
     return bool(progress and progress.get("writes_bins"))
 
 
+def ensure_no_bin_sync(waiting_task: str = "", suffix: str = "") -> None:
+    """写 bin 同步活跃时抛 409，阻止并发触发新同步。
+
+    供各同步端点统一调用（替代 8 处重复的
+    ``if writes_bins_active(): return ApiResponse(ok=False, error={SYNC_IN_PROGRESS})``）。
+    """
+    if writes_bins_active():
+        from app.core.errors import AppError
+        raise AppError("SYNC_IN_PROGRESS", busy_message(waiting_task) + suffix, 409)
+
+
 # 会重塑 day.txt 对齐（历史前置扩展/重建日历）的同步 kind——此类同步期间读 bin
 # 可能读到错位数据（bin 已按新日历重排而 day.txt 未更新），回测/挖掘必须等待。
 # 纯追加/回填的同步（eod/etf/indices，bin 原子写后对齐前缀，读侧安全）不在此列。
