@@ -254,7 +254,8 @@ async def test_sync_etf_tencent_aligned(tmp_path):
          patch.object(es, "fetch_etf_history_tencent", return_value=fake_df), \
          patch.object(es, "_insert_etf_daily", new=AsyncMock()) as m_insert, \
          patch.object(es, "rebuild_etf_pool", new=AsyncMock(return_value=["sh510300"])), \
-         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)):
+         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)), \
+         patch.object(es, "_save_tencent_done"):
         r = await es.sync_etf_tencent_aligned(str(base))
 
     assert r["ok"]
@@ -294,7 +295,35 @@ async def test_sync_etf_tencent_aligned_no_existing_data(tmp_path):
          patch.object(es, "fetch_etf_history_tencent", return_value=fake_df), \
          patch.object(es, "_insert_etf_daily", new=AsyncMock()), \
          patch.object(es, "rebuild_etf_pool", new=AsyncMock(return_value=["sh510300"])), \
-         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)):
+         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)), \
+         patch.object(es, "_save_tencent_done"):
         r = await es.sync_etf_tencent_aligned(str(base), days=30)
     assert r["ok"]
     assert r["window"][1] == "2026-01-06"  # 对齐主日历末日
+
+
+@pytest.mark.asyncio
+async def test_sync_etf_tencent_skips_done(tmp_path):
+    """断点续跑：overwrite=False 时跳过已完成清单中的代码，不再请求。"""
+    base = tmp_path / "qlib"
+    (base / "calendars").mkdir(parents=True)
+    (base / "features").mkdir(parents=True)
+    (base / "instruments").mkdir(parents=True)
+    with open(base / "calendars" / "day.txt", "w") as f:
+        f.write("2026-01-05\n2026-01-06\n")
+
+    with patch.object(es, "_load_etf_min_date", new=AsyncMock(return_value="2026-01-05")), \
+         patch.object(es, "_load_etf_codes_from_db", new=AsyncMock(return_value=["SH510300", "SH510050"])), \
+         patch.object(es, "_load_tencent_done", return_value={"SH510300"}), \
+         patch.object(es, "fetch_etf_history_tencent", return_value=None) as m_fetch, \
+         patch.object(es, "_insert_etf_daily", new=AsyncMock()), \
+         patch.object(es, "rebuild_etf_pool", new=AsyncMock(return_value=["sh510300"])), \
+         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)), \
+         patch.object(es, "_save_tencent_done"):
+        r = await es.sync_etf_tencent_aligned(str(base), overwrite=False)
+
+    # SH510300 已完成被跳过，只请求 SH510050（返回 None → 失败 1）
+    assert r["ok"]
+    assert r["success"] == 0
+    assert r["failed"] == 1
+    assert m_fetch.call_count == 1

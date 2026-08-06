@@ -209,6 +209,36 @@ async def _register_synced_etfs(codes: list) -> int:
 # ============ 腾讯源（qfq 对齐回填） ============
 
 _TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+# 腾讯请求间隔（秒）：无间隔连续请求 ~1000 次会触发腾讯风控（返回 501/空），
+# 实测被拉黑后需等待解封。默认 0.4s ≈ 2.5 次/秒，1622 只约 11 分钟，安全。
+_TENCENT_INTERVAL = float(os.environ.get("QUANTLAB_TENCENT_INTERVAL", "0.4"))
+# 失败重试次数与退避（应对瞬时网络抖动；被风控拉黑时重试也会失败，需等待解封）
+_TENCENT_RETRIES = 3
+
+
+def _tencent_done_file() -> str:
+    """已成功写入 qfq 数据的 ETF 代码清单（断点续跑：跳过已完成，避免重复请求）。"""
+    from app.core.config import settings
+    return os.path.join(str(settings.PROJECT_ROOT / "data"), "etf_tencent_done.json")
+
+
+def _load_tencent_done() -> set:
+    import json
+    try:
+        with open(_tencent_done_file(), encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _save_tencent_done(codes: set) -> None:
+    import json
+    try:
+        os.makedirs(os.path.dirname(_tencent_done_file()), exist_ok=True)
+        with open(_tencent_done_file(), "w", encoding="utf-8") as f:
+            json.dump(sorted(codes), f)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("保存腾讯完成清单失败: %s", e)
 
 
 def fetch_etf_history_tencent(qlib_code: str, start: str, end: str) -> pd.DataFrame | None:
@@ -224,43 +254,49 @@ def fetch_etf_history_tencent(qlib_code: str, start: str, end: str) -> pd.DataFr
     Returns:
         DataFrame（兼容 _etf_out_df 输入），失败返回 None
     """
+    import time as _time
     import requests
-    try:
-        r = requests.get(
-            _TENCENT_KLINE_URL,
-            params={"param": f"{qlib_code},day,{start},{end},800,qfq"},
-            timeout=15,
-        )
-        node = r.json().get("data", {}).get(qlib_code)
-        if not node:
-            return None
-        kline = node.get("qfqday") or node.get("day") or []
-        if not kline:
-            return None
-        rows = []
-        for k in kline:
-            d = str(k[0])
-            if d < start or d > end:
-                continue
-            rows.append({
-                "date": d,
-                "open": float(k[1]), "high": float(k[3]), "low": float(k[4]),
-                "close": float(k[2]),
-                # 腾讯成交量单位为手（1手=100份），转为股与 baostock 口径一致
-                "volume": float(k[5]) * 100.0,
-            })
-        df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
-        if df.empty:
-            return None
-        # 腾讯 kline 不含成交额：用成交量 × 均价估算
-        df["amount"] = df["volume"] * (df["open"] + df["high"] + df["low"] + df["close"]) / 4.0
-        # 涨跌幅自算（qfq 序列无除权跳变，pct_change 即真实涨跌幅）
-        df["pctChg"] = (df["close"].pct_change() * 100.0).fillna(0.0)
-        df["tradestatus"] = 1
-        return df
-    except Exception as e:  # noqa: BLE001
-        logger.warning("腾讯拉取 %s 失败: %s", qlib_code, e)
-        return None
+    last_err = None
+    for attempt in range(_TENCENT_RETRIES):
+        try:
+            r = requests.get(
+                _TENCENT_KLINE_URL,
+                params={"param": f"{qlib_code},day,{start},{end},800,qfq"},
+                timeout=15,
+            )
+            node = r.json().get("data", {}).get(qlib_code)
+            if not node:
+                return None
+            kline = node.get("qfqday") or node.get("day") or []
+            if not kline:
+                return None
+            rows = []
+            for k in kline:
+                d = str(k[0])
+                if d < start or d > end:
+                    continue
+                rows.append({
+                    "date": d,
+                    "open": float(k[1]), "high": float(k[3]), "low": float(k[4]),
+                    "close": float(k[2]),
+                    # 腾讯成交量单位为手（1手=100份），转为股与 baostock 口径一致
+                    "volume": float(k[5]) * 100.0,
+                })
+            df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+            if df.empty:
+                return None
+            # 腾讯 kline 不含成交额：用成交量 × 均价估算
+            df["amount"] = df["volume"] * (df["open"] + df["high"] + df["low"] + df["close"]) / 4.0
+            # 涨跌幅自算（qfq 序列无除权跳变，pct_change 即真实涨跌幅）
+            df["pctChg"] = (df["close"].pct_change() * 100.0).fillna(0.0)
+            df["tradestatus"] = 1
+            return df
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < _TENCENT_RETRIES - 1:
+                _time.sleep(1.0 * (attempt + 1))  # 退避重试
+    logger.warning("腾讯拉取 %s 失败（重试%d次）: %s", qlib_code, _TENCENT_RETRIES, last_err)
+    return None
 
 
 async def _load_etf_min_date() -> str | None:
@@ -315,19 +351,31 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
     if not codes:
         return {"ok": False, "error": "etf_daily 无数据，请先用 baostock 同步一次建立时间范围"}
 
-    total = len(codes)
+    # 断点续跑：非强制时跳过已完成（data/etf_tencent_done.json），避免重复请求触发风控
+    import time as _time
+    done = set() if overwrite else _load_tencent_done()
+    todo = [c for c in codes if c not in done]
+    if not todo:
+        return {"ok": True, "source": "tencent", "success": 0, "failed": 0,
+                "window": [start, end], "etf_count": len(codes),
+                "skipped_all": True, "message": "所有 ETF 已用腾讯 qfq 对齐，无需重跑"}
+
+    total = len(todo)
     success = fail = 0
     pg_rows = []
-    _up(pct=2, status="running", message=f"腾讯 ETF 对齐回填开始（{total} 只，窗口 {start}~{end}）")
-    for idx, code in enumerate(codes):
+    _up(pct=2, status="running",
+        message=f"腾讯 ETF 对齐回填开始（待处理 {total}/{len(codes)} 只，窗口 {start}~{end}）")
+    for idx, code in enumerate(todo):
         df = fetch_etf_history_tencent(code.lower(), start, end)
         if df is None or df.empty:
             fail += 1
+            _time.sleep(_TENCENT_INTERVAL)  # 失败也限速，避免持续打被封接口
             continue
         # 对齐主日历：只保留 day.txt 内的日期
         df = df[df["date"].isin(cal_set)]
         if df.empty:
             fail += 1
+            _time.sleep(_TENCENT_INTERVAL)
             continue
         try:
             out = _etf_out_df(df)
@@ -342,6 +390,7 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
                     "pct_chg": _f(r.get("pctChg")),
                 })
             success += 1
+            done.add(code)
         except Exception as e:  # noqa: BLE001
             logger.debug("腾讯写 %s 失败: %s", code, e)
             fail += 1
@@ -352,15 +401,18 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
             logger.info("腾讯 ETF 对齐进度: %d/%d (成功%d 失败%d)", idx + 1, total, success, fail)
             await _insert_etf_daily(pg_rows, upsert=True)
             pg_rows = []
+            _save_tencent_done(done)
+        _time.sleep(_TENCENT_INTERVAL)  # 请求间隔：防止连续高频请求被腾讯风控
     if pg_rows:
         await _insert_etf_daily(pg_rows, upsert=True)
+    _save_tencent_done(done)
 
     pool = await rebuild_etf_pool(provider_uri)
-    registered = await _register_synced_etfs(codes)
+    registered = await _register_synced_etfs(list(done))
     _up(pct=100, status="running", message=f"腾讯 ETF 对齐完成: 成功{success} 失败{fail}")
     return {
         "ok": True, "source": "tencent", "success": success, "failed": fail,
-        "window": [start, end], "etf_count": total, "pool_count": len(pool),
+        "window": [start, end], "etf_count": len(codes), "pool_count": len(pool),
         "registered": registered,
     }
 
