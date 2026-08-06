@@ -215,6 +215,16 @@ def test_baostock_writes_bin_and_st_mask(tmp_qlib):
     assert r["failed"] == 0
     assert new_date in r["new_dates"]
 
+    # pg_rows：EOD 落库 stock_daily（repair 以 PG 为权威，不落库会丢 EOD 数据）
+    assert len(r["pg_rows"]) == 2
+    assert r["pg_rows"][0]["code"] == "SH600000"
+    assert r["pg_rows"][0]["is_st"] is False
+    assert r["pg_rows"][0]["pct_chg"] == 2.0
+    assert r["pg_rows"][0]["trade_date"] == new_date
+    assert r["pg_rows"][1]["code"] == "SZ000001"
+    assert r["pg_rows"][1]["is_st"] is True
+    assert r["pg_rows"][1]["pct_chg"] == 5.0
+
     # sz000001 (ST, 5%) → tradable=0.0；sh600000 (非ST, 2%) → tradable=1.0
     sz_vals, _ = eod._read_bin(str(base / "features" / "sz000001" / "tradable.day.bin"))
     sh_vals, _ = eod._read_bin(str(base / "features" / "sh600000" / "tradable.day.bin"))
@@ -297,7 +307,8 @@ async def test_baostock_partial_success_no_fallback(tmp_qlib):
     with patch("app.services.data.baostock_client.fetch_daily_all_a_stock_sync",
                side_effect=_mock_baostock_full), \
          patch.object(eod, "_incremental_sync_eod_akshare",
-                      new=AsyncMock()) as mock_ak:
+                      new=AsyncMock()) as mock_ak, \
+         patch.object(eod, "_insert_pg_rows", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base),
             overwrite=True, source="baostock",
@@ -306,3 +317,87 @@ async def test_baostock_partial_success_no_fallback(tmp_qlib):
     assert r["source"] == "baostock"
     assert r["success"] > 0
     mock_ak.assert_not_awaited()
+
+
+async def test_baostock_success_writes_pg_rows(tmp_qlib):
+    """baostock 主源成功 → pg_rows 经 _insert_pg_rows 落库 stock_daily。"""
+    base, _ = tmp_qlib
+    with patch("app.services.data.baostock_client.fetch_daily_all_a_stock_sync",
+               side_effect=_mock_baostock_full), \
+         patch.object(eod, "_insert_pg_rows", new=AsyncMock()) as mock_insert:
+        r = await eod.incremental_sync_eod(
+            universe="all", days=1, provider_uri=str(base),
+            overwrite=True, source="baostock",
+        )
+    assert r["ok"]
+    mock_insert.assert_awaited_once()
+    rows = mock_insert.await_args.args[0]
+    # 候选窗口内每个工作日都会取到 mock 数据 → 2 股 × N 天
+    assert len(rows) >= 2
+    assert {row["code"] for row in rows} == {"SH600000", "SZ000001"}
+    assert all(len(row["trade_date"]) == 10 for row in rows)
+
+
+async def test_akshare_writes_pg_rows(tmp_qlib):
+    """akshare 兜底路径：新日期数据落库 stock_daily（仅新日期）。"""
+    base, old_dates = tmp_qlib
+
+    def _fake_fetch(qlib_code, start_str, end_str):
+        return pd.DataFrame({
+            "date": ["2024-01-18", "2024-01-19"],
+            "open": [10.0, 11.0],
+            "high": [10.5, 11.5],
+            "low": [9.8, 10.8],
+            "close": [10.2, 11.2],
+            "volume": [100000.0, 110000.0],
+            "pct_change": [2.0, 9.8],
+        })
+
+    with patch.object(eod, "_fetch_eod_akshare", side_effect=_fake_fetch), \
+         patch.object(eod, "_insert_pg_rows", new=AsyncMock()) as mock_insert:
+        r = await eod._incremental_sync_eod_akshare(
+            codes=["sh600000", "sz000001"], start_str="20240101", end_str="20240120",
+            old_calendar=old_dates, provider_uri=str(base),
+            universe="all", days=1, overwrite=False,
+        )
+    assert r["ok"]
+    mock_insert.assert_awaited_once()
+    rows = mock_insert.await_args.args[0]
+    assert len(rows) == 4  # 2 股 × 2 个新日期
+    assert all(row["trade_date"] in ("2024-01-18", "2024-01-19") for row in rows)
+    assert all(row["code"] in ("SH600000", "SZ000001") for row in rows)
+    assert rows[0]["pct_chg"] == 2.0
+
+
+async def test_baostock_no_candidate_dates_skips_akshare(tmp_qlib):
+    """窗口内无新交易日（候选日期为空）→ 直接返回，不触发 akshare 全量爬。"""
+    base, _ = tmp_qlib
+    with patch.object(eod, "_gen_candidate_dates", return_value=[]), \
+         patch.object(eod, "_incremental_sync_eod_akshare",
+                      new=AsyncMock()) as mock_ak:
+        r = await eod.incremental_sync_eod(
+            universe="all", days=1, provider_uri=str(base),
+            overwrite=False, source="baostock",
+        )
+    assert r["ok"] is True
+    assert r["success"] == 0
+    assert "无新交易日" in r.get("message", "")
+    mock_ak.assert_not_awaited()
+
+
+async def test_akshare_all_failed_returns_ok_false(tmp_qlib):
+    """akshare 兜底全部拉取失败(success=0) → ok=False，避免被标记为成功。"""
+    base, old_dates = tmp_qlib
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated fetch failure")
+
+    with patch.object(eod, "_fetch_eod_akshare", side_effect=_boom):
+        r = await eod._incremental_sync_eod_akshare(
+            codes=["sh600000"], start_str="20240101", end_str="20240120",
+            old_calendar=old_dates, provider_uri=str(base),
+            universe="all", days=1, overwrite=False,
+        )
+    assert r["ok"] is False
+    assert r["success"] == 0
+    assert r["failed"] == 1

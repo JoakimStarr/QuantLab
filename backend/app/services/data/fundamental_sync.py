@@ -358,7 +358,8 @@ async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
     - broadcast=True：拉取 + 广播（数据校验/补齐阶段调用，日历已对齐），带进度。
     """
     from app.services.data.sync_progress import (
-        clear_progress, finish_progress, init_progress, update_progress, sync_is_active,
+        clear_progress, finish_progress, init_progress, set_worker_pid,
+        update_progress, sync_is_active,
     )
 
     qlib_dir = provider_uri or settings.qlib_provider_path
@@ -367,6 +368,9 @@ async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
     if use_progress:
         # broadcast 会写 bin（writes_bins=True），fetch-only 只写 PG（False）
         init_progress("fundamental", "fundamental", writes_bins=broadcast)
+        # 登记 worker PID：进程被 kill -9 后 web 端 sync_is_active 才能识别
+        # "worker 已死"而非永久 409 阻塞（此前无 pid 时残留进度文件恒视为活跃）
+        set_worker_pid(os.getpid())
 
     try:
         if use_progress:

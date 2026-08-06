@@ -228,18 +228,28 @@ def _get_write_pool():
 
 
 def _flush_chunk(per_stock: dict, global_calendar: list, qlib_dir: str,
-                 code_range: dict, pg_rows: list, old_calendar: list = None) -> int:
+                 code_range: dict, pg_rows: list, old_calendar: list = None,
+                 written_codes: set = None) -> int:
     """写一批股票 bin 并收集 stock_daily 记录，返回成功股票数。
 
     每只股票的 bin 写入相互独立，用线程池并行写，缩短写盘耗时，
     避免写盘拖慢整体下载节奏。
+
+    old_calendar: 回填前 day.txt（本次运行前 bin 对齐的日历）。
+    written_codes: 本次回填中已重写过 bin 的股票集合（由调用方维护）。
+        关键：同一股票在多个批次被写入时，第一批之后其 bin 已按 global_calendar
+        对齐，后续批次必须以 global_calendar 作 old_calendar 去映射旧值；若仍传
+        回填前的 old_calendar，前几批写入的新日期（位于旧日历长度之后）会被映射
+        为 -1 而静默丢弃（数据丢失 bug）。
     """
     ex = _get_write_pool()
     success = 0
-    futures = {
-        code_lower: ex.submit(_write_stock_bins, code_lower, rows, global_calendar, qlib_dir, old_calendar)
-        for code_lower, rows in per_stock.items()
-    }
+    futures = {}
+    for code_lower, rows in per_stock.items():
+        ref_cal = global_calendar if (written_codes and code_lower in written_codes) else old_calendar
+        futures[code_lower] = ex.submit(
+            _write_stock_bins, code_lower, rows, global_calendar, qlib_dir, ref_cal
+        )
     for code_lower, fut in futures.items():
         try:
             rec = fut.result()
@@ -248,6 +258,10 @@ def _flush_chunk(per_stock: dict, global_calendar: list, qlib_dir: str,
             continue
         pg_rows.extend(rec)
         if rec:
+            # 写入成功才标记"已按 global_calendar 对齐"；失败/无记录的股票保持
+            # 回填前对齐，后续批次仍用 old_calendar 映射旧值
+            if written_codes is not None:
+                written_codes.add(code_lower)
             # code_range 种子来自 _load_existing_ranges（字符串 'YYYY-MM-DD'），
             # 新记录是 datetime.date —— 统一转字符串再比较，避免 min/max 跨类型崩溃
             dates = sorted({_fmt_ymd(r["trade_date"]) for r in rec})
@@ -597,6 +611,9 @@ async def _run_backfill_downloads(
     queue = asyncio.Queue(maxsize=max(queue_max, 1))
     total = len(to_download)
     success_stocks = 0
+    # 本次回填已重写过 bin 的股票集合：其 bin 已按 global_calendar 对齐，
+    # 后续批次必须以 global_calendar 映射旧值（否则前几批数据被丢弃）
+    written_codes = set()
     if written_days is None:
         written_days = set(_get_calendar(qlib_dir))
 
@@ -643,7 +660,7 @@ async def _run_backfill_downloads(
                 if per_stock:
                     success_stocks += await asyncio.wait_for(
                         asyncio.to_thread(
-                            _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar
+                            _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar, written_codes
                         ),
                         timeout=600,
                     )
@@ -660,7 +677,7 @@ async def _run_backfill_downloads(
             if processed % chunk_days == 0:
                 success_stocks += await asyncio.wait_for(
                     asyncio.to_thread(
-                        _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar
+                        _flush_chunk, per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar, written_codes
                     ),
                     timeout=600,
                 )

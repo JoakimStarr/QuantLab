@@ -324,7 +324,8 @@ _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
 
 def _ic_cache_key(
-    expr: str, start: str, end: str, horizon: int, diversity: bool = False,
+    expr: str, start: str, end: str, horizon: int, universe: str = None,
+    diversity: bool = False,
     ic_threshold: float = None, significance_alpha: float = 0.05,
     stability_threshold: float = 0.5, positive_ratio_threshold: float = 0.55,
     decay_threshold: float = -0.01, diversity_threshold: float = 0.8,
@@ -334,13 +335,13 @@ def _ic_cache_key(
     """生成 IC 缓存 key。
 
     所有会影响评价结果的参数必须纳入 key，否则配置不同会命中脏缓存：
-    阈值、滚动窗口、行业中性化/稳健性开关、基准因子表达式（正交）等。
+    阈值、滚动窗口、行业中性化/稳健性开关、基准因子表达式（正交）、股票池 universe 等。
     """
     import hashlib
     roll = tuple(roll_windows or [])
     base = tuple(sorted(baseline_exprs or []))
     raw = (
-        f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
+        f"{expr}|{start}|{end}|{horizon}|{universe or ''}|{'div' if diversity else 'nodiv'}"
         f"|{ic_threshold}|{significance_alpha}|{stability_threshold}"
         f"|{positive_ratio_threshold}|{decay_threshold}|{diversity_threshold}"
         f"|{roll}|{industry_neutralize_enabled}|{robustness_enabled}|{base}"
@@ -518,7 +519,7 @@ def evaluate_factor_with_validation(
 
     # 检查缓存（所有影响结果的参数均纳入 key，避免配置不同命中脏缓存）
     cache_key = _ic_cache_key(
-        factor_expr, start, end, horizon,
+        factor_expr, start, end, horizon, universe=universe,
         diversity=bool(existing_ic_series),
         ic_threshold=ic_threshold,
         significance_alpha=significance_alpha,

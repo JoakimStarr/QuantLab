@@ -107,7 +107,11 @@ def _read_bin(file_path: str):
 
 
 def _write_bin(file_path: str, values: np.ndarray, start_index: int):
-    """写入 qlib bin 文件
+    """写入 qlib bin 文件（原子：先写临时文件再 os.replace）。
+
+    原子写保证并发读安全：回测/挖掘在同步写 bin 期间读取时，只会看到
+    完整的旧文件或完整的新文件，绝不会读到写了一半（截断）的文件，
+    这是"数据同步与回测解耦、各干各的"的前提。
 
     Args:
         file_path: .day.bin 文件路径
@@ -115,11 +119,13 @@ def _write_bin(file_path: str, values: np.ndarray, start_index: int):
         start_index: 数据在日历中的起始索引
     """
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "wb") as f:
+    tmp_path = file_path + ".tmp"
+    with open(tmp_path, "wb") as f:
         # 写头部：start_index 以 float32 存储（4 字节）
         f.write(struct.pack(QLIB_BIN_HEADER_FMT, float(start_index)))
         # 写数据
         values.astype(QLIB_BIN_DTYPE).tofile(f)
+    os.replace(tmp_path, file_path)
 
 
 def _pad_bins_to_calendar(qlib_dir: str, calendar: list) -> int:
@@ -179,12 +185,14 @@ def _get_calendar(provider_uri: str):
 
 
 def _write_calendar(provider_uri: str, dates: list):
-    """写入 qlib 日历（全量覆盖）"""
+    """写入 qlib 日历（全量覆盖，原子写：避免并发读者读到写了一半的 day.txt）"""
     cal_path = os.path.join(provider_uri, "calendars", "day.txt")
     os.makedirs(os.path.dirname(cal_path), exist_ok=True)
-    with open(cal_path, "w") as f:
+    tmp_path = cal_path + ".tmp"
+    with open(tmp_path, "w") as f:
         for d in dates:
             f.write(d + "\n")
+    os.replace(tmp_path, cal_path)
 
 
 def _read_instruments(provider_uri: str, universe: str):
@@ -453,6 +461,9 @@ def incremental_sync_eod_baostock(
     success_count = 0
     fail_count = 0
     total_stocks = len(per_stock_rows) if per_stock_rows else 1
+    pg_rows = []  # stock_daily 落库记录：修复 EOD 只写 bin、repair 以 PG 为权威会丢 EOD 数据
+    from app.services.data.baostock_backfill import _f, _i  # 延迟导入避免循环依赖（backfill 模块级已 import 本模块）
+
     for stock_idx, (qlib_code_lower, grps) in enumerate(per_stock_rows.items()):
         try:
             df = pd.concat(grps, ignore_index=True)
@@ -482,6 +493,23 @@ def incremental_sync_eod_baostock(
             # 复用现有复权对齐逻辑（baostock 不复权价与旧 bin 通过 ratio 对齐）
             _sync_stock_bin(feat_dir, out, old_calendar, fields_to_write, overwrite)
             success_count += 1
+
+            # 构建 stock_daily 全字段记录（ON CONFLICT DO NOTHING，重复写入幂等）
+            for _, r in df.iterrows():
+                d = r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
+                pg_rows.append({
+                    "code": qlib_code,
+                    "trade_date": d,
+                    "open": _f(r.get("open")), "high": _f(r.get("high")),
+                    "low": _f(r.get("low")), "close": _f(r.get("close")),
+                    "preclose": _f(r.get("preclose")), "volume": _f(r.get("volume")),
+                    "amount": _f(r.get("amount")), "turn": _f(r.get("turn")),
+                    "tradestatus": _i(r.get("tradestatus")), "pct_chg": _f(r.get("pctChg")),
+                    "is_st": bool(r.get("isST")) if pd.notna(r.get("isST")) else None,
+                    "pe_ttm": _f(r.get("peTTM")), "pb_mrq": _f(r.get("pbMRQ")),
+                    "ps_ttm": _f(r.get("psTTM")), "pcf_ncf_ttm": _f(r.get("pcfNcfTTM")),
+                    "adjustflag": _i(r.get("adjustflag")),
+                })
         except Exception as e:
             logger.debug("baostock 写 %s 失败: %s", qlib_code_lower, e)
             fail_count += 1
@@ -494,11 +522,13 @@ def incremental_sync_eod_baostock(
     new_dates_sorted = sorted(all_new_dates)
     if new_dates_sorted:
         merged_cal = _merge_calendar(old_calendar, new_dates_sorted)
+        # 先按新日历补齐所有 bin，再写 day.txt：避免"day.txt 已扩展、部分 bin
+        # 仍是旧长度"的窗口——该窗口内回测/挖掘并发读会读到短 bin。先 pad 后写
+        # 日历的窗口是"bin 长于 day.txt"，对齐前缀旧日期正确，读侧安全。
+        _pad_bins_to_calendar(provider_uri, merged_cal)
         _write_calendar(provider_uri, merged_cal)
         logger.info("baostock 日历更新: %d -> %d (新增 %d 个交易日)",
                     len(old_calendar), len(merged_cal), len(new_dates_sorted))
-        # 日历扩展后，无新日数据的股票（退市/停牌）bin 仍是旧长度，补 NaN 对齐
-        _pad_bins_to_calendar(provider_uri, merged_cal)
 
     skipped = max(len(codes) - success_count - fail_count, 0)
     logger.info("baostock EOD 同步完成: 拉取日期%d, 成功%d, 失败%d, 跳过%d, 新增日期%d",
@@ -515,6 +545,7 @@ def incremental_sync_eod_baostock(
         "skipped": skipped,
         "dates": fetched_dates,
         "new_dates": new_dates_sorted,
+        "pg_rows": pg_rows,  # 待 async 调用方落库 stock_daily（repair/校验以 PG 为权威）
         "calendar_before": len(old_calendar),
         "calendar_after": len(old_calendar) + len(new_dates_sorted),
     }
@@ -583,6 +614,16 @@ async def incremental_sync_eod(
         if not include_intraday and datetime.now().hour < 15 and today_str in candidate_dates:
             candidate_dates = [d for d in candidate_dates if d != today_str]
 
+        # 无新候选交易日（窗口内日期已全部在日历中）→ 数据已最新，直接返回。
+        # 不能落 akshare：否则会对整个股票池逐只爬一遍（限速 3req/s）纯属浪费。
+        if not candidate_dates:
+            return {
+                "ok": True, "source": "baostock", "universe": universe,
+                "success": 0, "failed": 0, "skipped": 0,
+                "dates": [], "new_dates": [],
+                "message": "无新交易日，数据已最新",
+            }
+
         try:
             loop = asyncio.get_running_loop()
             result = await asyncio.wait_for(
@@ -593,8 +634,10 @@ async def incremental_sync_eod(
                 ),
                 timeout=600,
             )
-            # ok=True 且实际取到数据(success>0)才采纳；否则（失败/异常/桩返回空）回退 akshare
+            # ok=True 且实际取到数据(success>0)才采纳；否则（失败/异常/桩返回空）回退 akshare 兜底
             if result.get("ok") and result.get("success", 0) > 0:
+                await _insert_pg_rows(result.get("pg_rows") or [], source="baostock")
+                result.pop("pg_rows", None)  # 不入 eod_last_result.json（量大无意义）
                 return result
             logger.warning(
                 "baostock 主源未取到数据(ok=%s, success=%d)，回退 akshare: %s",
@@ -611,6 +654,23 @@ async def incremental_sync_eod(
         codes, start_str, end_str, old_calendar, provider_uri,
         universe, days, overwrite, include_intraday,
     )
+
+
+async def _insert_pg_rows(rows: list, source: str = "") -> None:
+    """EOD 增量路径把当日数据落库 stock_daily（幂等）。
+
+    repair / validation 以 PG stock_daily 为日历权威：EOD 若只写 bin+day.txt
+    而不落库，任何一次 repair 都会把 EOD 独有的日期从 day.txt 删除，随后按新
+    日历从 PG 重建 bin 时把 EOD 数据截断丢失。落库失败只告警、不阻断 bin 写入。
+    """
+    if not rows:
+        return
+    import asyncio
+    try:
+        from app.services.data.baostock_backfill import _insert_stock_daily  # 延迟导入避免循环依赖
+        await asyncio.wait_for(_insert_stock_daily(rows), timeout=300)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("EOD %s 落库 stock_daily 失败（%d 行）: %s", source, len(rows), e)
 
 
 async def _incremental_sync_eod_akshare(
@@ -643,6 +703,8 @@ async def _incremental_sync_eod_akshare(
     fail_count = 0
     skip_count = 0
     all_new_dates = set()
+    pg_rows = []  # stock_daily 落库记录（仅新日期）
+    from app.services.data.baostock_backfill import _f  # 延迟导入避免循环依赖
 
     for i, qlib_code in enumerate(codes):
         try:
@@ -668,6 +730,19 @@ async def _incremental_sync_eod_akshare(
             for d in df["date"].tolist():
                 if d not in cal_set:
                     all_new_dates.add(d)
+
+            # stock_daily 记录（仅新日期；已落库的旧日期由回填补齐，不重复写）
+            for _, r in df.iterrows():
+                d = str(r["date"])[:10]
+                if d not in cal_set:
+                    pg_rows.append({
+                        "code": qlib_code.upper(),
+                        "trade_date": d,
+                        "open": _f(r.get("open")), "high": _f(r.get("high")),
+                        "low": _f(r.get("low")), "close": _f(r.get("close")),
+                        "volume": _f(r.get("volume")),
+                        "pct_chg": _f(r.get("pct_change")),
+                    })
 
             # 计算涨跌停 mask（akshare 路径无 isST，is_st=None 按板块阈值，向后兼容）
             if "pct_change" in df.columns:
@@ -708,17 +783,23 @@ async def _incremental_sync_eod_akshare(
     new_dates_sorted = sorted(all_new_dates)
     if new_dates_sorted:
         merged_cal = _merge_calendar(old_calendar, new_dates_sorted)
+        # 先按新日历补齐所有 bin，再写 day.txt（避免"day.txt 已扩展而 bin 未对齐"的并发读窗口）
+        _pad_bins_to_calendar(provider_uri, merged_cal)
         _write_calendar(provider_uri, merged_cal)
         logger.info("日历更新: %d -> %d (新增 %d 个交易日)",
                     len(old_calendar), len(merged_cal), len(new_dates_sorted))
-        # 日历扩展后，无新日数据的股票（退市/停牌）bin 仍是旧长度，补 NaN 对齐
-        _pad_bins_to_calendar(provider_uri, merged_cal)
+
+    # EOD 新增交易日落库 stock_daily（否则 repair 以 PG 为权威会丢 EOD 数据）
+    if pg_rows:
+        await _insert_pg_rows(pg_rows, source="akshare")
 
     logger.info("EOD增量同步完成(akshare): 成功%d, 失败%d, 跳过%d, 新增日期%d",
                 success_count, fail_count, skip_count, len(new_dates_sorted))
 
     return {
-        "ok": True,
+        # ok 必须反映实际写入：全部失败(success=0)时返回 False，
+        # 避免上层 finish_progress(True) 把"什么都没拉到"标记成成功。
+        "ok": success_count > 0,
         "source": "akshare",
         "universe": universe,
         "days": days,

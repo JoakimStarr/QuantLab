@@ -327,6 +327,28 @@ def writes_bins_active() -> bool:
     return bool(progress and progress.get("writes_bins"))
 
 
+# 会重塑 day.txt 对齐（历史前置扩展/重建日历）的同步 kind——此类同步期间读 bin
+# 可能读到错位数据（bin 已按新日历重排而 day.txt 未更新），回测/挖掘必须等待。
+# 纯追加/回填的同步（eod/etf/indices，bin 原子写后对齐前缀，读侧安全）不在此列。
+_CALENDAR_SHIFTING_KINDS = {"baostock", "repair", "full"}
+
+
+def calendar_shifting_active() -> bool:
+    """是否存在会重塑日历对齐的活跃同步（回填历史扩展/补齐重建）。
+
+    与 writes_bins_active 的区别：后者拦截"任何写 bin"（用于同步之间串行），
+    本函数只拦截"可能让读者读到错位数据"的同步，用于回测/挖掘的并发放行——
+    EOD/ETF/指数等纯追加同步写 bin 时，回测可正常进行（bin 原子写保证不读到半成品）。
+    """
+    if not sync_is_active():
+        return False
+    progress = get_progress()
+    if not (progress and progress.get("writes_bins")):
+        return False
+    source = (progress.get("data_source") or "").lower()
+    return source in _CALENDAR_SHIFTING_KINDS
+
+
 def clear_progress() -> None:
     """清除进度"""
     _get_manager().clear_progress()

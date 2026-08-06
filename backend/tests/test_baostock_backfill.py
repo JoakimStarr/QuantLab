@@ -5,7 +5,10 @@
 - _select_new_dates：跳过已下载日期，仅返回未下载日期（最新 → 最旧）
 - _load_feature_ranges：stock_daily 为空时按 bin 长度推断每股数据区间
 """
+import os
 import struct
+
+import pytest
 
 from app.services.data.baostock_backfill import (
     _load_feature_ranges,
@@ -91,7 +94,7 @@ async def test_run_backfill_downloads_pipeline():
 
     flushed = []
 
-    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None):
+    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None, written_codes=None):
         flushed.append(len(per_stock))
         pg_rows.extend([1] * len(per_stock))
         return len(per_stock)
@@ -144,7 +147,7 @@ async def test_run_backfill_downloads_syncs_calendar(tmp_path):
             "adjustflag": [3],
         })
 
-    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None):
+    def _fake_flush(per_stock, global_calendar, qlib_dir, code_range, pg_rows, old_calendar=None, written_codes=None):
         for code_lower, rows in per_stock.items():
             pg_rows.extend({
                 "code": code_lower.upper(),
@@ -177,3 +180,58 @@ async def test_run_backfill_downloads_syncs_calendar(tmp_path):
     cal = (tmp_path / "calendars" / "day.txt").read_text().splitlines()
     # 种子日期 + 两批新增日期，升序且与数据库同步
     assert cal == ["2024-01-10", "2024-01-15", "2024-01-16"]
+
+
+async def test_run_backfill_downloads_multi_chunk_keeps_all_bin_data(tmp_path):
+    """分块回填（>1 批）不丢数据：前几批写入的 bin 不会被后续批次清成 NaN。
+
+    回归：旧实现每批都传回填前 old_calendar 映射旧值，第一批写入的新日期
+    （位于旧日历长度之后）被映射为 -1 丢弃，最终 bin 只剩最后一批数据。
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import numpy as np
+    import pandas as pd
+
+    from app.services.data.baostock_backfill import _run_backfill_downloads
+    from app.services.data.eod_incremental import _read_bin
+
+    qlib_dir = str(tmp_path)
+    dates = ["2024-01-19", "2024-01-18", "2024-01-17", "2024-01-16", "2024-01-15", "2024-01-12"]  # 最新→最旧（to_download）
+    global_cal = sorted(dates)  # 真实调用方 run_baostock_backfill 传入的 global_calendar 是升序
+    dfs = {}
+    for i, d in enumerate(dates):
+        dfs[d] = pd.DataFrame({
+            "qlib_code_lower": ["sh600000"],
+            "date": [d],
+            "open": [10.0 + i], "high": [11.0 + i], "low": [9.0 + i],
+            "close": [10.5 + i], "preclose": [10.0 + i],
+            "volume": [1000.0], "amount": [10000.0],
+            "turn": [1.0], "tradestatus": [1], "pctChg": [1.0], "isST": [False],
+            "peTTM": [10.0], "pbMRQ": [1.0], "psTTM": [2.0], "pcfNcfTTM": [3.0],
+            "adjustflag": [3],
+        })
+
+    with patch(
+        "app.services.data.baostock_backfill.fetch_daily_all_a_stock_sync",
+        side_effect=lambda d: dfs[d],
+    ), patch(
+        "app.services.data.baostock_backfill._normalize_daily",
+        side_effect=lambda df: df,
+    ), patch(
+        "app.services.data.baostock_backfill._insert_stock_daily",
+        new=AsyncMock(side_effect=lambda rows: {r["trade_date"].strftime("%Y-%m-%d") for r in rows}),
+    ):
+        n = await _run_backfill_downloads(
+            dates, global_cal, qlib_dir, {},
+            chunk_days=2, queue_max=4,
+            written_days=set(), old_calendar=[],
+        )
+
+    assert n == 3  # 3 个批次 × 同一只股票，每批成功计入一次
+    close, start = _read_bin(os.path.join(qlib_dir, "features", "sh600000", "close.day.bin"))
+    assert start == 0
+    assert len(close) == len(global_cal)
+    assert not np.isnan(close).any(), "分块回填后 bin 不应出现 NaN（前几批数据被丢弃）"
+    # 值按日历升序写入：最早日期(01-12, i=5)在最前，最新日期(01-19, i=0)在最后
+    assert close.tolist() == pytest.approx([10.5 + i for i in range(5, -1, -1)])
