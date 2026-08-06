@@ -26,7 +26,7 @@ async def test_run_financial_sync_registers_worker_pid():
         result = await fs.run_financial_sync(broadcast=True, codes=[])
 
     assert result["ok"] is True
-    mock_init.assert_called_once_with("fundamental", "fundamental", writes_bins=True)
+    mock_init.assert_called_once_with("fundamental", "fundamental", writes_bins=True, kind="fundamental")
     mock_setpid.assert_called_once_with(os.getpid())
 
 

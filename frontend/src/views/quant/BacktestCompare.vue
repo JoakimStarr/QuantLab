@@ -511,7 +511,7 @@ function formatResultLabel(item) {
   if (item.annual_return != null) {
     parts.push(`年化${(Number(item.annual_return) * 100).toFixed(2)}%`)
   }
-  if (item.sharpe != null) parts.push(`夏普${Number(item.sharpe).toFixed(3)}`)
+  if (item.sharpe != null) parts.push(`夏普${Number(item.sharpe).toFixed(2)}`)
   if (item.created_at) parts.push(item.created_at.slice(0, 10))
   return parts.join(' | ')
 }

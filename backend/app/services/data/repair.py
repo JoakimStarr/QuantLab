@@ -154,7 +154,7 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
 
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
-    init_progress(universe, "repair", writes_bins=True)
+    init_progress(universe, "repair", writes_bins=True, kind="repair")
 
     try:
         update_progress(pct=5, status="running", message="校验并生成修复计划...")
@@ -234,7 +234,7 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
             years = _compute_years_from_missing(samples)
             update_progress(pct=80, status="running",
                             message=f"从 baostock 补拉缺失交易日（years={years}）...")
-            await run_baostock_backfill(years=years, universe=universe)
+            await run_baostock_backfill(years=years, universe=universe, kind="repair")
             steps.append(f"baostock(years={years})")
 
         # 6. 更新状态

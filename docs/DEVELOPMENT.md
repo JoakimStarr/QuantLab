@@ -214,7 +214,7 @@ QuantLab/
 
 - 配置项：`config.quant.qlib_provider_uri`（默认 `data/qlib_bin/cn_data`）
 - 绝对路径：`settings.qlib_provider_path = PROJECT_ROOT / qlib_provider_uri`
-- 数据同步通过 `POST /api/v1/quant/data/sync?years=N`（baostock 全量回填，手动触发）
+- 数据同步通过 `POST /api/v1/quant/data/sync-full?years=N`（一键全同步，手动触发；A股回填为第一阶段）
 - 健康检查 `GET /health` 会检测 qlib 可用性与 `calendars/day.txt` 时间范围
 
 ---
@@ -411,7 +411,7 @@ LOGIN_RATE_LIMIT=5/minute
   1. 检查 `data/qlib_bin/cn_data/` 是否存在且含 `calendars/day.txt`
   2. `GET /api/v1/quant/data/qlib-status` 查看详细 message
   3. 未装 pyqlib：`.venv/bin/pip install pyqlib`（注意 protobuf<4、setuptools<81）
-  4. 数据未同步：`POST /api/v1/quant/data/sync` 或 `POST /api/v1/quant/data/eod-sync`
+  4. 数据未同步：`POST /api/v1/quant/data/sync-full` 或 `POST /api/v1/quant/data/eod-sync`
 
 ### 7.3 akshare 接口超时/限流
 
@@ -420,7 +420,7 @@ LOGIN_RATE_LIMIT=5/minute
 - **解决**：
   1. 调大 `config.quant.fetch_interval_seconds`（默认 1.2s）
   2. 调小 `fetch_max_workers`（默认 3）
-  3. 主行情走 baostock（`POST /api/v1/quant/data/sync?years=N`），akshare 仅作补充
+  3. 主行情走 baostock（`POST /api/v1/quant/data/sync-full?years=N`），akshare 仅作补充
   4. 定时任务自带 3 次重试，间隔 10 分钟
 
 ### 7.4 数据同步失败排查
@@ -429,7 +429,7 @@ LOGIN_RATE_LIMIT=5/minute
 |------|------|
 | 状态卡 `syncing` | 超过 30 分钟自动标 failed；或调 `GET /quant/data/status` 触发 `_detect_stale_sync` |
 | 重复触发 409 | 10 分钟内重复同步返回 `SYNC_IN_PROGRESS`，等待或超时后重试 |
-| bin 长度异常 | `GET /quant/data/integrity-check?universe=csi300` |
+| bin 长度异常 | `GET /quant/data/validate?universe=csi300` 查看报告，`POST /quant/data/repair` 一键补齐 |
 | 同步历史 | `GET /quant/data/sync-history` 查看版本/耗时/错误 |
 | 进度无更新 | `GET /quant/data/sync-progress` 查看实时进度 |
 

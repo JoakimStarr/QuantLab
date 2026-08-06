@@ -111,7 +111,7 @@
             </template>
           </el-table-column>
           <el-table-column label="价格" align="right">
-            <template #default="{ row }">{{ row.price != null ? Number(row.price).toFixed(3) : '--' }}</template>
+            <template #default="{ row }">{{ row.price != null ? Number(row.price).toFixed(2) : '--' }}</template>
           </el-table-column>
           <el-table-column label="数量" align="right">
             <template #default="{ row }">{{ row.quantity != null ? row.quantity : '--' }}</template>
@@ -120,7 +120,7 @@
             <template #default="{ row }">{{ row.total != null ? Number(row.total).toFixed(2) : '--' }}</template>
           </el-table-column>
           <el-table-column label="费用" align="right">
-            <template #default="{ row }">{{ row.cost != null ? Number(row.cost).toFixed(4) : '--' }}</template>
+            <template #default="{ row }">{{ row.cost != null ? Number(row.cost).toFixed(2) : '--' }}</template>
           </el-table-column>
           <el-table-column v-if="hasTradeNote" label="说明" min-width="100" show-overflow-tooltip>
             <template #default="{ row }">{{ row.note || '--' }}</template>
@@ -205,7 +205,7 @@ function fmtPct(v, digits = 2) {
   if (v == null || v === '') return '--'
   return (v * 100).toFixed(digits) + '%'
 }
-function fmtNum(v, digits = 3) {
+function fmtNum(v, digits = 2) {
   if (v == null || v === '') return '--'
   return Number(v).toFixed(digits)
 }
@@ -246,7 +246,7 @@ const chartOption = computed(() => {
       borderColor: chartTheme.border(),
       textStyle: { color: chartTheme.textPrimary() },
       formatter: (params) => {
-        const lines = params.map((p) => `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(3)}</b>`)
+        const lines = params.map((p) => `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(2)}</b>`)
         return `${params[0].axisValue}<br/>${lines.join('<br/>')}`
       },
     },

@@ -1,16 +1,12 @@
 """宏观指标 API：手动触发同步、查询指标序列、查询状态。"""
 import logging
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, text
 
 from app.core.database import get_db
 from app.schemas.common import ApiResponse
-from app.services.data.macro_sync import (
-    AKSHARE_INDICATORS,
-    MACRO_INDICATORS,
-    run_macro_sync_task,
-)
+from app.services.data.macro_sync import AKSHARE_INDICATORS, MACRO_INDICATORS
 from app.models.macro import MacroIndicator
 
 logger = logging.getLogger(__name__)
@@ -20,17 +16,28 @@ router = APIRouter(prefix="/macro", tags=["macro"])
 
 @router.post("/sync")
 async def macro_sync_api(
-    background_tasks: BackgroundTasks,
     broadcast: bool = Query(False, description="是否同时广播写 qlib bin（建议数据校验/补齐阶段执行；默认只拉数据入库）"),
 ):
-    """手动触发宏观指标同步（东财 datacenter + akshare → PG）。
+    """手动触发宏观指标同步（东财 datacenter + akshare → PG，独立 worker 后台执行）。
 
     broadcast=False（默认）只拉数据入库 PG，不写 bin——回填期间点也安全；
     bin 广播放在数据校验/补齐阶段（日历对齐后）触发。
+
+    长任务走独立 worker 子进程（spawn_sync_worker），避免占用 web 事件循环
+    导致 uvicorn --reload 等待后台任务卡死。
     """
-    background_tasks.add_task(run_macro_sync_task, broadcast)
+    from app.services.data.sync_progress import busy_message, writes_bins_active
+    if broadcast and writes_bins_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": busy_message() + "；宏观 bin 广播需等当前同步完成（日历对齐）后执行",
+            "status": 409,
+        })
+
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("macro", "macro", broadcast=broadcast)
     return ApiResponse(ok=True, data={
-        "message": "宏观指标同步已提交（后台执行）"
+        "message": "宏观指标同步已提交（独立进程后台执行）"
                    + ("" if not broadcast else "，含 bin 广播"),
         "indicators": sorted(MACRO_INDICATORS.keys()) + sorted(AKSHARE_INDICATORS.keys()),
         "broadcast": broadcast,

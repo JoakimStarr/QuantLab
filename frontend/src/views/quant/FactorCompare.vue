@@ -228,7 +228,7 @@ const decayOption = computed(() => {
       formatter: (params) => {
         let html = `Lag: ${params[0]?.axisValue}<br/>`
         params.forEach((p) => {
-          html += `${p.marker} ${p.seriesName}: ${Number(p.value[1]).toFixed(4)}<br/>`
+          html += `${p.marker} ${p.seriesName}: ${Number(p.value[1]).toFixed(2)}<br/>`
         })
         return html
       },
@@ -347,7 +347,7 @@ function normalizeSeries(data) {
 function formatFactorLabel(item) {
   const parts = [`#${item.id}`, item.name]
   if (item.category) parts.push(categoryLabel(item.category))
-  if (item.ic != null) parts.push(`IC=${Number(item.ic).toFixed(4)}`)
+  if (item.ic != null) parts.push(`IC=${Number(item.ic).toFixed(2)}`)
   return parts.join(' | ')
 }
 

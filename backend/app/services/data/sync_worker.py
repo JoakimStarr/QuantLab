@@ -107,6 +107,17 @@ async def _run(args: argparse.Namespace) -> None:
         logger.info("财报同步完成: %s", result)
         return
 
+    if args.kind == "macro":
+        # 宏观同步走东财/akshare，不连 baostock，不需要爬取锁，可与回填并行。
+        # run_macro_sync_task 自管进度：fetch-only 不写全局进度（避免覆盖回填），
+        # broadcast 模式（数据校验/补齐阶段）才写进度。
+        from app.services.data.macro_sync import run_macro_sync_task
+
+        logger.info("macro worker 启动 pid=%s broadcast=%s", os.getpid(), args.broadcast)
+        result = await run_macro_sync_task(broadcast=args.broadcast)
+        logger.info("宏观同步完成: %s", result)
+        return
+
     from app.services.data.sync_progress import (
         clear_progress, finish_progress, init_progress, set_worker_pid,
     )
@@ -138,7 +149,7 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
     # 前端据此显示任务标签。
     data_source = "baostock" if args.kind == "backfill" else args.kind
     # backfill/eod/repair/indices 都会写 qlib bin，读 bin 的操作（挖掘/校验）应被阻塞
-    init_progress(args.universe, data_source, writes_bins=True)
+    init_progress(args.universe, data_source, writes_bins=True, kind=args.kind)
     set_worker_pid(os.getpid())
 
     # 仅数据源用到 baostock 时才 login/logout（保证退出前必然登出）：
@@ -257,7 +268,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="QuantLab 数据同步独立 worker")
     parser.add_argument(
         "--kind",
-        choices=["backfill", "eod", "repair", "indices", "fundamental", "etf", "full"],
+        choices=["backfill", "eod", "repair", "indices", "fundamental", "macro", "etf", "full"],
         default="backfill",
     )
     parser.add_argument("--universe", default="csi300")

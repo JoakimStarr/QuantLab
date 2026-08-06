@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 async def run_full_sync(years: int, universe: str = "all") -> dict:
     """一键全同步主入口（worker 子进程中执行）。"""
     qlib_dir = settings.qlib_provider_path
-    init_progress(universe, "full", writes_bins=True)
+    init_progress(universe, "full", writes_bins=True, kind="full")
     steps: list[str] = []
 
     def _restage(pct: float, message: str) -> None:
@@ -42,7 +42,7 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
         # 必须重设 worker_pid：clear 后 init_progress 读不到存活 pid，
         # 若不重设，worker 中途死亡时 sync_is_active 无法识别僵尸进度，
         # 会长期阻塞后续同步/补齐。
-        init_progress(universe, "full", writes_bins=True)
+        init_progress(universe, "full", writes_bins=True, kind="full")
         set_worker_pid(os.getpid())
         update_progress(pct=pct, status="running", message=message)
 

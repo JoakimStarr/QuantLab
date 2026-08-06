@@ -607,18 +607,6 @@ async def indices_api(db=Depends(get_db)):
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})
 
 
-@router.get("/integrity-check")
-async def integrity_check_api(universe: str = Query(None)):
-    # 数据完整性校验：检测每只股票的 bin 文件长度是否与日历天数一致
-    from app.services.data.integrity_check import check_integrity
-    import asyncio
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None, check_integrity, settings.qlib_provider_path, universe
-    )
-    return ApiResponse(ok=True, data=result)
-
-
 @router.get("/validate")
 async def validate_api(universe: str = Query("all")):
     """全市场数据校验：bin 字段完整性 + DB/qlib 字段与覆盖一致性 + 日历同步。
@@ -675,19 +663,6 @@ async def repair_api(
                    + ("，含 baostock 增量" if req.include_baostock else "，仅从 PG 重建") + "）",
         "universe": universe,
         "include_baostock": req.include_baostock,
-    })
-
-
-@router.post("/sync-industry")
-async def sync_industry_api():
-    """同步申万行业分类数据（已禁用，后期规划）
-
-    行业同步功能暂未开放，后期规划。代码保留在 industry_sync.py 供未来复用。
-    """
-    return ApiResponse(ok=False, error={
-        "code": "INDUSTRY_SYNC_DISABLED",
-        "message": "行业同步暂未开放，后期规划",
-        "status": 503,
     })
 
 

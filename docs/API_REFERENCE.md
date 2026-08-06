@@ -274,28 +274,8 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 }
 ```
 
-### 5.3 `POST /quant/data/sync`
-- **说明**：触发 baostock 全量回填（**后台执行**）。按 `years` 从最新交易日向旧逐日拉取全市场日K，写 qlib bin + PG `stock_daily`。幂等（`ON CONFLICT DO NOTHING`），重复执行只补缺口。
-- **请求体**：
-```json
-{
-  "years": 5
-}
-```
-- **响应**：
-```json
-{
-  "ok": true,
-  "data": {
-    "message": "已触发 baostock 数据同步（后台执行，数据源=baostock）",
-    "universe": "csi300",
-    "data_source": "baostock"
-  }
-}
-```
-- **错误**：
-  - `503 QLIB_NOT_AVAILABLE`
-  - `409 SYNC_IN_PROGRESS` —— 同一 universe 在 10 分钟内已发起过同步
+### 5.3 ~~`POST /quant/data/sync`~~（已移除）
+- **说明**：baostock 仅回填入口已移除——统一走 `POST /quant/data/sync-full`（一键全同步，A股回填为其第一阶段）。若只需回填，可用 `POST /quant/data/repair` 的 `include_baostock` 选项。
 
 ### 5.4 `GET /quant/data/sync-progress`
 - **说明**：读取当前后台同步的实时进度。
@@ -386,26 +366,28 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 - **说明**：同步主要指数（上证、深证、沪深300 等）日K数据到 qlib bin（**后台执行**）。
 - **响应**：`{"ok": true, "data": {"message": "指数同步已提交，后台执行中"}}`
 
-### 5.12 `GET /quant/data/integrity-check`
-- **Query**：`universe`（可选）
-- **说明**：逐只股票校验 qlib bin 文件长度是否与日历天数一致，输出缺失日期、长度异常等明细。
+### 5.12 `GET /quant/data/validate`
+- **Query**：`universe`（默认 `all`）
+- **说明**：全市场数据校验（bin 字段完整性、DB/qlib 字段与覆盖一致性、日历同步），返回结构化报告 `checks/drift`，供前端展示差异并决定是否一键补齐。
 - **响应**：
 ```json
 {
   "ok": true,
   "data": {
-    "total": 300, "ok": 298, "missing_dates": 2,
-    "anomalies": [{"code": "SH600000", "expected_days": 4872, "actual_days": 4871}],
-    "summary": "2 只股票数据缺失日期"
+    "summary": "校验完成: 5 类差异",
+    "ok": false,
+    "checks": { "fields": {"status": "warn", "message": "..."} },
+    "drift": {"needs_repair": true, "stocks_with_gaps": 2}
   }
 }
 ```
 
-### 5.13 `POST /quant/data/sync-industry`
-- **说明**：通过 akshare 拉取申万一级行业分类，写到 `data/industry_map.json`，供因子行业中性化使用。
+### 5.13 `POST /quant/data/repair`
+- **Body**：`{"universe": "all", "include_baostock": true}`
+- **说明**：一键补齐（**独立 worker 后台执行**）——前 3 步从 PG 重建 day.txt/bin/instruments 不耗 baostock 配额；仅当 `include_baostock=true` 且 PG 缺失交易日时才从 baostock 增量补拉。
 - **响应**：
 ```json
-{"ok": true, "data": {"ok": true, "industries": 31, "saved": "data/industry_map.json"}}
+{"ok": true, "data": {"message": "已触发数据补齐（universe=all，含 baostock 增量）"}}
 ```
 
 ---
@@ -854,7 +836,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 | 400 | `TASK_NOT_DONE` | 挖掘任务尚未完成 | `POST /factors/auto-import` |
 | 400 | `ALPHA158_SEEDED` | Alpha158 已导入过 | `POST /factors/seed-alpha158` |
 | 400 | `INSUFFICIENT_DATA` / `FACTOR_NOT_COMPUTABLE` / `NO_DATA` | 因子评价/分析数据不足 | 因子评价/分析相关 |
-| 409 | `SYNC_IN_PROGRESS` | 同一 universe 在 10 分钟内已发起同步 | `POST /quant/data/sync` |
+| 409 | `SYNC_IN_PROGRESS` | 已有写 bin 的同步/补齐在跑（worker 并发保护） | `POST /quant/data/sync-full`、`/eod-sync`、`/repair` 等 |
 | 422 | `VALIDATION_ERROR` | 业务参数校验失败（参数列表为空、数据源非法等） | 多个 |
 | 422 | `EXPR_INVALID` | qlib 因子表达式非法 | `POST /factors` |
 | 429 | — | 触发速率限制（登录 5/min，挖掘 3/min） | 登录/挖掘 |

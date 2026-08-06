@@ -30,6 +30,37 @@ _HAS_GPU = is_gpu_available()
 # 本地 IC 缓存（LRU，上限保护）
 _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
+# 评价并发信号量（懒初始化）：限制同时进入进程池的候选数 = cpu_workers，
+# 避免大量候选一次性涌入小进程池排队，把单候选超时（eval_timeout_seconds）耗尽。
+# 信号量在 wait_for 之外获取，排队等待不计入超时。
+_EVAL_SEM: asyncio.Semaphore | None = None
+
+
+def _get_eval_semaphore() -> asyncio.Semaphore:
+    """获取候选评价并发信号量（worker 数 = cpu_workers）。"""
+    global _EVAL_SEM
+    if _EVAL_SEM is None:
+        workers = max(1, int((settings.task or {}).get("cpu_workers", 4)))
+        _EVAL_SEM = asyncio.Semaphore(workers)
+        logger.debug("候选评价并发上限配置: %d", workers)
+    return _EVAL_SEM
+
+
+async def _evaluate_bounded(expr: str, existing_ic_series: list = None,
+                            universe: str = None, cached: bool = False) -> dict:
+    """带并发上限的候选评价。
+
+    在信号量保护下调用评价，保证同一时间在途任务数不超过进程池 worker 数，
+    进程池不会堆积长队列；超时（eval_timeout_seconds）因此只度量实际执行时间。
+    cached=True 时走带内存缓存的评价路径（迭代挖掘用）。
+    """
+    async with _get_eval_semaphore():
+        if cached:
+            return await _evaluate_safe_cached(expr, existing_ic_series=existing_ic_series,
+                                               universe=universe)
+        return await _evaluate_with_validation(expr, existing_ic_series=existing_ic_series,
+                                               universe=universe)
+
 # 可用的基础字段（与 qlib bin 实际写入一致，含估值/换手/宏观/财报）
 _AVAILABLE_FIELDS = [
     "$open", "$high", "$low", "$close", "$preclose",
@@ -172,13 +203,13 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
             return {"task_id": task_id, "generated": len(candidates),
                     "passed": 0, "best_ic": 0.0, "factor_ids": []}
 
-        # Phase 2: 并行多维验证（进程池，asyncio.gather 并行等待）
+        # Phase 2: 并行多维验证（进程池，asyncio.gather 并行等待；并发上限 = cpu_workers）
         logger.info("并行评价 %d 个候选因子（多维验证: 样本分割+统计显著性+滚动IC）", len(valid))
         # 多样性检测：加载已有因子 IC 序列（缓存，仅需一次）
         existing_ic_series = await _load_existing_ic_series()
         eval_results = await asyncio.gather(
-            *[_evaluate_with_validation(v["expression"], existing_ic_series=existing_ic_series,
-                                        universe=universe)
+            *[_evaluate_bounded(v["expression"], existing_ic_series=existing_ic_series,
+                                universe=universe)
               for v in valid],
             return_exceptions=True,
         )
@@ -453,8 +484,8 @@ async def iterative_mine_factors(
                 if existing_ic_series is None:
                     existing_ic_series = await _load_existing_ic_series()
                 eval_results = await asyncio.gather(
-                    *[_evaluate_safe_cached(v["expression"], existing_ic_series=existing_ic_series,
-                                            universe=universe)
+                    *[_evaluate_bounded(v["expression"], existing_ic_series=existing_ic_series,
+                                        universe=universe, cached=True)
                       for v in valid_exprs],
                     return_exceptions=True,
                 )

@@ -107,7 +107,9 @@ mining:
     - $equity_multiplier
     candidates_per_run: 10
     diversity_max_factors: 20
-    eval_timeout_seconds: 60
+    # 单候选多维验证超时：评价含 5 年数据加载/分段IC/滚动重验，60s 过紧（大候选集
+    # 排队时更会被耗光）。配合 llm_factor 的信号量限并发，超时只计实际执行时间。
+    eval_timeout_seconds: 300
     ic_threshold: 0.03
     significance_alpha: 0.05
   symbolic:

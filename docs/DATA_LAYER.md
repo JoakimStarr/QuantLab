@@ -102,11 +102,13 @@ summary: 数据源、qlib bin + PostgreSQL 双轨存储、同步流程、宏观�
 
 ### 3.1 全量回填（baostock）
 
+回填作为一键全同步（`sync-full`）的第一阶段执行,不再有独立端点;也可通过 `repair` 的 `include_baostock` 触发。
+
 ```
-POST /api/v1/quant/data/sync?years=N
+POST /api/v1/quant/data/sync-full?years=N
 ```
 
-- worker：`sync_worker --kind backfill`
+- worker：`sync_worker --kind full`（内部阶段 1 走 `--kind backfill`）
 - 行为：从最新交易日向旧，逐日 `query_daily_history_k_AStock` 拉全市场 → 写 qlib bin（OHLCV/amount/change/tradable）+ PG `stock_daily`（baostock 全字段）→ 重建 `instruments/*.txt`
 - PG 幂等（`ON CONFLICT DO NOTHING`），重复执行只补缺口
 - 约束：≤50k 请求/天、串行（`SyncLock` 防并发）

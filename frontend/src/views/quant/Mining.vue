@@ -119,14 +119,14 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="状态" min-width="100">
+            <el-table-column label="状态" min-width="110">
               <template #default="{ row }">
                 <span
                   class="badge"
-                  :class="[statusBadgeClass(row.status), row.status === 'running' ? 'badge--running' : '']"
+                  :class="[statusBadgeClass(row), row.status === 'running' ? 'badge--running' : '']"
                 >
                   <span v-if="row.status === 'running'" class="status-dot"></span>
-                  {{ statusLabel(row.status) }}
+                  {{ statusLabel(row) }}
                 </span>
               </template>
             </el-table-column>
@@ -197,7 +197,7 @@
               <el-option
                 v-for="f in factorList"
                 :key="f.id"
-                :label="f.name + ' (IC: ' + (f.ic != null ? Number(f.ic).toFixed(3) : '--') + ')'"
+                :label="f.name + ' (IC: ' + (f.ic != null ? Number(f.ic).toFixed(2) : '--') + ')'"
                 :value="f.id"
               />
             </el-select>
@@ -322,14 +322,30 @@ const typeBadgeClass = (t) =>
     text: 'badge--info',
     automl: 'badge--danger',
   })[t] || 'badge--muted'
-const statusLabel = (s) => ({ done: '完成', running: '运行中', failed: '失败', pending: '等待' })[s] || s
-const statusBadgeClass = (s) =>
-  ({
-    done: 'badge--success',
-    running: 'badge--warning',
-    failed: 'badge--danger',
-    pending: 'badge--muted',
-  })[s] || 'badge--muted'
+// 状态标签映射：done 但 0 个候选通过 ≠ 成功，单独展示，避免误判为运行失败
+const statusLabel = (row) => {
+  const s = typeof row === 'string' ? row : row.status
+  if (s === 'done') {
+    const p = row.candidates_passed
+    return p != null && Number(p) > 0 ? '成功' : '完成(0达标)'
+  }
+  return { done: '成功', running: '运行中', failed: '失败', pending: '等待' }[s] || s
+}
+const statusBadgeClass = (row) => {
+  const s = typeof row === 'string' ? row : row.status
+  if (s === 'done') {
+    const p = row.candidates_passed
+    return p != null && Number(p) > 0 ? 'badge--success' : 'badge--muted'
+  }
+  return (
+    {
+      done: 'badge--success',
+      running: 'badge--warning',
+      failed: 'badge--danger',
+      pending: 'badge--muted',
+    }[s] || 'badge--muted'
+  )
+}
 
 // 候选 / 通过格式化
 function fmtCand(row) {
@@ -343,7 +359,7 @@ function fmtCand(row) {
 function fmtIc(v) {
   if (v == null || v === '') return '--'
   const n = Number(v)
-  return Number.isNaN(n) ? '--' : n.toFixed(3)
+  return Number.isNaN(n) ? '--' : n.toFixed(2)
 }
 
 // 耗时格式化：started_at -> finished_at，运行中以当前时间计

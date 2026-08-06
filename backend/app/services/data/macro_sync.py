@@ -667,7 +667,7 @@ async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool
         return {"ok": True, "source": "eastmoney+akshare", "inserted": inserted,
                 "fields_written": 0, "by_indicator": summary}
 
-    init_progress("macro", "eastmoney", writes_bins=True)
+    init_progress("macro", "eastmoney", writes_bins=True, kind="macro")
     summary: dict[str, int] = {}
     try:
         all_rows, summary = await _fetch_all_macro_rows(

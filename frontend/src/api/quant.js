@@ -10,11 +10,6 @@ const blobRequest = axios.create({
 
 // === 量化数据同步与状态 ===
 
-// baostock 全量回填同步（years: 回填年数，从最新向旧）
-export function syncQuantData(params) {
-  return request.post('/quant/data/sync', params)
-}
-
 // 一键全同步（A股回填 → 指数 → 宏观 → 财报 → 外盘，独立进程顺序执行）
 export function syncFullData(years, universe = 'all') {
   return request.post('/quant/data/sync-full', null, { params: { years, universe } })
@@ -100,11 +95,6 @@ export function syncExternalMarket() {
   return request.post('/quant/data/sync-external-market')
 }
 
-// 数据完整性校验
-export function integrityCheck(universe) {
-  return request.get('/quant/data/integrity-check', { params: { universe } })
-}
-
 // 全市场数据校验（bin 字段/DB 字段/日历/覆盖 一致性）
 export function validateData(universe) {
   return request.get('/quant/data/validate', { params: { universe } })
@@ -113,11 +103,6 @@ export function validateData(universe) {
 // 一键补齐：按校验差异修复 DB 与 qlib 不一致（include_baostock 允许从 baostock 补拉）
 export function repairData(params) {
   return request.post('/quant/data/repair', params)
-}
-
-// 以数据库 stock_daily 为准重建 qlib 日历 day.txt（校验前先对齐时间轴）
-export function syncCalendar() {
-  return request.post('/quant/data/sync-calendar')
 }
 
 // === 因子相关 ===

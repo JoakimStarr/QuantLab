@@ -219,7 +219,7 @@ const hasQuantile = computed(() => quantileReturns.value.dates.length > 0)
 const hasTurnover = computed(() => turnoverCurve.value.turnover.length > 0)
 const hasDecay = computed(() => decay.value.ic.length > 0)
 // === 数值格式化 ===
-function fmtNum(val, digits = 3, suffix = '') {
+function fmtNum(val, digits = 2, suffix = '') {
   if (val === null || val === undefined || val === '') return '—'
   const n = Number(val)
   if (Number.isNaN(n)) return '—'
@@ -353,7 +353,7 @@ const icDistOption = computed(() => {
                 silent: true,
                 symbol: 'none',
                 lineStyle: { color: colors[2], type: 'dashed', width: 2 },
-                data: [{ xAxis: icMean, label: { formatter: '均值 ' + icMean.toFixed(4) } }],
+                data: [{ xAxis: icMean, label: { formatter: '均值 ' + icMean.toFixed(2) } }],
               }
             : undefined,
         },
@@ -420,7 +420,7 @@ const turnoverOption = computed(() => {
   const valid = turnover.filter((v) => !Number.isNaN(v))
   const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0
   // 假设换手率为小数，展示为百分比
-  const data = turnover.map((v) => (Number.isNaN(v) ? null : Number((v * 100).toFixed(4))))
+  const data = turnover.map((v) => (Number.isNaN(v) ? null : Number((v * 100).toFixed(2))))
   return {
     tooltip: {
       trigger: 'axis',
@@ -448,7 +448,7 @@ const turnoverOption = computed(() => {
           symbol: 'none',
           lineStyle: { color: colors[2], type: 'dashed' },
           data: [
-            { yAxis: Number((avg * 100).toFixed(4)), label: { formatter: '均值 ' + (avg * 100).toFixed(2) + '%' } },
+            { yAxis: Number((avg * 100).toFixed(2)), label: { formatter: '均值 ' + (avg * 100).toFixed(2) + '%' } },
           ],
         },
       },

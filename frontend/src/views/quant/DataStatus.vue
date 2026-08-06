@@ -51,23 +51,6 @@
       </template>
     </el-alert>
 
-    <!-- 数据覆盖率进度条 -->
-    <SectionCard v-if="currentStatus.stock_count || qlib.earliest_date" class="mb-6">
-      <div class="coverage-section">
-        <div class="coverage-header">
-          <span class="coverage-title">数据新鲜度</span>
-          <span class="coverage-value">{{ coveragePercent }}%</span>
-        </div>
-        <el-progress :percentage="coveragePercent" :color="coverageColor" :stroke-width="10" :show-text="false" />
-        <div class="coverage-detail">
-          <span>股票数: {{ currentStatus.stock_count?.toLocaleString() || 0 }}</span>
-          <span v-if="qlib.calendar_count">交易日: {{ qlib.calendar_count }}</span>
-          <span v-if="qlib.earliest_date">范围: {{ qlib.earliest_date }} ~ {{ currentStatus.latest_date }}</span>
-          <span v-if="currentStatus.latest_date">更新: {{ daysSinceUpdate }} 天前</span>
-        </div>
-      </div>
-    </SectionCard>
-
     <!-- 数据源操作 -->
     <SectionCard class="mb-6">
       <div class="source-header">
@@ -80,7 +63,7 @@
             </span>
             <span class="meta-item">
               <span class="meta-label">数据源:</span>
-              <span class="badge badge-info">baostock</span>
+              <span class="badge badge-info">baostock + akshare</span>
             </span>
             <span class="meta-item">
               <span class="meta-label">最后更新:</span>
@@ -96,7 +79,7 @@
               </div>
               <div v-if="errorSuggestion" class="error-suggestion">{{ errorSuggestion }}</div>
               <div class="error-actions">
-                <el-button size="small" type="primary" @click="retrySync" :loading="syncing" :disabled="!qlib.available"
+                <el-button size="small" type="primary" @click="startFullSync" :loading="syncing" :disabled="!qlib.available"
                   >重试同步</el-button
                 >
               </div>
@@ -110,12 +93,12 @@
             <span class="sync-years-label">同步</span>
             <el-input-number v-model="syncYears" :min="1" :max="30" size="small" style="width: 88px" />
             <span class="sync-years-label">年</span>
-            <el-button type="primary" @click="smartSync" :loading="syncing" :disabled="!qlib.available || syncing">
+            <el-button type="primary" @click="startFullSync" :loading="syncing" :disabled="!qlib.available || syncing">
               {{ syncing ? '同步中...' : '开始同步' }}
             </el-button>
           </div>
-          <el-dropdown trigger="click" @command="onSyncMaintenance" :disabled="!qlib.available">
-            <el-button :loading="anySyncing" :disabled="!qlib.available">
+          <el-dropdown trigger="click" @command="onSyncMaintenance" :disabled="!qlib.available || syncing">
+            <el-button :loading="anySyncing" :disabled="!qlib.available || syncing">
               {{ anySyncing ? '同步中...' : '同步维护' }}
               <el-icon style="margin-left: 4px"><ArrowDown /></el-icon>
             </el-button>
@@ -676,7 +659,6 @@ import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import {
   getQuantDataStatus,
-  syncQuantData,
   syncFullData,
   getQlibStatus,
   getDataPreview,
@@ -694,10 +676,6 @@ import {
   syncExternalMarket,
   syncFundamental,
 } from '@/api/quant'
-import { chartTheme } from '@/utils/chartTheme'
-import { useThemeRev } from '@/composables/useChartTheme'
-
-const themeRev = useThemeRev()
 
 const statusList = ref([])
 const route = useRoute()
@@ -754,8 +732,9 @@ const daysSinceUpdate = computed(() => {
 })
 
 const syncProgressText = computed(() => {
-  if (syncProgress.value?.data_source === 'repair') return '正在执行数据补齐（独立进程后台运行），请耐心等待...'
-  if (syncProgress.value?.data_source === 'full') return '正在执行一键全同步（A股→指数→宏观→财报→外盘），请耐心等待...'
+  const kind = syncProgress.value?.kind || syncProgress.value?.data_source
+  if (kind === 'repair') return '正在执行数据补齐（独立进程后台运行），请耐心等待...'
+  if (kind === 'full') return '正在执行一键全同步（A股→指数→宏观→财报→外盘），请耐心等待...'
   return '正在通过 baostock 逐日回填全市场数据（从最新向旧），请耐心等待...'
 })
 
@@ -769,26 +748,6 @@ const eodResultTitle = computed(() => {
 const previewColumns = computed(() => {
   if (!previewData.value.length) return []
   return Object.keys(previewData.value[0])
-})
-
-const coveragePercent = computed(() => {
-  const days = daysSinceUpdate.value
-  if (days === '--') return 0
-  if (days <= 1) return 100
-  if (days <= 3) return 90
-  if (days <= 7) return 70
-  if (days <= 14) return 50
-  if (days <= 30) return 30
-  return 10
-})
-
-const coverageColor = computed(() => {
-  void themeRev.value
-  const p = coveragePercent.value
-  if (p >= 90) return chartTheme.success()
-  if (p >= 70) return chartTheme.warning()
-  if (p >= 50) return chartTheme.danger()
-  return chartTheme.neutral()
 })
 
 function getStatusClass(status) {
@@ -904,11 +863,12 @@ async function loadAll() {
   loading.value = false
 }
 
-async function smartSync() {
+// 一键全同步（开始同步 / 错误横幅的重试同步共用）：
+// A股回填 → 指数 → 宏观 → 财报 → 外盘，独立进程顺序执行
+async function startFullSync() {
   syncing.value = true
   syncProgress.value = null
   try {
-    // 一键全同步：A股回填 → 指数 → 宏观 → 财报 → 外盘（独立进程顺序执行）
     await syncFullData(syncYears.value)
     ElMessage.success(`一键全同步已提交（A股回填 ${syncYears.value} 年 → 指数 → 宏观 → 财报 → 外盘，后台执行）`)
     startProgressPolling()
@@ -925,18 +885,24 @@ function startProgressPolling() {
   progressTimer = setInterval(pollSyncProgress, 1000)
 }
 
-const taskLabel = (src) =>
-  ({
-    repair: '数据补齐',
-    backfill: '数据回填',
-    baostock: '数据同步',
-    eod: '增量同步',
-    etf: 'ETF 同步',
-    eastmoney: '宏观同步',
-    indices: '指数同步',
-    fundamental: '财报同步',
-    full: '一键全同步',
-  })[src] || '后台任务'
+// 任务标签：优先用进度文件的 kind（任务归属），回退到 data_source（真实数据源）
+const taskLabel = (progress) => {
+  const key = progress?.kind || progress?.data_source
+  return (
+    {
+      repair: '数据补齐',
+      backfill: '数据回填',
+      baostock: '数据同步',
+      eod: '增量同步',
+      etf: 'ETF 同步',
+      macro: '宏观同步',
+      eastmoney: '宏观同步',
+      indices: '指数同步',
+      fundamental: '财报同步',
+      full: '一键全同步',
+    }[key] || '后台任务'
+  )
+}
 
 async function pollSyncProgress() {
   try {
@@ -949,22 +915,28 @@ async function pollSyncProgress() {
       }
       nullPollCount = 0
       syncing.value = false
-      const label = taskLabel(data?.data_source)
+      const taskKey = data?.kind || data?.data_source
+      const label = taskLabel(data)
       if (data?.status === 'done') {
         // 补齐/同步完成提示带上任务真实结果（如 "修复完成: bins(6ok/0failed/1skipped)..."）
         ElMessage.success(label + '完成' + (data?.message && data.message !== '正在同步...' ? `（${data.message}）` : ''))
         // 补齐完成后自动重新校验，刷新报告
-        if (data?.data_source === 'repair' && showIntegrityDialog.value) {
+        if (taskKey === 'repair' && showIntegrityDialog.value) {
           doIntegrityCheck()
         }
         // 补齐进度弹窗：成功后 2.5s 自动关闭；失败保持打开展示错误
-        if (showRepairProgressDialog.value && data?.data_source === 'repair') {
+        if (showRepairProgressDialog.value && taskKey === 'repair') {
           setTimeout(() => {
             showRepairProgressDialog.value = false
           }, 2500)
         }
       } else {
         ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
+      }
+      // EOD：复位按钮 loading，短读真实结果填对话框（结果文件在进度 done 后稍后写入）
+      if (taskKey === 'eod') {
+        eodSyncing.value = false
+        readEodResultOnce()
       }
       loadAll()
       return
@@ -979,6 +951,7 @@ async function pollSyncProgress() {
         }
         nullPollCount = 0
         syncing.value = false
+        eodSyncing.value = false
         if (showRepairProgressDialog.value) showRepairProgressDialog.value = false
       }
     } else {
@@ -993,90 +966,86 @@ async function doEodSync() {
   eodSyncing.value = true
   eodResult.value = null
   try {
-    // EOD 同步是后台任务，提交后立即返回（无实际结果），需轮询 /eod-result 获取真实结果
+    // EOD 同步是后台任务，提交后立即返回；进度由全局进度轮询跟踪，
+    // 完成时（pollSyncProgress 命中 kind=eod）再读真实结果填对话框
     await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite, eodForm.source)
     ElMessage.success('增量同步已提交，后台执行中')
-    await loadEodResult()
-    eodSyncing.value = false
-    loadAll()
+    syncing.value = true
+    syncProgress.value = null
+    startProgressPolling()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('增量EOD同步失败: ' + (e?.message || e))
     eodSyncing.value = false
   }
 }
 
-async function loadEodResult() {
-  // 后台任务完成后轮询真实结果（最多等 60s，避免进度未写入时拿到 null）
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 1000))
+// 读最近一次 EOD 真实结果（worker 写完进度文件后稍后写 eod_last_result.json，短重试）
+async function readEodResultOnce() {
+  for (let i = 0; i < 10; i++) {
     try {
       const data = await getEodResult()
       if (data && data.ok !== false && data.success !== undefined) {
         eodResult.value = data
-        return data
+        return
       }
     } catch (e) {
-      // 结果尚未写入，继续轮询
+      // 结果尚未写入，继续重试
     }
+    await new Promise((r) => setTimeout(r, 500))
   }
-  return null
 }
 
-async function doSyncIndices() {
-  indexSyncing.value = true
+// 「同步维护」通用提交：子任务 loading 态 + 提交后启动全局进度轮询
+async function submitSyncTask(subFlag, fn, successMsg, errorMsg) {
+  subFlag.value = true
   try {
-    await syncIndices()
-    ElMessage.success('指数同步已提交，后台执行中')
+    await fn()
+    ElMessage.success(successMsg)
     syncing.value = true
     syncProgress.value = null
     startProgressPolling()
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('指数同步失败: ' + (e?.message || e))
+    if (e !== 'cancel') ElMessage.error(errorMsg + ': ' + (e?.message || e))
   } finally {
-    indexSyncing.value = false
+    subFlag.value = false
   }
+}
+
+async function doSyncIndices() {
+  await submitSyncTask(
+    indexSyncing,
+    syncIndices,
+    '指数同步已提交，后台执行中',
+    '指数同步失败'
+  )
 }
 
 // 全市场 ETF 同步（source: baostock=按日全市场增量 / tencent=qfq 对齐现有时间范围）
 async function doSyncEtf(source = 'tencent') {
-  etfSyncing.value = true
-  try {
-    const years = syncYears.value || 2
-    await syncEtfData(years, source)
-    ElMessage.success(
-      source === 'tencent'
-        ? 'ETF 同步已提交（腾讯 qfq 对齐现有时间范围，后台执行中）'
-        : `ETF 同步已提交（baostock 约 ${years} 年历史，后台执行中）`
-    )
-    syncing.value = true
-    syncProgress.value = null
-    startProgressPolling()
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('ETF 同步失败: ' + (e?.message || e))
-  } finally {
-    etfSyncing.value = false
-  }
+  const years = syncYears.value || 2
+  await submitSyncTask(
+    etfSyncing,
+    () => syncEtfData(years, source),
+    source === 'tencent'
+      ? 'ETF 同步已提交（腾讯 qfq 对齐现有时间范围，后台执行中）'
+      : `ETF 同步已提交（baostock 约 ${years} 年历史，后台执行中）`,
+    'ETF 同步失败'
+  )
 }
 
 // 季频财报同步（默认只拉数据入库；进度显示在同步进度条）
 async function doSyncFundamental() {
-  fundamentalSyncing.value = true
-  try {
-    await syncFundamental(false)
-    ElMessage.success('财报同步已提交（全市场逐股拉取，约 2-3 小时）')
-    syncing.value = true
-    syncProgress.value = null
-    startProgressPolling()
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('财报同步提交失败: ' + (e?.message || e))
-  } finally {
-    fundamentalSyncing.value = false
-  }
+  await submitSyncTask(
+    fundamentalSyncing,
+    () => syncFundamental(false),
+    '财报同步已提交（全市场逐股拉取，约 2-3 小时）',
+    '财报同步提交失败'
+  )
 }
 
-// 「同步维护」下拉是否任一子任务在跑（用于按钮 loading 态）
+// 「同步维护」下拉是否任一子任务在跑（用于按钮 loading 态；全同步运行中也显示同步中）
 const anySyncing = computed(
-  () => eodSyncing.value || indexSyncing.value || etfSyncing.value || fundamentalSyncing.value
+  () => syncing.value || eodSyncing.value || indexSyncing.value || etfSyncing.value || fundamentalSyncing.value
 )
 
 // 同步维护下拉分发
@@ -1122,7 +1091,8 @@ async function doIntegrityCheck() {
     validationReport.value = data
     // 用后端返回的 checks_summary（数据对齐状态）替代硬编码文案
     integrityResult.value = { ...data, calendar_sync: data?.checks_summary || '校验只读，未改动任何数据' }
-    ElMessage.success(data?.summary || '校验完成')
+    if (data?.ok) ElMessage.success(data?.summary || '校验完成')
+    else ElMessage.warning(data?.summary || '校验完成，发现差异，可点击「一键补齐」修复')
   } catch (e) {
     integrityResult.value = { ok: false, error: String(e?.message || e) }
   } finally {
@@ -1172,7 +1142,7 @@ const repairProgressMessage = computed(() => {
   if (s?.status === 'failed') return s?.error || '任务执行出错，请查看后台日志'
   return '正在提交补齐任务，请稍候...'
 })
-const repairProgressTaskLabel = computed(() => taskLabel(syncProgress.value?.data_source) || '数据补齐')
+const repairProgressTaskLabel = computed(() => taskLabel(syncProgress.value) || '数据补齐')
 
 function doRepair() {
   const d = validationReport.value?.drift
@@ -1261,18 +1231,6 @@ const errorSuggestion = computed(() => {
   const m = err.match(/建议[:：]\s*([\s\S]+)$/)
   return m ? m[1].trim() : ''
 })
-
-async function retrySync() {
-  syncing.value = true
-  try {
-    await syncQuantData({})
-    ElMessage.success('已重新提交数据同步（后台执行）')
-    setTimeout(loadStatus, 3000)
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('重试同步提交失败')
-    syncing.value = false
-  }
-}
 
 // 页面打开时探测是否有独立 worker 正在跑（读 /sync-progress 实时文件）。
 // 即使 stock_data_status 因 web 重启被 recover_stale_sync 误标 failed，
@@ -1657,35 +1615,6 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-base);
   color: var(--text-tertiary);
   margin-right: 4px;
-}
-
-.coverage-section {
-  padding: 4px 0;
-}
-.coverage-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-.coverage-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.coverage-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--primary);
-  font-variant-numeric: tabular-nums;
-}
-.coverage-detail {
-  display: flex;
-  gap: 24px;
-  margin-top: 12px;
-  font-size: var(--font-size-base);
-  color: var(--text-secondary);
-  flex-wrap: wrap;
 }
 
 @keyframes fadeInUp {

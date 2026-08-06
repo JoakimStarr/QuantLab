@@ -9,26 +9,17 @@
       </div>
     </header>
 
-    <!-- 操作区 -->
-    <SectionCard class="mb-6">
-      <div class="macro-toolbar">
-        <div class="toolbar-left">
-          <el-select v-model="selectedField" size="small" style="width: 170px" @change="loadSeries">
-            <el-option-group v-for="g in fieldGroups" :key="g.label" :label="g.label">
-              <el-option v-for="f in g.options" :key="f.key" :value="f.key" :label="f.label" />
-            </el-option-group>
-          </el-select>
-          <el-radio-group v-model="timeRange" size="small" @change="loadSeries">
-            <el-radio-button v-for="r in timeOptions" :key="r.key" :value="r.key">{{ r.label }}</el-radio-button>
-          </el-radio-group>
-        </div>
-        <div class="toolbar-right">
-          <el-button size="small" @click="loadSeries" :loading="loading">刷新</el-button>
+    <!-- 宏观指标：最新值 + 点击指标正面下方展开走势（按需加载） -->
+    <SectionCard title="宏观指标" class="mb-6">
+      <template #extra>
+        <div class="snapshot-toolbar">
+          <el-button size="small" @click="reloadAll" :loading="loading">刷新</el-button>
           <el-button size="small" type="primary" @click="doSync" :loading="syncing">
             {{ syncing ? '同步中...' : '同步宏观数据' }}
           </el-button>
         </div>
-      </div>
+      </template>
+
       <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
       <div v-if="syncProgress" class="sync-progress">
         <div class="progress-header">
@@ -42,46 +33,73 @@
           :show-text="false"
         />
       </div>
-    </SectionCard>
 
-    <!-- 走势图 -->
-    <SectionCard :title="currentLabel" class="mb-6">
-      <div v-if="seriesLoading" class="chart-wrap">
-        <el-skeleton :rows="8" animated />
-      </div>
-      <v-chart v-else-if="seriesData.length" :option="chartOption" class="chart-macro" autoresize />
-      <el-empty v-else description="暂无数据，请先同步宏观指标" />
-    </SectionCard>
+      <template v-if="snapshotItems.length">
+        <div v-for="group in snapshotGroups" :key="group.label" class="snapshot-group">
+          <div class="snapshot-group-title">{{ group.label }}</div>
+          <div class="snapshot-grid">
+            <!-- 指标卡固定尺寸；点击后在卡片正下方展开占满整行的走势面板 -->
+            <template v-for="opt in group.options" :key="opt.key">
+              <div
+                class="snapshot-cell"
+                :class="{ 'snapshot-cell--active': isExpanded(opt) }"
+                :title="opt.fields[0].item.available_date + (opt.fields[0].item.prevDate ? '，较 ' + opt.fields[0].item.prevDate : '')"
+                @click="toggleExpand(opt, $event)"
+              >
+                <div class="snapshot-label">{{ opt.fields.map((f) => f.name).join(' / ') }}</div>
+                <div class="snapshot-value" :class="trendClass(opt.fields[0].item.change)">
+                  {{ opt.fields.map((f) => formatValue(f.item.value)).join(' / ') }}
+                  <span v-if="opt.fields[0].item.unit" class="snapshot-unit">{{ opt.fields[0].item.unit }}</span>
+                </div>
+                <div class="snapshot-trends">
+                  <span
+                    v-for="f in trendFields(opt)"
+                    :key="f.field"
+                    class="snapshot-trend"
+                    :class="trendClass(f.item.change)"
+                  >
+                    <el-icon v-if="f.item.change > 0"><CaretTop /></el-icon>
+                    <el-icon v-else><CaretBottom /></el-icon>
+                    {{ fmtChange(f.item.change) }}
+                  </span>
+                </div>
+                <div class="snapshot-date">{{ opt.fields[0].item.available_date }}</div>
+                <div class="snapshot-action">
+                  <el-icon v-if="isExpanded(opt)"><CaretTop /></el-icon>
+                  <el-icon v-else><CaretBottom /></el-icon>
+                  {{ isExpanded(opt) ? '收起走势' : '查看走势' }}
+                </div>
+              </div>
 
-    <!-- 最新值快照（按分类分组） -->
-    <SectionCard v-if="snapshotItems.length" title="最新值" class="mb-6">
-      <div v-for="group in snapshotGroups" :key="group.label" class="snapshot-group">
-        <div class="snapshot-group-title">{{ group.label }}</div>
-        <div class="snapshot-grid">
-          <div
-            v-for="it in group.items"
-            :key="it.indicator + '-' + it.field_name"
-            class="snapshot-cell"
-            :title="it.available_date + (it.prevDate ? '，较 ' + it.prevDate : '')"
-          >
-            <div class="snapshot-label">{{ it.label }}</div>
-            <div class="snapshot-value" :class="trendClass(it.change)">
-              {{ formatValue(it.value) }}<span v-if="it.unit" class="snapshot-unit">{{ it.unit }}</span>
-            </div>
-            <div v-if="hasChange(it.change)" class="snapshot-trend" :class="trendClass(it.change)">
-              <el-icon v-if="it.change > 0"><CaretTop /></el-icon>
-              <el-icon v-else><CaretBottom /></el-icon>
-              <span>{{ fmtChange(it.change) }}</span>
-            </div>
-            <div class="snapshot-date">{{ it.available_date }}</div>
+              <!-- 走势面板：悬浮于被点击卡片正下方（占满整行，不影响其它卡片布局） -->
+              <transition name="expand">
+                <div v-if="expandedCard && isExpanded(opt)" class="snapshot-chart" :style="{ top: expandedTop + 'px' }">
+                  <div class="snapshot-chart__head">
+                    <div class="snapshot-chart__title">
+                      <span class="snapshot-chart__name">{{ expandedCard.label }}</span>
+                      <span class="snapshot-chart__fields">{{ (expandedCard.seriesFields || expandedCard.fields).map((f) => f.name).join(' / ') }}</span>
+                    </div>
+                    <el-radio-group v-model="timeRange" size="small">
+                      <el-radio-button v-for="r in timeOptions" :key="r.key" :value="r.key">{{ r.label }}</el-radio-button>
+                    </el-radio-group>
+                  </div>
+                  <div v-if="seriesLoading" class="chart-wrap">
+                    <el-skeleton :rows="8" animated />
+                  </div>
+                  <v-chart v-else-if="seriesData.length" :option="chartOption" class="chart-macro" autoresize />
+                  <el-empty v-else description="暂无数据，请先同步宏观指标" :image-size="64" />
+                </div>
+              </transition>
+            </template>
           </div>
         </div>
-      </div>
+      </template>
+      <el-empty v-else description="暂无数据，请先同步宏观指标" :image-size="64" />
     </SectionCard>
 
-    <!-- 同步状态 -->
-    <SectionCard title="同步状态">
-      <el-table :data="statusItems" size="small" stripe empty-text="暂无数据">
+    <!-- 同步状态（默认折叠） -->
+    <SectionCard title="同步状态" class="mb-6" collapsible collapsed>
+      <el-table :data="statusItems" size="small" empty-text="暂无数据">
         <el-table-column prop="indicator" label="指标" width="120" align="center" />
         <el-table-column prop="field_name" label="字段" width="120" align="center" />
         <el-table-column prop="count" label="记录数" width="100" align="right" />
@@ -93,7 +111,7 @@
 
 <script setup>
 defineOptions({ name: 'QuantMacro' })
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
@@ -145,18 +163,30 @@ const fieldOptions = [
   },
   // 利率
   {
-    key: 'treasury',
+    key: 'cn_trsy',
     indicator: 'TREASURY',
-    label: '国债收益率',
+    label: '中债收益率',
     group: '利率',
     fields: [
       { field: 'trsy2y', name: '中债2Y', color: C.blue },
       { field: 'trsy5y', name: '中债5Y', color: C.green },
       { field: 'trsy10y', name: '中债10Y', color: C.gold },
       { field: 'trsy30y', name: '中债30Y', color: C.red },
-      { field: 'trsy_spread_10y2y', name: '期限利差10Y-2Y', color: C.cyan },
-      { field: 'us_trsy10y', name: '美债10Y', color: C.forest },
     ],
+  },
+  {
+    key: 'trsy_spread',
+    indicator: 'TREASURY',
+    label: '期限利差',
+    group: '利率',
+    fields: [{ field: 'trsy_spread_10y2y', name: '利差10Y-2Y', color: C.cyan }],
+  },
+  {
+    key: 'us_trsy',
+    indicator: 'TREASURY',
+    label: '美债收益率',
+    group: '利率',
+    fields: [{ field: 'us_trsy10y', name: '美债10Y', color: C.forest }],
   },
   {
     key: 'shibor',
@@ -325,7 +355,6 @@ const timeOptions = [
   { key: 'ALL', label: '全部' },
 ]
 
-const selectedField = ref('pmi')
 const timeRange = ref('5Y')
 const loading = ref(false)
 const syncing = ref(false)
@@ -337,37 +366,73 @@ const seriesData = ref([])
 const statusItems = ref([])
 const snapshotItems = ref([])
 
-const currentLabel = computed(() => {
-  const f = fieldOptions.find((x) => x.key === selectedField.value)
-  return f ? `${f.label} 走势` : '走势'
+// 当前展开的走势卡片（点击最新值卡片后按需加载走势）
+const expandedCard = ref(null)
+// 悬浮面板距离所在分组顶部的偏移（由被点击卡片计算）
+const expandedTop = ref(0)
+
+function isExpanded(card) {
+  return card != null && expandedCard.value != null && expandedCard.value.key === card.key
+}
+// 点击指标卡片：展开/收起其走势（切换时按需拉取）
+function toggleExpand(card, e) {
+  if (!card) return
+  if (expandedCard.value && expandedCard.value.key === card.key) {
+    expandedCard.value = null
+    seriesData.value = []
+  } else {
+    const el = e && e.currentTarget
+    if (el) expandedTop.value = el.offsetTop + el.offsetHeight + 12
+    expandedCard.value = card
+    seriesData.value = []
+    loadSeries(card)
+  }
+}
+
+// 时间范围切换后，若已有展开的指标则重新拉取
+watch(timeRange, () => {
+  if (expandedCard.value) loadSeries(expandedCard.value)
 })
 
-// 按 group 分组的下拉选项（景气/价格、利率、商品/汇率、货币/信贷）
-const fieldGroups = computed(() => {
-  const groups = []
-  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '货币/信贷']
-  const byGroup = {}
-  for (const f of fieldOptions) {
-    const g = f.group || '其他'
-    ;(byGroup[g] = byGroup[g] || []).push(f)
+// 刷新：重拉状态 + 快照，并重载当前展开的走势
+async function reloadAll() {
+  loading.value = true
+  try {
+    await loadStatus()
+    if (expandedCard.value) await loadSeries(expandedCard.value)
+  } finally {
+    loading.value = false
   }
-  for (const g of order) {
-    if (byGroup[g]) groups.push({ label: g, options: byGroup[g] })
-  }
-  return groups
-})
+}
 
-// 快照卡片按分组展示（与 fieldOptions.group 一致）
+// 快照卡片：按「指标 option」合并（如 PMI 的制造业/非制造业合成一张卡），再按分类分组展示
 const snapshotGroups = computed(() => {
   const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '货币/信贷']
+  const byField = new Map(snapshotItems.value.map((it) => [it.field_name, it]))
   const byGroup = {}
-  for (const it of snapshotItems.value) {
-    const g = it.group || '其他'
-    ;(byGroup[g] = byGroup[g] || []).push(it)
+  for (const opt of fieldOptions) {
+    const fields = (opt.fields ?? [])
+      .map((f) => ({ field: f.field, name: f.name, item: byField.get(f.field) }))
+      .filter((x) => x.item)
+    if (!fields.length) continue
+    const g = opt.group || '其他'
+    // 每张卡片最多展示 2 个字段，超出部分拆成独立卡片；
+    // 属于同一族（如中债所有期限）的卡片共用 seriesFields，点击任一张一起展开整族走势
+    const seriesFields = fields
+    for (let i = 0; i < fields.length; i += 2) {
+      ;(byGroup[g] = byGroup[g] || []).push({
+        key: i === 0 ? opt.key : `${opt.key}_${i / 2}`,
+        label: opt.label,
+        indicator: opt.indicator,
+        group: opt.group,
+        fields: fields.slice(i, i + 2),
+        seriesFields,
+      })
+    }
   }
-  const groups = order.filter((g) => byGroup[g]).map((g) => ({ label: g, items: byGroup[g] }))
+  const groups = order.filter((g) => byGroup[g]).map((g) => ({ label: g, options: byGroup[g] }))
   const rest = Object.keys(byGroup).filter((g) => !order.includes(g))
-  for (const g of rest) groups.push({ label: g, items: byGroup[g] })
+  for (const g of rest) groups.push({ label: g, options: byGroup[g] })
   return groups
 })
 
@@ -435,7 +500,7 @@ const chartOption = computed(() => {
     for (const p of s.points) dateSet.add(p.date)
   }
   const dates = [...dateSet].sort()
-  const opt = fieldOptions.find((x) => x.key === selectedField.value)
+  const opt = expandedCard.value
 
   // PMI 荣枯线（50）与扩张/收缩背景分区：上方淡绿、下方淡红
   const markArea =
@@ -513,14 +578,20 @@ const chartOption = computed(() => {
   }
 })
 
-async function loadSeries() {
+// 按需加载某指标走势（未指定时重载当前已展开的指标）
+async function loadSeries(opt) {
+  const target = opt || expandedCard.value
+  if (!target) {
+    seriesData.value = []
+    return
+  }
   seriesLoading.value = true
   try {
-    const opt = fieldOptions.find((x) => x.key === selectedField.value)
     const startDate = rangeStartDate()
+    const fields = target.seriesFields || target.fields
     const series = await Promise.all(
-      (opt?.fields ?? []).map(async (f) => {
-        const res = await getMacroIndicators({ indicator: opt.indicator, field: f.field })
+      fields.map(async (f) => {
+        const res = await getMacroIndicators({ indicator: target.indicator, field: f.field })
         const items = res?.items ?? []
         return {
           field: f.field,
@@ -583,6 +654,10 @@ function hasChange(v) {
   return v !== null && v !== undefined && Number(v) !== 0
 }
 
+function trendFields(opt) {
+  return opt.fields.filter((f) => hasChange(f.item.change))
+}
+
 function trendClass(v) {
   const n = Number(v)
   if (n === null || n === undefined || Number.isNaN(n) || n === 0) return ''
@@ -592,7 +667,7 @@ function trendClass(v) {
 function fmtChange(v) {
   const n = Number(v)
   if (Number.isNaN(n)) return ''
-  return `${n > 0 ? '+' : ''}${Number(n.toFixed(4))}`
+  return `${n > 0 ? '+' : ''}${Number(n.toFixed(2))}`
 }
 
 async function doSync() {
@@ -615,7 +690,7 @@ async function doSync() {
   }
 }
 
-// 轮询宏观同步进度（共享 /quant/data/sync-progress，data_source=eastmoney）
+// 轮询宏观同步进度（共享 /quant/data/sync-progress，kind=macro / data_source=eastmoney）
 function startMacroProgressPolling() {
   if (progressTimer) clearInterval(progressTimer)
   syncProgress.value = null
@@ -623,7 +698,7 @@ function startMacroProgressPolling() {
   const poll = async () => {
     try {
       const data = await getSyncProgress()
-      if (data && data.data_source === 'eastmoney') {
+      if (data && (data.kind === 'macro' || data.data_source === 'eastmoney')) {
         nullCount = 0
         syncProgress.value = data
         if (data.status === 'done' || data.status === 'failed') {
@@ -658,7 +733,6 @@ function startMacroProgressPolling() {
 }
 
 onMounted(() => {
-  loadSeries()
   loadStatus()
 })
 
@@ -693,22 +767,11 @@ onBeforeUnmount(() => {
   }
 }
 
-.macro-toolbar {
+.snapshot-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.toolbar-right {
-  display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .sync-message {
   margin-top: 12px;
@@ -743,13 +806,17 @@ onBeforeUnmount(() => {
   min-height: 200px;
 }
 .chart-macro {
-  height: 420px;
+  height: 340px;
 }
 
 .snapshot-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
+  align-items: start;
+}
+.snapshot-group {
+  position: relative;
 }
 .snapshot-group + .snapshot-group {
   margin-top: 20px;
@@ -761,21 +828,59 @@ onBeforeUnmount(() => {
   margin-bottom: 10px;
 }
 .snapshot-cell {
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg, 12px);
+  cursor: pointer;
+  user-select: none;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    border-color: var(--primary-light);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
+  }
+
+  &--active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary);
+  }
 }
 .snapshot-label {
   font-size: 12px;
   color: var(--text-tertiary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .snapshot-value {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 600;
   color: var(--text-primary);
-  margin-top: 4px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.snapshot-trends {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  min-height: 18px;
+}
+.snapshot-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+
+  .el-icon {
+    font-size: 12px;
+  }
 }
 .snapshot-unit {
   font-size: 12px;
@@ -783,27 +888,11 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   margin-left: 2px;
 }
-.snapshot-value.is-up {
-  color: var(--chart-up);
-}
-.snapshot-value.is-down {
-  color: var(--chart-down);
-}
-.snapshot-trend {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-.snapshot-trend .el-icon {
-  font-size: 13px;
-}
+.snapshot-value.is-up,
 .snapshot-trend.is-up {
   color: var(--chart-up);
 }
+.snapshot-value.is-down,
 .snapshot-trend.is-down {
   color: var(--chart-down);
 }
@@ -811,6 +900,75 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 4px;
+}
+.snapshot-action {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light);
+  font-size: 12px;
+  color: var(--text-tertiary);
+
+  .el-icon {
+    font-size: 12px;
+  }
+}
+.snapshot-cell--active .snapshot-action {
+  color: var(--primary);
+}
+
+/* 展开走势面板：悬浮于被点击卡片正下方，占满整行，不参与布局（右侧卡片完全不动） */
+.snapshot-chart {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 9999;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.16));
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  &__title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  &__name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  &__fields {
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+}
+
+/* 展开/收起过渡 */
+.expand-enter-active,
+.expand-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .mb-6 {

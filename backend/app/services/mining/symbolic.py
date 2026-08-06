@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from app.core.config import settings
 from app.core.gpu_utils import is_gpu_available, get_device
-from app.services.factor.expression import validate_expression, ExpressionValidationError
+from app.services.factor.expression import validate_expression
 from app.services.factor.library import add_factor, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
 
@@ -225,6 +225,10 @@ def _translate_postfix(flat: list, feature_names: list) -> str:
             return repr(float(item))
         raise ValueError(f"无法解析 gplearn 节点: {item!r}")
     for item in flat:
+        # numpy 标量统一转 Python 标量（gplearn 常数用 random_state.uniform 产生
+        # numpy.float64），避免 hasattr/getattr 在 numpy 标量上的边界行为
+        if isinstance(item, (np.integer, np.floating)):
+            item = item.item()
         if hasattr(item, "arity"):
             apply_stack.append([getattr(item, "name", str(item)), item.arity])
         else:
@@ -394,22 +398,29 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
         existing_ic_series = await _load_existing_ic_series()
 
         # 第一遍：沙箱校验 + 评价（收集所有候选结果，便于 BH 校正）
+        # 单个程序翻译/评价失败只跳过该程序，不终止整个任务
+        # （gplearn 程序含 numpy 标量常量等边界情况曾导致整任务崩溃）
         candidates = []
         for prog in top_progs:
             try:
                 expr = _translate_program(prog, feature_names)
                 validate_expression(expr, max_length=10000)
-            except ExpressionValidationError as e:
-                logger.info("符号回归表达式沙箱拒绝: %s", e)
+            except Exception as e:
+                logger.warning("符号回归表达式翻译/校验跳过: %s (program 元素类型=%s)",
+                               e, [type(x).__name__ for x in getattr(prog, "program", [])][:8])
                 continue
             evaluated += 1
             # 多维验证：样本分割 + 滚动 IC + 统计显著性 + 多样性
             from app.services.quant.factor_validator import evaluate_factor_with_validation
             from app.core.executor import run_cpu
-            metrics = await run_cpu(
-                evaluate_factor_with_validation, expr, valid_start, valid_end,
-                horizon=horizon, existing_ic_series=existing_ic_series,
-            )
+            try:
+                metrics = await run_cpu(
+                    evaluate_factor_with_validation, expr, valid_start, valid_end,
+                    horizon=horizon, existing_ic_series=existing_ic_series,
+                )
+            except Exception as e:
+                logger.warning("符号回归因子评价失败 expr=%s: %s", expr[:60], e)
+                continue
             candidates.append((expr, metrics))
 
         # BH 多重检验校正

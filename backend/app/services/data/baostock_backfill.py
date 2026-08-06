@@ -713,7 +713,7 @@ async def _run_backfill_downloads(
     return success_stocks
 
 
-async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
+async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "backfill") -> dict:
     """baostock 全量回填主入口（最新 → 最旧）。
 
     增量去重：是否已下载以数据库 stock_daily 为准（day.txt 由库重建、与之对齐），
@@ -725,10 +725,12 @@ async def run_baostock_backfill(years: int, universe: str = "all") -> dict:
     Args:
         years: 回填年数（0 表示仅增量补最新）
         universe: 股票池（all/csi300/csi500），用于状态记录
+        kind: 任务归属（backfill worker 默认 "backfill"；repair 补齐步骤传 "repair"，
+            避免进度标识被覆盖成 backfill）
     """
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
-    init_progress(universe, "baostock", writes_bins=True)
+    init_progress(universe, "baostock", writes_bins=True, kind=kind)
 
     try:
         await asyncio.to_thread(_ensure_login)

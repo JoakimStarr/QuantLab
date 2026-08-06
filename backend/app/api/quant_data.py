@@ -6,14 +6,13 @@
 """
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.common import ApiResponse
-from app.schemas.quant import SyncDataRequest
 
 logger = logging.getLogger(__name__)
 
@@ -171,116 +170,6 @@ async def _detect_stale_sync(db) -> int:
     return len(stale_recs) + len(marked)
 
 
-@router.post("/sync")
-async def sync_data_api(
-    req: SyncDataRequest,
-    db=Depends(get_db),
-):
-    """触发 baostock 全量回填同步（独立 worker 子进程执行，手动触发）。
-
-    years 指定回填年数（从最新向旧）；不传默认 config.quant.backfill_years（默认5）。
-
-    同步在独立子进程（app.services.data.sync_worker）中运行，与 web 进程解耦：
-    uvicorn --reload 重启不会等它，也不会误杀它。状态写 DB、进度写共享文件，
-    前端通过 /quant/data/status 与 /quant/data/sync-progress 实时查看。
-    """
-    # 回填本质是全市场拉取（query_daily_history_k_AStock 一次拉全部 A 股），
-    # universe 仅用于状态记录标签；默认 all 反映真实范围，避免误标 csi300。
-    universe = req.universe or "all"
-    years = req.years or int(settings.quant.get("backfill_years", 5))
-    data_source = "baostock"
-    # 若已有一个真实活跃的同步（内存或存活 worker），拒绝重复提交，避免并发下载：
-    # baostock 禁止并发连接，两个回填并发会互相拖垮。
-    from app.services.data.sync_progress import get_progress, writes_bins_active
-    if writes_bins_active():
-        active = get_progress()
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": f"正在同步中，请稍候（当前 universe={active.get('universe') if active else '?'}）",
-            "status": 409,
-        })
-    existing = await db.execute(
-        select(StockDataStatus).where(StockDataStatus.universe == universe)
-    )
-    rec = existing.scalar_one_or_none()
-    if rec and rec.status == "syncing":
-        # 无活跃 worker 但 DB 残留 syncing：允许重新触发，由 worker 状态覆盖
-        logger.warning("universe=%s 残留 syncing 状态（%s），允许重新同步", universe, rec.last_updated)
-
-    # 立即标记为 syncing 并更新 last_updated（手动触发，不限时）
-    if rec is None:
-        rec = StockDataStatus(universe=universe, status="syncing")
-        db.add(rec)
-    else:
-        rec.status = "syncing"
-        rec.last_error = None
-    rec.sync_trigger = "manual"
-    rec.last_updated = datetime.now()
-    await db.commit()
-
-    # 启动独立 worker 子进程（脱离 web 进程组，后台运行）
-    from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("backfill", universe, years=years)
-    return ApiResponse(ok=True, data={
-        "message": f"已触发 universe={universe} 数据同步（baostock 回填 {years} 年，独立进程后台执行）",
-        "universe": universe,
-        "data_source": data_source,
-        "years": years,
-    })
-
-
-@router.post("/sync-calendar")
-async def sync_calendar_api():
-    """以数据库 stock_daily 的交易日为准，重建 qlib 日历 day.txt。
-
-    不下载任何数据，只把 day.txt 与已落库日期对齐（数据库是权威）。
-    回填流程内部每批落库后也会自动更新日历；此端点用于手动修复
-    day.txt 与数据库不一致的情况（如历史残留、中断后的孤儿写入）。
-    """
-    from app.services.data.baostock_backfill import rebuild_calendar_from_db
-    dates = await rebuild_calendar_from_db()
-    return ApiResponse(ok=True, data={
-        "message": f"日历已与数据库同步，共 {len(dates)} 个交易日",
-        "calendar_count": len(dates),
-        "calendar_start": dates[0] if dates else None,
-        "calendar_end": dates[-1] if dates else None,
-    })
-
-
-@router.post("/fallback-sync", summary="手动触发兜底同步")
-async def fallback_sync_api(
-    days: int = Query(5, ge=1, le=60, description="回溯天数"),
-    source: str = Query("baostock", description="兜底源: baostock/akshare"),
-):
-    """手动触发兜底同步（独立 worker 后台执行）。
-
-    - source='baostock': 用 baostock 一次拉全市场（推荐，快）
-    - source='akshare': 用 akshare 逐只爬（慢，仅个股/指数）
-
-    同步在独立 worker 子进程（app.services.data.sync_worker --kind eod）中运行，
-    与 web 进程解耦，uvicorn --reload 重启不会等它。结果写 data/eod_last_result.json，
-    前端通过 /quant/data/eod-result 轮询。
-    """
-    if source not in ("baostock", "akshare"):
-        return ApiResponse(ok=False, error={
-            "code": "INVALID_SOURCE",
-            "message": f"不支持的兜底源: {source}，仅支持 baostock/akshare",
-            "status": 400,
-        })
-    from app.services.data.sync_progress import busy_message, writes_bins_active
-    if writes_bins_active():
-        return ApiResponse(ok=False, error={
-            "code": "SYNC_IN_PROGRESS",
-            "message": busy_message(),
-            "status": 409,
-        })
-    from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("eod", "all", days=days, source=source)
-    return ApiResponse(ok=True, data={
-        "message": f"兜底同步已提交（source={source}, days={days}），独立进程后台执行中",
-    })
-
-
 @router.get("/external-market")
 async def external_market_status_api():
     """外盘隔夜因子最新状态（读最近一次同步缓存，不实时拉数据）。"""
@@ -295,6 +184,13 @@ async def sync_external_market_api():
     轻量操作（4 个指数接口 + 广播写盘），直接在当前进程经 run_io_cpu 执行。
     建议在每个交易日 A股开盘后、外盘已收盘时手动触发一次。
     """
+    from app.services.data.sync_progress import busy_message, writes_bins_active
+    if writes_bins_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": busy_message(),
+            "status": 409,
+        })
     from app.services.data.external_market import sync_external_market
     try:
         result = await sync_external_market()

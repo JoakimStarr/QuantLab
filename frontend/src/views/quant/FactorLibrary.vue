@@ -26,7 +26,7 @@
         <div class="factor-overview__label">衰减因子</div>
       </div>
       <div class="factor-overview__item">
-        <div class="factor-overview__num">{{ avgIc.toFixed(3) }}</div>
+        <div class="factor-overview__num">{{ avgIc.toFixed(2) }}</div>
         <div class="factor-overview__label">平均 IC</div>
       </div>
       <div class="factor-overview__cats">
@@ -151,12 +151,12 @@
           <span
             >单调性评分：<b
               :style="{ color: quantileResult.monotonicity_score > 0 ? 'var(--success)' : 'var(--danger)' }"
-              >{{ quantileResult.monotonicity_score.toFixed(3) }}</b
+              >{{ quantileResult.monotonicity_score.toFixed(2) }}</b
             ></span
           >
           <span
             >多空净值：<b>{{
-              quantileResult.long_short_nav?.[quantileResult.long_short_nav.length - 1]?.toFixed(3)
+              quantileResult.long_short_nav?.[quantileResult.long_short_nav.length - 1]?.toFixed(2)
             }}</b></span
           >
         </div>
@@ -349,7 +349,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { useFactorStore } from '@/stores/factor'
-import { syncQuantData, listUniverses } from '@/api/quant'
+import { syncFullData, listUniverses } from '@/api/quant'
 import {
   seedAlpha158,
   seedEtfFactors,
@@ -447,9 +447,9 @@ const neutralizeTableData = computed(() => {
     const delta = b != null && a != null ? Number(a) - Number(b) : null
     return {
       metric: m.label,
-      before: b != null ? Number(b).toFixed(4) : '—',
-      after: a != null ? Number(a).toFixed(4) : '—',
-      delta: delta != null ? (delta >= 0 ? '+' : '') + delta.toFixed(4) : '—',
+      before: b != null ? Number(b).toFixed(2) : '—',
+      after: a != null ? Number(a).toFixed(2) : '—',
+      delta: delta != null ? (delta >= 0 ? '+' : '') + delta.toFixed(2) : '—',
     }
   })
 })
@@ -1180,12 +1180,12 @@ async function loadFactors() {
   }
 }
 
-// 同步数据：POST /quant/data/sync
+// 同步数据：一键全同步（A股回填 → 指数 → 宏观 → 财报 → 外盘，后台独立进程执行）
 async function syncData() {
   syncing.value = true
   try {
-    await syncQuantData({})
-    ElMessage.success('数据同步已提交，后台执行中')
+    await syncFullData(5)
+    ElMessage.success('数据同步已提交（一键全同步），后台执行中')
   } catch {
     ElMessage.error('数据同步提交失败')
   } finally {

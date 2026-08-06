@@ -24,11 +24,603 @@
         v-if="strategies.length"
         :data="strategies"
         :row-class-name="rowClassName"
+        :row-key="(row) => row.id"
+        :expand-row-keys="expandedKeys"
+        @expand-change="onExpandChange"
         @row-click="onRowClick"
         @selection-change="handleResultSelectionChange"
         size="default"
       >
         <el-table-column type="selection" width="48" />
+        <el-table-column type="expand" width="48">
+          <template #default="{ row }">
+            <div v-if="expandedId === row.id && currentResult" class="strategy-result">
+              <!-- 回测结果内容（行内展开，单开折叠） -->
+              <div class="strategy-result__head">
+                <div class="strategy-result__title">
+                  <span class="cell-name">{{ row.name }}</span>
+                  <span v-if="currentResult" class="strategy-result__period">
+                    {{ currentResult.start_date }} ~ {{ currentResult.end_date }}
+                  </span>
+                </div>
+                <el-button size="small" type="danger" plain @click.stop="deleteCurrentResult">删除该回测</el-button>
+              </div>
+              <div v-loading="resultLoading" class="result-overview">
+                <!-- 资金与收益总览（big 期末资产 + 初始对比 + 总收益 + 年化收益） -->
+                <div class="result-hero">
+                  <div class="result-hero__primary">
+                    <div class="result-hero__primary-label">期末资产</div>
+                    <div
+                      class="result-hero__primary-value"
+                      :class="currentValue >= initialCapital ? 'tone-success' : 'tone-danger'"
+                    >
+                      {{ fmtMoneyExact(currentValue) }}
+                    </div>
+                    <div class="result-hero__primary-sub">
+                      初始 {{ fmtMoneyExact(initialCapital) }}
+                      <span class="result-hero__delta" :class="profitDelta >= 0 ? 'tone-success' : 'tone-danger'">
+                        {{ profitDelta >= 0 ? '+' : '' }}{{ fmtMoneyExact(profitDelta) }}
+                      </span>
+                    </div>
+                  </div>
+                  <div class="result-hero__item" v-for="h in heroMetrics" :key="h.key">
+                    <div class="result-hero__item-label">
+                      {{ h.label }}
+                      <el-tooltip :content="h.tip" placement="top" :show-after="120">
+                        <span class="metric-hint">?</span>
+                      </el-tooltip>
+                    </div>
+                    <div class="result-hero__item-value" :class="h.tone">{{ h.value }}</div>
+                  </div>
+                </div>
+
+                <!-- 指标总览：平铺紧凑卡片，悬浮显示含义与计算公式 -->
+                <div class="metrics-section">
+                  <div class="metrics-grid">
+                    <el-tooltip
+                      v-for="m in flatMetrics"
+                      :key="m.label"
+                      :content="m.tip"
+                      placement="top"
+                      :show-after="120"
+                    >
+                      <div class="metric-card">
+                        <div class="metric-label">
+                          {{ m.label }}
+                          <span class="metric-hint">?</span>
+                        </div>
+                        <div class="metric-value" :class="m.tone">{{ m.value }}</div>
+                      </div>
+                    </el-tooltip>
+                  </div>
+                </div>
+
+                <!-- 回测参数折叠收纳 -->
+                <el-collapse v-model="paramsOpen" class="result-params-collapse">
+                  <el-collapse-item name="params">
+                    <template #title>
+                      <span class="result-params-collapse-title">回测参数与执行口径</span>
+                    </template>
+                    <div class="result-params">
+                      <div class="result-params__item">
+                        <span class="result-params__label">区间</span>
+                        <span class="result-params__value">{{ currentResult.start_date }} ~ {{ currentResult.end_date }}</span>
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">调仓频率</span>
+                        <span class="result-params__value">{{ rebalanceLabel }}</span>
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">topk/n_drop</span>
+                        <span class="result-params__value"
+                          >{{ currentResult.topk || '--' }}/{{ currentResult.n_drop || '--' }}</span
+                        >
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">基准</span>
+                        <span class="result-params__value">{{ benchmarkLabel }}</span>
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">执行口径</span>
+                        <span class="result-params__value">{{ execConfigLabel }}</span>
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">交易笔数</span>
+                        <span class="result-params__value">{{ tradeCount }}</span>
+                      </div>
+                      <div class="result-params__item">
+                        <span class="result-params__label">换手率</span>
+                        <span class="result-params__value">{{ fmtNum(currentResult.turnover, 3) }}</span>
+                      </div>
+                    </div>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+
+              <!-- 净值曲线 -->
+              <SectionCard title="净值曲线" class="result-sub-card" compact>
+                <template #extra>
+                  <div class="chart-legend">
+                    <span class="legend-item"> <span class="legend-line legend-line--solid"></span>策略净值 </span>
+                    <span class="legend-item"> <span class="legend-line legend-line--dashed"></span>基准净值 </span>
+                    <span v-if="hasTrades" class="legend-item legend-trade">
+                      <span class="legend-dot legend-dot--buy"></span>买入
+                    </span>
+                    <span v-if="hasTrades" class="legend-item legend-trade">
+                      <span class="legend-dot legend-dot--sell"></span>卖出
+                    </span>
+                  </div>
+                </template>
+                <v-chart v-if="hasChart" :option="chartOption" class="chart-body" autoresize />
+                <el-empty v-else description="暂无净值数据" :image-size="64" />
+              </SectionCard>
+
+              <!-- 交易明细 · 收益日历（合并双栏模块：左=日历筛选，右=当日概览+逐笔成交） -->
+              <SectionCard v-if="calView || hasTrades" title="交易明细" class="result-sub-card trade-workspace" compact>
+                <template #extra>
+                  <div class="chart-legend" style="gap: 16px">
+                    <span class="legend-item">
+                      <span
+                        style="
+                          display: inline-block;
+                          width: 10px;
+                          height: 10px;
+                          border-radius: 50%;
+                          background: var(--danger);
+                          margin-right: 6px;
+                        "
+                      ></span>
+                      买入 {{ tradeStats.buys }}
+                    </span>
+                    <span class="legend-item">
+                      <span
+                        style="
+                          display: inline-block;
+                          width: 10px;
+                          height: 10px;
+                          border-radius: 50%;
+                          background: var(--success);
+                          margin-right: 6px;
+                        "
+                      ></span>
+                      卖出 {{ tradeStats.sells }}
+                    </span>
+                    <span class="legend-item">总成交额 {{ fmtMoney(tradeStats.total) }}</span>
+                    <span class="legend-item">
+                      已实现盈亏
+                      <span :class="tradeStats.realized >= 0 ? 'text-success' : 'text-danger'">
+                        {{ fmtPnl(tradeStats.realized) }}
+                      </span>
+                    </span>
+                    <el-button size="small" @click="exportTrades">导出 CSV</el-button>
+                  </div>
+                </template>
+
+                <div class="trade-workspace__body">
+                  <!-- 左栏：收益日历 -->
+                  <aside v-if="calView" class="trade-workspace__cal">
+                    <el-radio-group v-model="calUnit" size="small" class="cal-unit-switch">
+                      <el-radio-button value="day">日</el-radio-button>
+                      <el-radio-button value="week">周</el-radio-button>
+                      <el-radio-button value="month">月</el-radio-button>
+                      <el-radio-button value="year">年</el-radio-button>
+                    </el-radio-group>
+
+                    <div class="cal-toolbar">
+                      <div class="cal-nav">
+                        <el-button-group>
+                          <el-button :icon="ArrowLeft" size="small" @click="calPrev" />
+                          <el-button size="small" @click="calToday">今</el-button>
+                          <el-button :icon="ArrowRight" size="small" @click="calNext" />
+                        </el-button-group>
+                      </div>
+                      <div class="cal-title">{{ calView.title }}</div>
+                    </div>
+
+                    <!-- 日：日历网格（当前月各日） -->
+                    <template v-if="calView.unit === 'day'">
+                      <div class="cal-weekdays">
+                        <span v-for="w in ['一', '二', '三', '四', '五', '六', '日']" :key="w">{{ w }}</span>
+                      </div>
+                      <div class="cal-grid">
+                        <div
+                          v-for="(cell, i) in calView.cells"
+                          :key="i"
+                          class="cal-cell"
+                          :class="[
+                            cell.blank ? 'cal-cell--blank' : 'cal-cell--day',
+                            !cell.blank && cell.ret > 0 ? 'cal-cell--up' : '',
+                            !cell.blank && cell.ret < 0 ? 'cal-cell--neg' : '',
+                            !cell.blank && cell.ret === 0 ? 'cal-cell--flat' : '',
+                            !cell.blank && cell.isWeekend ? 'cal-cell--weekend' : '',
+                            !cell.blank && cell.isToday ? 'cal-cell--today' : '',
+                            !cell.blank && calendarSelected === cell.date ? 'cal-cell--active' : '',
+                          ]"
+                          :title="cell.date + ' ' + weekdayName(cell.date) + (cell.ret != null ? '  收益 ' + fmtPct(cell.ret) : '')"
+                          @click="!cell.blank && (calendarSelected = cell.date)"
+                        >
+                          <template v-if="!cell.blank">
+                            <span class="cal-cell__num">
+                              {{ cell.day }}
+                              <i v-if="cell.isToday" class="cal-cell__todaymark"></i>
+                            </span>
+                            <span v-if="cell.ret != null" class="cal-cell__ret">{{ fmtPct(cell.ret) }}</span>
+                            <span v-if="cell.hasTrades" class="cal-cell__dot"></span>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+
+                    <!-- 周：周历（当前月包含的周，2026年第X周） -->
+                    <div v-else-if="calView.unit === 'week'" class="cal-weeks">
+                      <div
+                        v-for="w in calView.weeks"
+                        :key="w.start"
+                        class="cal-week"
+                        :class="[
+                          w.ret > 0 ? 'cal-week--up' : w.ret < 0 ? 'cal-week--neg' : '',
+                          calendarSelected === w.start ? 'cal-week--active' : '',
+                        ]"
+                        :title="`${w.label}（${w.range}）`"
+                        @click="calendarSelected = w.start"
+                      >
+                        <span class="cal-week__label">{{ w.label }}</span>
+                        <span class="cal-week__range">{{ w.range }}</span>
+                        <span class="cal-week__ret">{{ w.ret != null ? fmtPct(w.ret) : '--' }}</span>
+                        <span v-if="w.hasTrades" class="cal-week__dot"></span>
+                      </div>
+                    </div>
+
+                    <!-- 月：月历（当前年 12 个月） -->
+                    <div v-else-if="calView.unit === 'month'" class="cal-months">
+                      <div
+                        v-for="m in calView.months"
+                        :key="m.ym"
+                        class="cal-month"
+                        :class="[
+                          m.ret > 0 ? 'cal-month--up' : m.ret < 0 ? 'cal-month--neg' : '',
+                          calendarSelected === m.ym + '-01' ? 'cal-month--active' : '',
+                        ]"
+                        @click="calendarSelected = m.ym + '-01'"
+                      >
+                        <span class="cal-month__label">{{ m.label }}</span>
+                        <span class="cal-month__ret">{{ m.ret != null ? fmtPct(m.ret) : '--' }}</span>
+                        <span v-if="m.hasTrades" class="cal-month__dot"></span>
+                      </div>
+                    </div>
+
+                    <!-- 年：年历（聚焦年前后各两年） -->
+                    <div v-else class="cal-years">
+                      <div
+                        v-for="y in calView.years"
+                        :key="y.year"
+                        class="cal-year"
+                        :class="[
+                          y.ret > 0 ? 'cal-year--up' : y.ret < 0 ? 'cal-year--neg' : '',
+                          calendarSelected === y.year + '-01-01' ? 'cal-year--active' : '',
+                        ]"
+                        @click="calendarSelected = y.year + '-01-01'"
+                      >
+                        <span class="cal-year__label">{{ y.year }}</span>
+                        <span class="cal-year__ret">{{ y.ret != null ? fmtPct(y.ret) : '--' }}</span>
+                        <span v-if="y.hasTrades" class="cal-year__dot"></span>
+                      </div>
+                    </div>
+
+                    <div class="cal-legend">
+                      <span class="cal-legend__item"><i class="cal-swatch cal-swatch--up"></i>正收益</span>
+                      <span class="cal-legend__item"><i class="cal-swatch cal-swatch--neg"></i>负收益</span>
+                      <span class="cal-legend__item"><i class="cal-swatch cal-swatch--trade"></i>有交易</span>
+                    </div>
+                  </aside>
+
+                  <!-- 右栏：当日概览 + 逐笔成交明细 -->
+                  <section class="trade-workspace__list">
+                    <!-- 点击日历某天后：该周期收益 + 已实现盈亏 + 显示全部 -->
+                    <div v-if="activeCalDetail" class="trades-daybar">
+                      <div class="trades-daybar__date">
+                        <span class="trades-daybar__day">{{ calSelLabel }}</span>
+                      </div>
+                      <div class="trades-daybar__stats">
+                        <span
+                          class="trades-daybar__chip"
+                          :class="activeCalDetail.ret > 0 ? 'trades-daybar__chip--up' : activeCalDetail.ret < 0 ? 'trades-daybar__chip--neg' : ''"
+                        >
+                          {{ calUnit === 'day' ? '当日收益' : '周期收益' }} {{ fmtPct(activeCalDetail.ret) }}
+                        </span>
+                        <span
+                          class="trades-daybar__chip"
+                          :class="activeCalDetail.pnl >= 0 ? 'trades-daybar__chip--up' : 'trades-daybar__chip--neg'"
+                        >
+                          已实现盈亏 {{ fmtPnl(activeCalDetail.pnl) }}
+                        </span>
+                        <span class="trades-daybar__chip trades-daybar__chip--muted">
+                          {{ activeCalDetail.trades.length }} 笔成交
+                        </span>
+                      </div>
+                      <el-button size="small" text class="trades-daybar__clear" @click="calendarSelected = ''">
+                        显示全部
+                      </el-button>
+                    </div>
+                    <!-- 未选日期：全部交易日概览 -->
+                    <div v-else class="trades-daybar trades-daybar--all">
+                      <div class="trades-daybar__date">
+                        <span class="trades-daybar__day">全部交易日</span>
+                        <span class="trades-daybar__full">{{ tradeStats.tradeDays }} 天</span>
+                      </div>
+                      <div class="trades-daybar__stats">
+                        <span class="trades-daybar__chip trades-daybar__chip--muted">
+                          {{ tradeStats.buys }} 笔买入
+                        </span>
+                        <span class="trades-daybar__chip trades-daybar__chip--muted">
+                          {{ tradeStats.sells }} 笔卖出
+                        </span>
+                        <span class="trades-daybar__chip trades-daybar__chip--muted">
+                          总成交额 {{ fmtMoney(tradeStats.total) }}
+                        </span>
+                        <span class="trades-daybar__chip" :class="tradeStats.realized >= 0 ? 'trades-daybar__chip--up' : 'trades-daybar__chip--neg'">
+                          已实现盈亏 {{ fmtPnl(tradeStats.realized) }}
+                        </span>
+                      </div>
+                      <span class="trades-daybar__hint">点击左侧日历日期可查看当日明细</span>
+                    </div>
+
+                    <!-- 周/月视图：该周期的交易日历条，点击某日下钻到日明细 -->
+                    <div
+                      v-if="activeCalDetail && calUnit !== 'day' && activeCalDetail.days && activeCalDetail.days.length"
+                      class="period-cal"
+                    >
+                      <div
+                        v-for="d in activeCalDetail.days"
+                        :key="d.date"
+                        class="period-cal__day"
+                        :class="[
+                          d.ret === null ? 'period-cal__day--na' : d.ret > 0 ? 'period-cal__day--up' : d.ret < 0 ? 'period-cal__day--neg' : 'period-cal__day--flat',
+                          d.isWeekend ? 'period-cal__day--weekend' : '',
+                          d.date === calendarSelected ? 'period-cal__day--active' : '',
+                        ]"
+                        :title="d.date + ' ' + d.weekday + (d.ret != null ? '  收益 ' + fmtPct(d.ret) : '')"
+                        @click="drillToDay(d.date)"
+                      >
+                        <span class="period-cal__wd">{{ d.weekday.slice(1) }}</span>
+                        <span class="period-cal__date">{{ d.label }}</span>
+                        <span class="period-cal__ret">{{ d.ret != null ? fmtPct(d.ret) : '--' }}</span>
+                      </div>
+                    </div>
+
+                    <div class="trades-filters">
+                      <el-radio-group v-model="tradeView" size="small">
+                        <el-radio-button value="group">按日分组</el-radio-button>
+                        <el-radio-button value="flat">逐笔明细</el-radio-button>
+                      </el-radio-group>
+                      <el-radio-group v-model="tradeOrder" size="small">
+                        <el-radio-button value="desc">最近优先</el-radio-button>
+                        <el-radio-button value="asc">最早优先</el-radio-button>
+                      </el-radio-group>
+                      <el-radio-group v-model="tradeType" size="small">
+                        <el-radio-button value="all">全部</el-radio-button>
+                        <el-radio-button value="BUY">买入</el-radio-button>
+                        <el-radio-button value="SELL">卖出</el-radio-button>
+                      </el-radio-group>
+                      <el-input v-model="tradeCode" placeholder="搜索代码，如 SH600519" size="small" clearable style="width: 200px">
+                        <template #prefix>🔍</template>
+                      </el-input>
+                    </div>
+
+                    <div v-if="hasTrades">
+                      <!-- 按日分组视图 -->
+                      <el-table v-if="tradeView === 'group'" :data="pagedGroups" size="small" row-key="date">
+                        <el-table-column type="expand">
+                          <template #default="{ row }">
+                            <div class="trade-group-detail">
+                              <el-table :data="row.trades" size="small">
+                                <el-table-column prop="date" label="日期" min-width="120">
+                                  <template #default="{ row: sub }">
+                                    <span class="trade-datetime">
+                                      <span class="trade-datetime__date">{{ String(sub.date).slice(0, 10) }}</span>
+                                      <span v-if="String(sub.date).length > 10" class="trade-datetime__time">
+                                        {{ String(sub.date).slice(11, 19) }}
+                                      </span>
+                                    </span>
+                                  </template>
+                                </el-table-column>
+                                <el-table-column label="动作" width="74" align="center">
+                                  <template #default="{ row: sub }">
+                                    <el-tag
+                                      :type="sub.action === 'BUY' ? 'danger' : 'success'"
+                                      size="small"
+                                      effect="dark"
+                                      disable-transitions
+                                    >
+                                      {{ sub.action === 'BUY' ? '买入' : '卖出' }}
+                                    </el-tag>
+                                  </template>
+                                </el-table-column>
+                                <el-table-column label="行为" width="84" align="center">
+                                  <template #default="{ row: sub }">
+                                    <el-tag
+                                      :type="behaviorTag(sub.behavior).type"
+                                      :effect="behaviorTag(sub.behavior).effect"
+                                      size="small"
+                                      disable-transitions
+                                    >
+                                      {{ sub.behavior }}
+                                    </el-tag>
+                                  </template>
+                                </el-table-column>
+                                <el-table-column prop="code" label="代码" min-width="120">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono">{{ sub.code || '--' }}</span></template
+                                  >
+                                </el-table-column>
+                                <el-table-column label="成交价" width="90" align="right">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono cell-tnum">{{ fmtPrice(sub.price) }}</span></template
+                                  >
+                                </el-table-column>
+                                <el-table-column label="数量" min-width="100" align="right">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono cell-tnum">{{ fmtNum(sub.quantity, 0) }}</span></template
+                                  >
+                                </el-table-column>
+                                <el-table-column label="成交金额" min-width="120" align="right">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(sub.total) }}</span></template
+                                  >
+                                </el-table-column>
+                                <el-table-column label="费用" width="100" align="right">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(sub.cost) }}</span></template
+                                  >
+                                </el-table-column>
+                                <el-table-column label="持仓" min-width="100" align="right">
+                                  <template #default="{ row: sub }"
+                                    ><span class="cell-mono cell-tnum">{{ fmtNum(sub.position, 0) }}</span></template
+                                  >
+                                </el-table-column>
+                              </el-table>
+                            </div>
+                          </template>
+                        </el-table-column>
+                        <el-table-column prop="date" label="交易日期" min-width="120" />
+                        <el-table-column label="买入" width="96" align="center">
+                          <template #default="{ row }"
+                            ><span class="cell-tnum text-danger">{{ row.buys }}</span> 笔</template
+                          >
+                        </el-table-column>
+                        <el-table-column label="卖出" width="96" align="center">
+                          <template #default="{ row }"
+                            ><span class="cell-tnum text-success">{{ row.sells }}</span> 笔</template
+                          >
+                        </el-table-column>
+                        <el-table-column label="当日成交额" min-width="130" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.amount) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="当日已实现盈亏" min-width="130" align="right">
+                          <template #default="{ row }">
+                            <span :class="['cell-mono', 'cell-tnum', row.pnl >= 0 ? 'text-success' : 'text-danger']">
+                              {{ fmtPnl(row.pnl) }}
+                            </span>
+                          </template>
+                        </el-table-column>
+                      </el-table>
+
+                      <!-- 逐笔明细视图 -->
+                      <el-table v-else :data="pagedTrades" size="small">
+                        <el-table-column label="#" type="index" :index="tradeIndexStart" width="56" align="center" />
+                        <el-table-column prop="date" label="日期" min-width="120">
+                          <template #default="{ row }">
+                            <span class="trade-datetime">
+                              <span class="trade-datetime__date">{{ String(row.date).slice(0, 10) }}</span>
+                              <span v-if="String(row.date).length > 10" class="trade-datetime__time">
+                                {{ String(row.date).slice(11, 19) }}
+                              </span>
+                            </span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="动作" width="74" align="center">
+                          <template #default="{ row }">
+                            <el-tag
+                              :type="row.action === 'BUY' ? 'danger' : 'success'"
+                              size="small"
+                              effect="dark"
+                              disable-transitions
+                            >
+                              {{ row.action === 'BUY' ? '买入' : '卖出' }}
+                            </el-tag>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="行为" width="84" align="center">
+                          <template #default="{ row }">
+                            <el-tag
+                              :type="behaviorTag(row.behavior).type"
+                              :effect="behaviorTag(row.behavior).effect"
+                              size="small"
+                              disable-transitions
+                            >
+                              {{ row.behavior }}
+                            </el-tag>
+                          </template>
+                        </el-table-column>
+                        <el-table-column prop="code" label="代码" min-width="120">
+                          <template #default="{ row }"
+                            ><span class="cell-code">{{ row.code || '--' }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="成交价" width="90" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtPrice(row.price) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="数量" min-width="100" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtNum(row.quantity, 0) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="成交金额" min-width="120" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.total) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="费用" width="90" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.cost) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="成本价" min-width="90" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtPrice(row.avgCost) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="已实现盈亏" min-width="110" align="right">
+                          <template #default="{ row }">
+                            <span :class="['cell-tnum', fmtPnlNum(row.pnl) >= 0 ? 'text-success' : 'text-danger']">
+                              {{ fmtPnl(row.pnl) }}
+                            </span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="累计盈亏" min-width="110" align="right">
+                          <template #default="{ row }">
+                            <span :class="['cell-tnum', fmtPnlNum(row.cumPnl) >= 0 ? 'text-success' : 'text-danger']">{{
+                              fmtPnl(row.cumPnl)
+                            }}</span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="持仓" min-width="90" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtNum(row.position, 0) }}</span></template
+                          >
+                        </el-table-column>
+                        <el-table-column label="剩余资金" min-width="110" align="right">
+                          <template #default="{ row }"
+                            ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.cash) }}</span></template
+                          >
+                        </el-table-column>
+                      </el-table>
+
+                      <div class="trades-pagination">
+                        <el-pagination
+                          v-model:current-page="tradePage"
+                          v-model:page-size="tradePageSize"
+                          :total="tradeView === 'group' ? tradeGroupCount : filteredTrades.length"
+                          :page-sizes="[25, 50, 100, 200]"
+                          layout="total, sizes, prev, pager, next"
+                          background
+                        />
+                      </div>
+                    </div>
+
+                    <div v-else class="trades-empty">
+                      <el-empty description="暂无回测交易明细" :image-size="64" />
+                    </div>
+                  </section>
+                </div>
+              </SectionCard>
+          </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="id" label="ID" width="60" align="center">
           <template #default="{ row }"
             ><span class="cell-mono">{{ row.id }}</span></template
@@ -89,460 +681,6 @@
       <el-empty v-else description="暂无策略" />
     </SectionCard>
 
-    <!-- 回测指标 + 净值曲线（选中策略后显示） -->
-    <template v-if="selectedStrategy">
-      <!-- 指标卡组 -->
-      <SectionCard
-        ref="metricsRef"
-        :title="`最新回测结果 — ${selectedStrategy.name}`"
-        :subtitle="currentResult ? `${currentResult.start_date} ~ ${currentResult.end_date}` : ''"
-      >
-        <template #extra>
-          <el-button v-if="currentResult" size="small" type="danger" plain @click="deleteCurrentResult"
-            >删除该回测</el-button
-          >
-        </template>
-        <div v-if="currentResult" v-loading="resultLoading">
-          <!-- 核心指标突出：当前金额 + 3 个关键收益/风险指标 -->
-          <div class="result-hero">
-            <div class="result-hero__primary">
-              <div class="result-hero__primary-label">当前金额</div>
-              <div
-                class="result-hero__primary-value"
-                :class="currentValue >= initialCapital ? 'tone-success' : 'tone-danger'"
-              >
-                {{ fmtMoneyExact(currentValue) }}
-              </div>
-              <div class="result-hero__primary-sub">初始 {{ fmtMoneyExact(initialCapital) }}</div>
-            </div>
-            <div class="result-hero__item" v-for="h in heroMetrics" :key="h.key">
-              <div class="result-hero__item-label">{{ h.label }}</div>
-              <div class="result-hero__item-value" :class="h.tone">{{ h.value }}</div>
-            </div>
-          </div>
-
-          <!-- 指标分区：收益 / 风险 / 风险调整后收益 -->
-          <div class="metrics-section" v-for="sec in metricSections" :key="sec.key">
-            <div class="metrics-section__title">{{ sec.title }}</div>
-            <div class="metrics-grid" :class="'metrics-grid--' + sec.key">
-              <div class="metric-card" v-for="m in sec.items" :key="m.label">
-                <div class="metric-label">{{ m.label }}</div>
-                <div class="metric-value" :class="m.tone">{{ m.value }}</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 回测参数折叠收纳 -->
-          <el-collapse v-model="paramsOpen" class="result-params-collapse">
-            <el-collapse-item name="params">
-              <template #title>
-                <span class="result-params-collapse-title">回测参数与执行口径</span>
-              </template>
-              <div class="result-params">
-                <div class="result-params__item">
-                  <span class="result-params__label">区间</span>
-                  <span class="result-params__value">{{ currentResult.start_date }} ~ {{ currentResult.end_date }}</span>
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">调仓频率</span>
-                  <span class="result-params__value">{{ rebalanceLabel }}</span>
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">topk/n_drop</span>
-                  <span class="result-params__value"
-                    >{{ currentResult.topk || '--' }}/{{ currentResult.n_drop || '--' }}</span
-                  >
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">基准</span>
-                  <span class="result-params__value">{{ benchmarkLabel }}</span>
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">执行口径</span>
-                  <span class="result-params__value">{{ execConfigLabel }}</span>
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">交易笔数</span>
-                  <span class="result-params__value">{{ tradeCount }}</span>
-                </div>
-                <div class="result-params__item">
-                  <span class="result-params__label">换手率</span>
-                  <span class="result-params__value">{{ fmtNum(currentResult.turnover, 3) }}</span>
-                </div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-      </SectionCard>
-
-      <!-- 净值曲线 -->
-      <SectionCard title="净值曲线">
-        <template #extra>
-          <div class="chart-legend">
-            <span class="legend-item"> <span class="legend-line legend-line--solid"></span>策略净值 </span>
-            <span class="legend-item"> <span class="legend-line legend-line--dashed"></span>基准净值 </span>
-            <span v-if="hasTrades" class="legend-item legend-trade">
-              <span class="legend-dot legend-dot--buy"></span>买入
-            </span>
-            <span v-if="hasTrades" class="legend-item legend-trade">
-              <span class="legend-dot legend-dot--sell"></span>卖出
-            </span>
-          </div>
-        </template>
-        <v-chart v-if="hasChart" :option="chartOption" class="chart-body" autoresize />
-        <el-empty v-else description="暂无净值数据" :image-size="64" />
-      </SectionCard>
-
-      <!-- 收益日历：按日期查看当日收益与买卖情况 -->
-      <SectionCard v-if="calendarMonths.length" title="收益日历">
-        <template #extra>
-          <span class="calendar-hint">点击日期查看当日收益与买卖情况</span>
-        </template>
-        <div class="calendar-legend">
-          <span class="calendar-legend__item"><i class="square square--up"></i>当日收益为正</span>
-          <span class="calendar-legend__item"><i class="square square--negative"></i>当日收益为负</span>
-          <span class="calendar-legend__item"><i class="square square--flat"></i>无收益</span>
-          <span class="calendar-legend__item"><i class="square square--trade"></i>当日有交易</span>
-        </div>
-        <div class="calendar-grid">
-          <div class="calendar-month" v-for="m in calendarMonths" :key="m.ym">
-            <div class="calendar-month__title">{{ m.ym }}</div>
-            <div class="calendar-month__weekdays">
-              <span v-for="w in ['一', '二', '三', '四', '五', '六', '日']" :key="w">{{ w }}</span>
-            </div>
-            <div class="calendar-month__cells">
-              <div
-                v-for="(cell, i) in m.cells"
-                :key="i"
-                class="calendar-day"
-                :class="[
-                  cell.blank ? 'calendar-day--blank' : 'calendar-day--fill',
-                  !cell.blank && cell.ret > 0 ? 'calendar-day--up' : '',
-                  !cell.blank && cell.ret < 0 ? 'calendar-day--negative' : '',
-                  !cell.blank && cell.ret === 0 ? 'calendar-day--flat' : '',
-                  !cell.blank && activeCalDate === cell.date ? 'calendar-day--active' : '',
-                ]"
-                :title="cell.date + (cell.ret != null ? ' ' + fmtPct(cell.ret) : '')"
-                @click="!cell.blank && (calendarSelected = cell.date)"
-              >
-                <span class="calendar-day__num" v-if="!cell.blank">{{ cell.day }}</span>
-                <span v-if="!cell.blank && (cell.ret > 0.0005 || cell.ret < -0.0005)" class="calendar-day__ret">
-                  {{ fmtPct(cell.ret) }}
-                </span>
-                <span v-if="!cell.blank && cell.hasTrades" class="calendar-day__dot"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 选中日期的收益与买卖明细 -->
-        <div v-if="activeCalDetail" class="calendar-detail">
-          <div class="calendar-detail__head">
-            <span class="calendar-detail__date">{{ activeCalDate }}</span>
-            <span class="calendar-detail__ret" :class="activeCalDetail.ret > 0 ? 'tone-success' : activeCalDetail.ret < 0 ? 'tone-danger' : ''">
-              当日收益 {{ fmtPct(activeCalDetail.ret) }}
-            </span>
-            <span class="calendar-detail__pnl" :class="activeCalDetail.pnl >= 0 ? 'tone-success' : 'tone-danger'">
-              当日已实现盈亏 {{ fmtPnl(activeCalDetail.pnl) }}
-            </span>
-            <el-button size="small" @click="calendarSelected = ''">收起</el-button>
-          </div>
-          <div v-if="activeCalDetail.trades.length" class="calendar-detail__trades">
-            <el-table :data="activeCalDetail.trades" size="small" stripe>
-              <el-table-column prop="time" label="时间" width="110">
-                <template #default="{ row }">
-                  <span class="calendar-detail__time">{{ String(row.date).length > 10 ? String(row.date).slice(11) : '--' }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="code" label="代码" min-width="110" />
-              <el-table-column prop="action" label="方向" width="70">
-                <template #default="{ row }">
-                  <el-tag :type="row.action === 'BUY' ? 'danger' : 'success'" effect="light" size="small">
-                    {{ row.action === 'BUY' ? '买入' : '卖出' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="behavior" label="行为" width="70" />
-              <el-table-column prop="quantity" label="数量" width="90" align="right" />
-              <el-table-column prop="price" label="成交价" width="100" align="right">
-                <template #default="{ row }">{{ fmtPrice(row.price) }}</template>
-              </el-table-column>
-              <el-table-column prop="pnl" label="盈亏" width="110" align="right">
-                <template #default="{ row }">
-                  <span :class="row.pnl > 0 ? 'tone-success' : row.pnl < 0 ? 'tone-danger' : ''">
-                    {{ row.pnl ? fmtPnl(row.pnl) : '--' }}
-                  </span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-          <el-empty v-else description="当日无成交" :image-size="48" />
-        </div>
-      </SectionCard>
-
-      <!-- 回测动作与行为：逐笔成交明细 -->
-      <SectionCard v-if="hasTrades" title="交易明细（动作与行为）">
-        <template #extra>
-          <div class="chart-legend" style="gap: 16px">
-            <span class="legend-item">
-              <span
-                style="
-                  display: inline-block;
-                  width: 10px;
-                  height: 10px;
-                  border-radius: 50%;
-                  background: var(--danger);
-                  margin-right: 6px;
-                "
-              ></span>
-              买入 {{ tradeStats.buys }}
-            </span>
-            <span class="legend-item">
-              <span
-                style="
-                  display: inline-block;
-                  width: 10px;
-                  height: 10px;
-                  border-radius: 50%;
-                  background: var(--success);
-                  margin-right: 6px;
-                "
-              ></span>
-              卖出 {{ tradeStats.sells }}
-            </span>
-            <span class="legend-item">总成交额 {{ fmtMoney(tradeStats.total) }}</span>
-            <span class="legend-item">
-              已实现盈亏
-              <span :class="tradeStats.realized >= 0 ? 'text-success' : 'text-danger'">
-                {{ fmtPnl(tradeStats.realized) }}
-              </span>
-            </span>
-            <el-button size="small" @click="exportTrades">导出 CSV</el-button>
-          </div>
-        </template>
-
-        <div class="trades-filters">
-          <el-radio-group v-model="tradeView" size="small">
-            <el-radio-button value="group">按日分组</el-radio-button>
-            <el-radio-button value="flat">逐笔明细</el-radio-button>
-          </el-radio-group>
-          <el-radio-group v-model="tradeOrder" size="small">
-            <el-radio-button value="desc">最近优先</el-radio-button>
-            <el-radio-button value="asc">最早优先</el-radio-button>
-          </el-radio-group>
-          <el-radio-group v-model="tradeType" size="small">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="BUY">买入</el-radio-button>
-            <el-radio-button value="SELL">卖出</el-radio-button>
-          </el-radio-group>
-          <el-input v-model="tradeCode" placeholder="搜索代码，如 SH600519" size="small" clearable style="width: 200px">
-            <template #prefix>🔍</template>
-          </el-input>
-        </div>
-
-        <!-- 按日分组视图：每个调仓日一行，展开看当日逐笔 -->
-        <el-table v-if="tradeView === 'group'" :data="pagedGroups" size="small" stripe row-key="date">
-          <el-table-column type="expand">
-            <template #default="{ row }">
-              <div class="trade-group-detail">
-                <el-table :data="row.trades" size="small" stripe>
-                  <el-table-column prop="date" label="日期" min-width="120">
-                    <template #default="{ row: sub }">
-                      <span class="trade-datetime">
-                        <span class="trade-datetime__date">{{ String(sub.date).slice(0, 10) }}</span>
-                        <span v-if="String(sub.date).length > 10" class="trade-datetime__time">
-                          {{ String(sub.date).slice(11, 19) }}
-                        </span>
-                      </span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="动作" width="74" align="center">
-                    <template #default="{ row: sub }">
-                      <el-tag
-                        :type="sub.action === 'BUY' ? 'danger' : 'success'"
-                        size="small"
-                        effect="dark"
-                        disable-transitions
-                      >
-                        {{ sub.action === 'BUY' ? '买入' : '卖出' }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="行为" width="84" align="center">
-                    <template #default="{ row: sub }">
-                      <el-tag
-                        :type="behaviorTag(sub.behavior).type"
-                        :effect="behaviorTag(sub.behavior).effect"
-                        size="small"
-                        disable-transitions
-                      >
-                        {{ sub.behavior }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="code" label="代码" min-width="120">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono">{{ sub.code || '--' }}</span></template
-                    >
-                  </el-table-column>
-                  <el-table-column label="成交价" width="90" align="right">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono cell-tnum">{{ Number(sub.price).toFixed(3) }}</span></template
-                    >
-                  </el-table-column>
-                  <el-table-column label="数量" min-width="100" align="right">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono cell-tnum">{{ fmtNum(sub.quantity, 0) }}</span></template
-                    >
-                  </el-table-column>
-                  <el-table-column label="成交金额" min-width="120" align="right">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(sub.total) }}</span></template
-                    >
-                  </el-table-column>
-                  <el-table-column label="费用" width="100" align="right">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(sub.cost) }}</span></template
-                    >
-                  </el-table-column>
-                  <el-table-column label="持仓" min-width="100" align="right">
-                    <template #default="{ row: sub }"
-                      ><span class="cell-mono cell-tnum">{{ fmtNum(sub.position, 0) }}</span></template
-                    >
-                  </el-table-column>
-                </el-table>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="date" label="交易日期" min-width="120" />
-          <el-table-column label="买入" width="96" align="center">
-            <template #default="{ row }"
-              ><span class="cell-tnum text-danger">{{ row.buys }}</span> 笔</template
-            >
-          </el-table-column>
-          <el-table-column label="卖出" width="96" align="center">
-            <template #default="{ row }"
-              ><span class="cell-tnum text-success">{{ row.sells }}</span> 笔</template
-            >
-          </el-table-column>
-          <el-table-column label="当日成交额" min-width="130" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.amount) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="当日已实现盈亏" min-width="130" align="right">
-            <template #default="{ row }">
-              <span :class="['cell-mono', 'cell-tnum', row.pnl >= 0 ? 'text-success' : 'text-danger']">
-                {{ fmtPnl(row.pnl) }}
-              </span>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <!-- 逐笔明细视图 -->
-        <el-table v-else :data="pagedTrades" size="small" stripe>
-          <el-table-column label="#" type="index" :index="tradeIndexStart" width="56" align="center" />
-          <el-table-column prop="date" label="日期" min-width="120">
-            <template #default="{ row }">
-              <span class="trade-datetime">
-                <span class="trade-datetime__date">{{ String(row.date).slice(0, 10) }}</span>
-                <span v-if="String(row.date).length > 10" class="trade-datetime__time">
-                  {{ String(row.date).slice(11, 19) }}
-                </span>
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column label="动作" width="74" align="center">
-            <template #default="{ row }">
-              <el-tag
-                :type="row.action === 'BUY' ? 'danger' : 'success'"
-                size="small"
-                effect="dark"
-                disable-transitions
-              >
-                {{ row.action === 'BUY' ? '买入' : '卖出' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="行为" width="84" align="center">
-            <template #default="{ row }">
-              <el-tag
-                :type="behaviorTag(row.behavior).type"
-                :effect="behaviorTag(row.behavior).effect"
-                size="small"
-                disable-transitions
-              >
-                {{ row.behavior }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="code" label="代码" min-width="120">
-            <template #default="{ row }"
-              ><span class="cell-mono">{{ row.code || '--' }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="成交价" width="90" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ Number(row.price).toFixed(3) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="数量" min-width="100" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtNum(row.quantity, 0) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="成交金额" min-width="120" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.total) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="费用" width="90" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.cost) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="成本价" min-width="90" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtPrice(row.avgCost) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="已实现盈亏" min-width="110" align="right">
-            <template #default="{ row }">
-              <span :class="['cell-tnum', fmtPnlNum(row.pnl) >= 0 ? 'text-success' : 'text-danger']">
-                {{ fmtPnl(row.pnl) }}
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column label="累计盈亏" min-width="110" align="right">
-            <template #default="{ row }">
-              <span :class="['cell-tnum', fmtPnlNum(row.cumPnl) >= 0 ? 'text-success' : 'text-danger']">{{
-                fmtPnl(row.cumPnl)
-              }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="持仓" min-width="90" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtNum(row.position, 0) }}</span></template
-            >
-          </el-table-column>
-          <el-table-column label="剩余资金" min-width="110" align="right">
-            <template #default="{ row }"
-              ><span class="cell-mono cell-tnum">{{ fmtMoneyExact(row.cash) }}</span></template
-            >
-          </el-table-column>
-        </el-table>
-        <div class="trades-pagination">
-          <el-pagination
-            v-model:current-page="tradePage"
-            v-model:page-size="tradePageSize"
-            :total="tradeView === 'group' ? tradeGroupCount : filteredTrades.length"
-            :page-sizes="[50, 100, 200]"
-            layout="total, sizes, prev, pager, next"
-            background
-          />
-        </div>
-      </SectionCard>
-    </template>
 
     <!-- 新建策略对话框 -->
     <el-dialog v-model="showCreate" title="新建策略" width="560px">
@@ -888,7 +1026,7 @@ defineOptions({ name: 'QuantStrategy' })
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Plus, Refresh, ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
@@ -918,6 +1056,9 @@ const factorStore = useFactorStore()
 const strategies = ref([])
 const selectedStrategy = ref(null)
 const listLoading = ref(false)
+// 行内展开（单开折叠）：expandedKeys 仅保留一个 id，点其它行自动收起
+const expandedKeys = ref([])
+const expandedId = ref(null)
 
 // === AI 策略 ===
 const aiGenerating = ref(false)
@@ -992,7 +1133,6 @@ async function compareResults() {
 // === 回测结果 ===
 const currentResult = ref(null)
 const resultLoading = ref(false)
-const metricsRef = ref(null)
 
 // === 新建策略对话框 ===
 const showCreate = ref(false)
@@ -1024,7 +1164,7 @@ function fmtPct(v, digits = 2) {
   if (v == null || v === '') return '--'
   return (v * 100).toFixed(digits) + '%'
 }
-function fmtNum(v, digits = 3) {
+function fmtNum(v, digits = 2) {
   if (v == null || v === '') return '--'
   return Number(v).toFixed(digits)
 }
@@ -1033,7 +1173,7 @@ function fmtNum(v, digits = 3) {
 const tradeType = ref('all')
 const tradeCode = ref('')
 const tradePage = ref(1)
-const tradePageSize = ref(50)
+const tradePageSize = ref(25)
 const tradeView = ref('group') // 'group' 按日折叠 / 'flat' 逐笔
 const tradeOrder = ref('desc') // 'desc' 最近优先 / 'asc' 最早优先
 const paramsOpen = ref([]) // 回测参数折叠区，默认收起
@@ -1049,7 +1189,8 @@ const tradeStats = computed(() => {
   const sells = t.filter((x) => x.action === 'SELL').length
   const total = t.reduce((s, x) => s + (Number(x.total) || 0), 0)
   const realized = enrichedTrades.value.length ? enrichedTrades.value[enrichedTrades.value.length - 1].cumPnl : 0
-  return { buys, sells, total, realized }
+  const tradeDays = new Set(t.map((x) => String(x.date || '').slice(0, 10)).filter(Boolean)).size
+  return { buys, sells, total, realized, tradeDays }
 })
 
 // 逐笔补充"行为"（建仓/加仓/减仓/清仓）与累计持仓。
@@ -1123,6 +1264,10 @@ const behaviorTag = (behavior) => {
 
 const filteredTrades = computed(() => {
   let list = enrichedTrades.value
+  if (calendarSelected.value) {
+    const pk = periodKeyOf(calendarSelected.value)
+    list = list.filter((x) => periodKeyOf(String(x.date || '')) === pk)
+  }
   if (tradeType.value !== 'all') {
     list = list.filter((x) => x.action === tradeType.value)
   }
@@ -1232,7 +1377,7 @@ const lastRetDate = computed(() => {
   return keys.length ? keys[keys.length - 1] : ''
 })
 
-const calUnit = ref('month') // 'day' | 'week' | 'month' | 'year'
+const calUnit = ref('day') // 'day' | 'week' | 'month' | 'year'
 const calOffset = ref(0) // 在当前视图单位下相对锚点的偏移（上一/下一）
 const calAnchor = ref('') // 锚点基准日期 YYYY-MM-DD
 
@@ -1274,6 +1419,23 @@ function calToday() {
   calOffset.value = 0
 }
 
+// 今天 / 星期几
+function todayKey() {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+function weekdayName(dateStr) {
+  if (!dateStr) return ''
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return '周' + '日一二三四五六'[new Date(y, m - 1, d).getDay()]
+}
+function isWeekend(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dow = new Date(y, m - 1, d).getDay()
+  return dow === 0 || dow === 6
+}
+
 // 构造单个日单元格
 function calDayCell(date) {
   const ret = retByDate.value.get(date)
@@ -1282,83 +1444,203 @@ function calDayCell(date) {
     day: Number(date.slice(8, 10)),
     ret: ret == null ? null : ret,
     hasTrades: calTradeDates.value.has(date),
+    isToday: date === todayKey(),
+    isWeekend: isWeekend(date),
   }
 }
 
-// 当前视图：月/周/日 → cells 网格；年 → months 卡片
+// 当前视图：日→日历月网格；周→周历列表；月→月历；年→年历列表
 const calView = computed(() => {
   const focus = calFocus.value
   if (!focus) return null
   const unit = calUnit.value
-  const [fy, fm, fd] = focus.split('-').map(Number)
+  const [fy, fm] = focus.split('-').map(Number)
   const pad = (n) => String(n).padStart(2, '0')
   const toKey = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`
 
-  if (unit === 'month') {
+  if (unit === 'day') {
+    // 日历：当前月各日
     const total = new Date(fy, fm, 0).getDate()
     const firstDow = (new Date(fy, fm - 1, 1).getDay() + 6) % 7 // 周一=0
     const cells = []
     for (let i = 0; i < firstDow; i++) cells.push({ blank: true })
     for (let day = 1; day <= total; day++) cells.push(calDayCell(toKey(fy, fm, day)))
-    return { unit, title: `${fy}年${fm}月`, cells, weekdays: true }
+    return { unit, title: `${fy}年${fm}月`, cells }
   }
 
   if (unit === 'week') {
-    const dow = (new Date(fy, fm - 1, fd).getDay() + 6) % 7
-    const monday = new Date(fy, fm - 1, fd - dow)
-    const cells = []
-    for (let i = 0; i < 7; i++) {
-      const dt = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)
-      cells.push(calDayCell(toKey(dt.getFullYear(), dt.getMonth() + 1, dt.getDate())))
+    // 周历：当前月包含的周（2026年第X周）
+    const total = new Date(fy, fm, 0).getDate()
+    const seen = new Map()
+    for (let day = 1; day <= total; day++) {
+      const monday = periodKeyOf(toKey(fy, fm, day), 'week')
+      if (seen.has(monday)) continue
+      const [yy, mm, dd] = monday.split('-').map(Number)
+      const end = new Date(yy, mm - 1, dd + 6)
+      const endKey = toKey(end.getFullYear(), end.getMonth() + 1, end.getDate())
+      const { year, week } = isoWeekOf(monday)
+      seen.set(monday, {
+        start: monday,
+        end: endKey,
+        label: `${year}年第${week}周`,
+        range: `${mm}/${dd} ~ ${end.getMonth() + 1}/${end.getDate()}`,
+        ret: periodRet(monday, 'week'),
+        hasTrades: periodHasTrades(monday, 'week'),
+      })
     }
-    const first = cells[0].date
-    const last = cells[6].date
-    return { unit, title: `${first} ~ ${last}`, cells, weekdays: true }
+    return { unit, title: `${fy}年${fm}月`, weeks: [...seen.values()] }
   }
 
-  if (unit === 'day') {
-    return { unit, title: focus, cells: [calDayCell(focus)], weekdays: false }
+  if (unit === 'month') {
+    // 月历：当前年 12 个月
+    const months = []
+    for (let m = 1; m <= 12; m++) {
+      const ym = `${fy}-${pad(m)}`
+      months.push({
+        ym,
+        label: `${m}月`,
+        ret: periodRet(`${ym}-01`, 'month'),
+        hasTrades: periodHasTrades(`${ym}-01`, 'month'),
+      })
+    }
+    return { unit, title: `${fy}年`, months }
   }
 
-  // year：12 个月格，月收益 = (1+r1)(1+r2)…-1
-  const months = []
-  for (let m = 1; m <= 12; m++) {
-    const ym = `${fy}-${pad(m)}`
-    const keys = [...retByDate.value.keys()].filter((k) => k.startsWith(ym)).sort()
-    let ret = null
-    if (keys.length) {
-      let prod = 1
-      for (const k of keys) prod *= 1 + retByDate.value.get(k)
-      ret = prod - 1
-    }
-    months.push({ ym, label: `${m}月`, ret, hasTrades: [...calTradeDates.value].some((k) => k.startsWith(ym)) })
+  // 年历：聚焦年前后各两年
+  const years = []
+  for (let y = fy - 2; y <= fy + 2; y++) {
+    years.push({
+      year: y,
+      label: `${y}`,
+      ret: periodRet(`${y}-01-01`, 'year'),
+      hasTrades: periodHasTrades(`${y}-01-01`, 'year'),
+    })
   }
-  return { unit, title: `${fy}年`, months, weekdays: false }
+  return { unit, title: '年份', years }
 })
 
-// 年视图点击月份 → 跳到该月
-function gotoMonth(ym) {
-  calUnit.value = 'month'
-  calAnchor.value = `${ym}-01`
-  calOffset.value = 0
+// ISO 周：返回该日期所在周「所属年份 + 周序号」（周一起始）
+function isoWeekOf(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const day = (date.getDay() + 6) % 7 // 周一=0
+  const thursday = new Date(date)
+  thursday.setDate(date.getDate() - day + 3)
+  const firstThursday = new Date(thursday.getFullYear(), 0, 4)
+  const firstMonday = new Date(firstThursday.getFullYear(), 0, firstThursday.getDate() - ((firstThursday.getDay() + 6) % 7))
+  const week = 1 + Math.round((thursday - firstMonday) / (7 * 86400000))
+  return { year: thursday.getFullYear(), week }
+}
+
+// 某周期内交易日收益键列表 / 复利收益 / 是否有成交
+function periodKeys(startDate, unit) {
+  const pk = periodKeyOf(startDate, unit)
+  return [...retByDate.value.keys()].filter((k) => periodKeyOf(k, unit) === pk)
+}
+function periodRet(startDate, unit) {
+  const keys = periodKeys(startDate, unit).sort()
+  if (!keys.length) return null
+  let prod = 1
+  for (const k of keys) prod *= 1 + (retByDate.value.get(k) ?? 0)
+  return prod - 1
+}
+function periodHasTrades(startDate, unit) {
+  const pk = periodKeyOf(startDate, unit)
+  return [...calTradeDates.value].some((k) => periodKeyOf(k, unit) === pk)
 }
 
 const calendarSelected = ref('')
 const activeCalDate = computed(() => calendarSelected.value || calFocus.value || '')
 
-// 选中日期的详情：当日收益 + 当日全部成交
+// 按当前单位（日/周/月/年）把日期归入所属周期
+function periodKeyOf(dateStr, unit = calUnit.value) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  if (unit === 'year') return `${y}`
+  if (unit === 'month') return `${y}-${String(m).padStart(2, '0')}`
+  if (unit === 'week') {
+    const dow = (new Date(y, m - 1, d).getDay() + 6) % 7 // 周一=0
+    const monday = new Date(y, m - 1, d - dow)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`
+  }
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+// 当前选中周期标签（按单位展示）
+const calSelLabel = computed(() => {
+  const d = activeCalDate.value
+  if (!d) return ''
+  const [y, m] = d.split('-').map(Number)
+  const u = calUnit.value
+  if (u === 'day') return `${weekdayName(d)} ${d}`
+  if (u === 'week') {
+    const { year, week } = isoWeekOf(d)
+    return `${year}年第${week}周`
+  }
+  if (u === 'month') return `${y}年${m}月`
+  return `${y}年`
+})
+
+// 当前选中周期：聚合收益（日/周/月/年）+ 该周期内全部成交 + 交易日历条
 const activeCalDetail = computed(() => {
   const d = activeCalDate.value
   if (!d) return null
-  const ret = retByDate.value.get(d) ?? 0
-  const trades = enrichedTrades.value.filter((x) => String(x.date || '').slice(0, 10) === d)
+  const pk = periodKeyOf(d)
+  const unit = calUnit.value
+  const isDay = unit === 'day'
+  const dayKeys = [...retByDate.value.keys()].filter((k) => {
+    if (isDay) return k === pk
+    return periodKeyOf(k) === pk
+  })
+  let ret = 0
+  if (dayKeys.length) {
+    let prod = 1
+    for (const k of dayKeys) prod *= 1 + (retByDate.value.get(k) ?? 0)
+    ret = prod - 1
+  }
+  const trades = enrichedTrades.value.filter((x) => periodKeyOf(String(x.date || '')) === pk)
   const pnl = trades.reduce((s, x) => s + (Number(x.pnl) || 0), 0)
-  return { ret, pnl, trades }
+
+  // 交易日历条：周→该周 7 天；月→该月交易日
+  let days = null
+  if (unit === 'week') {
+    const [yy, mm, dd] = pk.split('-').map(Number)
+    days = []
+    for (let i = 0; i < 7; i++) {
+      const dt = new Date(yy, mm - 1, dd + i)
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      days.push({
+        date: key,
+        weekday: weekdayName(key),
+        label: `${dt.getMonth() + 1}/${dt.getDate()}`,
+        ret: retByDate.value.get(key) ?? null,
+        hasTrades: calTradeDates.value.has(key),
+        isWeekend: isWeekend(key),
+      })
+    }
+  } else if (unit === 'month') {
+    days = dayKeys.sort().map((k) => ({
+      date: k,
+      weekday: weekdayName(k),
+      label: `${k.slice(8, 10)}日`,
+      ret: retByDate.value.get(k) ?? null,
+      hasTrades: calTradeDates.value.has(k),
+      isWeekend: isWeekend(k),
+    }))
+  }
+
+  return { ret, pnl, trades, key: pk, unit, dayCount: dayKeys.length, days }
 })
+
+// 周期日历条点击某日 → 下钻到日视图明细
+function drillToDay(date) {
+  calUnit.value = 'day'
+  calendarSelected.value = date
+}
 
 // 分页展示：一次最多渲染 50/100/200 行，避免 2000 笔全量进 DOM 造成卡顿。
 // 过滤器/视图/排序变化时重置到第 1 页。
-watch([tradeType, tradeCode, tradeView, tradeOrder], () => {
+watch([tradeType, tradeCode, tradeView, tradeOrder, calendarSelected], () => {
   tradePage.value = 1
 })
 
@@ -1398,7 +1680,7 @@ function fmtPnl(v) {
 // 成本价/成交价展示
 function fmtPrice(v) {
   if (v == null || isNaN(v)) return '--'
-  return Number(v).toFixed(3)
+  return Number(v).toFixed(2)
 }
 
 async function exportTrades() {
@@ -1420,50 +1702,46 @@ async function exportTrades() {
   }
 }
 
-// === 指标卡（9张，含语义色） ===
-// 核心指标突出展示：当前金额旁边放 3 个关键收益/风险指标（含夏普）
+// === 指标卡（含含义与计算公式提示） ===
+const METRIC_TIPS = {
+  total: '总收益率 = 期末净值 / 期初净值 − 1，衡量整个回测区间的累计收益。',
+  annual: '年化收益 = (1 + 总收益) ^ (365 / 回测天数) − 1，将累计收益折算为年化水平。',
+  sharpe: '夏普比率 = (年化收益 − 无风险利率) / 年化波动率，衡量每承担一单位波动获得的超额回报。',
+  excess: '超额收益 = 策略总收益 − 基准总收益，衡量相对基准的跑赢幅度。',
+  benchmark: '基准收益 = 基准指数同期累计收益（如沪深300）。',
+  volatility: '年化波动率 = 日收益标准差 × √252，衡量收益的波动程度。',
+  max_drawdown: '最大回撤 = min(净值/前期最高净值 − 1)，衡量回测期间的最大亏损幅度。',
+  sortino: '索提诺比率 = (年化收益 − 无风险利率) / 下行波动率，只惩罚下跌方向的波动。',
+  calmar: '卡玛比率 = 年化收益 / 最大回撤绝对值，衡量收益与回撤的平衡。',
+  win_rate: '胜率 = 盈利交易笔数 / 总交易笔数。',
+  profit: '盈亏额 = 期末资金 − 初始资金，整个回测区间的绝对盈亏金额。',
+}
+
+// 核心指标：期末资产旁展示总收益 / 年化收益 / 夏普
 const heroMetrics = computed(() => {
   const m = currentResult.value || {}
   const ar = m.annual_return
   const tr = totalReturn.value
   return [
-    { key: 'total', label: '总收益率', value: fmtPct(tr), tone: tr > 0 ? 'tone-success' : tr < 0 ? 'tone-danger' : '' },
-    { key: 'annual', label: '年化收益', value: fmtPct(ar), tone: ar > 0 ? 'tone-success' : ar < 0 ? 'tone-danger' : '' },
-    { key: 'sharpe', label: '夏普比率', value: fmtNum(m.sharpe), tone: '' },
+    { key: 'total', label: '总收益', value: fmtPct(tr), tone: tr > 0 ? 'tone-success' : tr < 0 ? 'tone-danger' : '', tip: METRIC_TIPS.total },
+    { key: 'annual', label: '年化收益', value: fmtPct(ar), tone: ar > 0 ? 'tone-success' : ar < 0 ? 'tone-danger' : '', tip: METRIC_TIPS.annual },
+    { key: 'sharpe', label: '夏普比率', value: fmtNum(m.sharpe), tone: '', tip: METRIC_TIPS.sharpe },
   ]
 })
 
-// 指标分区：收益 / 风险 / 风险调整后收益
-const metricSections = computed(() => {
+// 指标总览：平铺紧凑（不分区），悬浮显示含义与公式
+const flatMetrics = computed(() => {
   const m = currentResult.value || {}
   const er = m.excess_return
+  const sig = (v) => (v > 0 ? 'tone-success' : v < 0 ? 'tone-danger' : '')
   return [
-    {
-      key: 'return',
-      title: '收益类',
-      items: [
-        { label: '年化收益', value: fmtPct(m.annual_return), tone: m.annual_return > 0 ? 'tone-success' : m.annual_return < 0 ? 'tone-danger' : '' },
-        { label: '超额收益', value: fmtPct(er), tone: er > 0 ? 'tone-success' : er < 0 ? 'tone-danger' : '' },
-        { label: '基准收益', value: fmtPct(m.benchmark_return), tone: '' },
-      ],
-    },
-    {
-      key: 'risk',
-      title: '风险类',
-      items: [
-        { label: '年化波动', value: fmtPct(m.annual_volatility), tone: '' },
-        { label: '最大回撤', value: fmtPct(m.max_drawdown), tone: 'tone-danger' },
-      ],
-    },
-    {
-      key: 'adjusted',
-      title: '风险调整后收益',
-      items: [
-        { label: '索提诺', value: fmtNum(m.sortino), tone: '' },
-        { label: '卡玛比率', value: fmtNum(m.calmar), tone: '' },
-        { label: '胜率', value: fmtPct(m.win_rate, 1), tone: '' },
-      ],
-    },
+    { label: '超额收益', value: fmtPct(er), tone: sig(er), tip: METRIC_TIPS.excess },
+    { label: '基准收益', value: fmtPct(m.benchmark_return), tone: '', tip: METRIC_TIPS.benchmark },
+    { label: '年化波动率', value: fmtPct(m.annual_volatility), tone: '', tip: METRIC_TIPS.volatility },
+    { label: '最大回撤', value: fmtPct(m.max_drawdown), tone: 'tone-danger', tip: METRIC_TIPS.max_drawdown },
+    { label: '索提诺比率', value: fmtNum(m.sortino), tone: '', tip: METRIC_TIPS.sortino },
+    { label: '卡玛比率', value: fmtNum(m.calmar), tone: '', tip: METRIC_TIPS.calmar },
+    { label: '胜率', value: fmtPct(m.win_rate, 1), tone: '', tip: METRIC_TIPS.win_rate },
   ]
 })
 
@@ -1489,6 +1767,9 @@ const currentValue = computed(() => {
   if (tr == null) return initialCapital.value
   return initialCapital.value * (1 + tr)
 })
+
+// 盈亏额 = 期末资金 − 初始资金
+const profitDelta = computed(() => currentValue.value - initialCapital.value)
 
 const rebalanceLabel = computed(() => {
   const map = { day: '每日', week: '每周', month: '每月' }
@@ -1540,7 +1821,7 @@ const chartOption = computed(() => {
             const count = p.value?.[2] ?? 0
             return `${p.marker} ${p.seriesName}: <b>${count}</b> 笔`
           }
-          return `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(3)}</b>`
+          return `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(2)}</b>`
         })
         return `${params[0].axisValue}<br/>${lines.join('<br/>')}`
       },
@@ -1690,13 +1971,39 @@ async function loadFactors() {
   }
 }
 
-// === 点击行选中策略并加载回测结果 ===
+// === 行内展开（单开折叠）：el-table 展开变化时同步状态并加载结果 ===
+function onExpandChange(row, expandedRows) {
+  const isExpanded = expandedRows.some((r) => r.id === row.id)
+  if (isExpanded) {
+    // 只保留当前行展开，其它自动收起
+    expandedKeys.value = [row.id]
+    expandedId.value = row.id
+    selectStrategy(row)
+  } else if (expandedId.value === row.id) {
+    expandedKeys.value = []
+    expandedId.value = null
+    selectedStrategy.value = null
+    currentResult.value = null
+  }
+}
+
+// === 点击行：展开该行（若已展开则收起） ===
 function onRowClick(row) {
-  if (!row || selectedStrategy.value?.id === row.id) return
-  selectStrategy(row)
+  if (!row) return
+  if (expandedId.value === row.id) {
+    expandedKeys.value = []
+    expandedId.value = null
+    selectedStrategy.value = null
+    currentResult.value = null
+  } else {
+    expandedKeys.value = [row.id]
+    expandedId.value = row.id
+    selectStrategy(row)
+  }
 }
 
 async function selectStrategy(row, scroll = false) {
+  if (resultLoading.value && selectedStrategy.value?.id === row.id) return
   selectedStrategy.value = row
   currentResult.value = null
   resultLoading.value = true
@@ -1711,7 +2018,10 @@ async function selectStrategy(row, scroll = false) {
   } finally {
     resultLoading.value = false
     if (scroll) {
-      nextTick(() => metricsRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      nextTick(() => {
+        const el = document.querySelector('.strategy-result')
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
     }
   }
 }
@@ -1759,6 +2069,8 @@ async function confirmBacktest() {
   const row = btParams.value.row
   if (!row) return
   selectedStrategy.value = row
+  expandedKeys.value = [row.id]
+  expandedId.value = row.id
   btParams.value.visible = false
   const [startDate, endDate] = btParams.value.range || []
   if (!startDate || !endDate) {
@@ -1837,8 +2149,11 @@ function stopPolling() {
   resultLoading.value = false
 }
 
-// === "结果"链接：选中策略并滚动到指标区 ===
+// === "结果"链接：展开该行并加载回测结果，滚动定位 ===
 function viewResults(row) {
+  if (!row) return
+  expandedKeys.value = [row.id]
+  expandedId.value = row.id
   selectStrategy(row, true)
 }
 
@@ -2002,7 +2317,7 @@ function wfFmt(k, v) {
   if (['total_return', 'annual_return', 'annual_volatility', 'max_drawdown', 'positive_ratio'].includes(k)) {
     return (n * 100).toFixed(2) + '%'
   }
-  return n.toFixed(4)
+  return n.toFixed(2)
 }
 
 async function doCreate() {
@@ -2203,22 +2518,201 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
+// 行内展开的回测结果
+.strategy-result {
+  padding: 4px 8px 16px;
+  background: var(--bg-card);
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  &__period {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    font-variant-numeric: tabular-nums;
+  }
+}
+.result-overview {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px 16px;
+  margin-bottom: 12px;
+}
+.result-sub-card {
+  margin-top: 12px;
+
+  & + & {
+    margin-top: 12px;
+  }
+}
+
 // 回测指标区
+.result-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) repeat(3, minmax(120px, 176px));
+  gap: var(--space-sm);
+  margin-bottom: 12px;
+
+  &__primary {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--primary);
+    border-radius: var(--radius-lg);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  &__primary-label {
+    font-size: var(--font-size-xs, 12px);
+    color: var(--text-tertiary);
+    letter-spacing: 0.04em;
+  }
+
+  &__primary-value {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+  }
+
+  &__primary-sub {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__delta {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: rgba(31, 157, 107, 0.12);
+    color: var(--success);
+    font-variant-numeric: tabular-nums;
+  }
+  &__delta.tone-danger {
+    background: rgba(210, 69, 69, 0.12);
+    color: var(--danger);
+  }
+
+  &__item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+
+    &:hover {
+      box-shadow: var(--shadow-sm);
+      transform: translateY(-1px);
+    }
+  }
+
+  &__item-label {
+    font-size: var(--font-size-xs, 12px);
+    color: var(--text-tertiary);
+  }
+
+  &__item-value {
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// 指标悬浮提示
+.metric-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--text-tertiary, #8a9099);
+  color: var(--text-inverse, #fff);
+  cursor: help;
+}
+.metrics-section {
+  margin-bottom: 12px;
+}
+.result-params-collapse {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 0;
+
+  :deep(.el-collapse-item__header) {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 0 4px;
+  }
+}
+.result-params-collapse-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-md);
-  min-height: 80px;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 8px;
+  min-height: 52px;
+}
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px 10px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
+  }
 }
 .result-params {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-sm) var(--space-md);
-  padding: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-md);
-  background: var(--bg-tertiary, #f5f6f7);
-  border: 1px solid var(--border, #e5e6eb);
-  border-radius: var(--radius-md, 8px);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 16px;
+  padding: 12px 16px;
+  margin-bottom: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   min-height: 44px;
 
   &__item {
@@ -2243,22 +2737,22 @@ onBeforeUnmount(() => {
     text-overflow: ellipsis;
   }
 }
-.metric-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-md);
-}
 .metric-label {
-  font-size: var(--font-size-sm);
+  font-size: 12px;
   color: var(--text-tertiary);
-  margin-bottom: var(--space-xs);
+  margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
 }
 .metric-value {
-  font-size: var(--font-size-2xl);
+  font-size: 15px;
   font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tone-success {
   color: var(--success);
@@ -2267,16 +2761,36 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
-// 收益日历
-.calendar-hint {
-  font-size: 12px;
-  color: var(--text-tertiary, #8a9099);
+// === 收益日历 ===
+.cal-unit-switch {
+  .el-radio-button__inner {
+    padding: 6px 14px;
+  }
 }
-.calendar-legend {
+.cal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+
+  .el-button-group {
+    .el-button {
+      padding: 7px 12px;
+    }
+  }
+}
+.cal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2329);
+  font-variant-numeric: tabular-nums;
+}
+.cal-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: 14px;
   font-size: 12px;
   color: var(--text-secondary, #4e5969);
 
@@ -2286,137 +2800,396 @@ onBeforeUnmount(() => {
     gap: 6px;
   }
 }
-.square {
+.cal-swatch {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 3px;
 
   &--up {
-    background: var(--success, #1f9d6b);
+    background: rgba(31, 157, 107, 0.22);
+    border: 1px dashed var(--success, #1f9d6b);
   }
-  &--negative {
-    background: var(--danger, #d24545);
-  }
-  &--flat {
-    background: var(--bg-tertiary, #f2f3f5);
-    border: 1px solid var(--border, #e5e6eb);
+  &--neg {
+    background: rgba(210, 69, 69, 0.2);
+    border: 1px dashed var(--danger, #d24545);
   }
   &--trade {
     background: var(--primary);
-    position: relative;
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 4px;
-      top: 4px;
-      width: 4px;
-      height: 4px;
-      border-radius: 50%;
-      background: #fff;
-    }
+    border-radius: 50%;
   }
 }
-.calendar-grid {
+.cal-weekdays {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary, #8a9099);
+  padding: 0 2px;
+  margin-bottom: 6px;
 }
-.calendar-month {
-  background: var(--bg-card);
-  border: 1px solid var(--border, #e5e6eb);
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.cal-cell {
+  min-height: 56px;
   border-radius: var(--radius-md, 8px);
-  padding: 12px;
-
-  &__title {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 8px;
-    color: var(--text-primary, #1f2329);
-  }
-
-  &__weekdays {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    text-align: center;
-    font-size: 11px;
-    color: var(--text-tertiary, #8a9099);
-    margin-bottom: 4px;
-  }
-
-  &__cells {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 4px;
-  }
-}
-.calendar-day {
-  height: 40px;
-  border-radius: 6px;
+  padding: 4px 6px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  justify-content: space-between;
   position: relative;
-  font-size: 11px;
-  line-height: 1.25;
-  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
 
   &--blank {
     cursor: default;
   }
 
-  &--fill {
+  &--day {
     background: var(--bg-tertiary, #f2f3f5);
+    border: 1px solid transparent;
+
+    &:hover {
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+  }
+
+  &--weekend:not(&--up):not(&--neg):not(&--flat) {
+    background: rgba(22, 119, 255, 0.05);
   }
 
   &--up {
-    background: rgba(31, 157, 107, 0.12);
+    background: rgba(31, 157, 107, 0.14);
+    border-color: rgba(31, 157, 107, 0.28);
     color: var(--success, #1f9d6b);
   }
-  &--negative {
-    background: rgba(210, 69, 69, 0.12);
+  &--neg {
+    background: rgba(210, 69, 69, 0.13);
+    border-color: rgba(210, 69, 69, 0.26);
     color: var(--danger, #d24545);
   }
   &--flat {
-    background: var(--bg-tertiary, #f2f3f5);
+    background: var(--bg-secondary, #f7f8fa);
     color: var(--text-secondary, #4e5969);
   }
 
+  &--today {
+    background: rgba(22, 119, 255, 0.12);
+    border-color: rgba(22, 119, 255, 0.35);
+    color: var(--primary, #1677ff);
+    box-shadow: inset 0 0 0 1px rgba(22, 119, 255, 0.25);
+  }
+
   &--active {
-    outline: 2px solid var(--primary);
-    outline-offset: 1px;
+    box-shadow: 0 0 0 2px var(--primary);
+    color: var(--primary);
+    font-weight: 600;
+    transform: translateY(-1px);
   }
 
   &__num {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
     font-weight: 600;
   }
+  &__todaymark {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary, #1677ff);
+    box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.18);
+  }
   &__ret {
-    font-size: 10px;
-    opacity: 0.85;
+    font-size: 11px;
+    opacity: 0.9;
   }
   &__dot {
     position: absolute;
-    right: 4px;
-    top: 4px;
-    width: 6px;
-    height: 6px;
+    right: 6px;
+    top: 6px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 22, 119, 255), 0.15);
+  }
+}
+.cal-months {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 10px;
+}
+.cal-month {
+  height: 72px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border, #e5e6eb);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  position: relative;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+  &:hover {
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
+  }
+
+  &--up {
+    border-color: rgba(31, 157, 107, 0.35);
+    background: rgba(31, 157, 107, 0.1);
+  }
+  &--neg {
+    border-color: rgba(210, 69, 69, 0.32);
+    background: rgba(210, 69, 69, 0.09);
+  }
+
+  &__label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #1f2329);
+  }
+  &__ret {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  &--up &__ret {
+    color: var(--success, #1f9d6b);
+  }
+  &--neg &__ret {
+    color: var(--danger, #d24545);
+  }
+  &__dot {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+  &--active {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+}
+.cal-weeks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cal-week {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border, #e5e6eb);
+  border-radius: var(--radius-md, 8px);
+  padding: 6px 8px;
+  background: var(--bg-card);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+
+  &:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+
+  &--up {
+    border-color: rgba(31, 157, 107, 0.35);
+    background: rgba(31, 157, 107, 0.08);
+  }
+  &--neg {
+    border-color: rgba(210, 69, 69, 0.32);
+    background: rgba(210, 69, 69, 0.07);
+  }
+  &--active {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+
+  &__label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary, #1f2329);
+    white-space: nowrap;
+  }
+  &__range {
+    font-size: 11px;
+    color: var(--text-tertiary, #8a9099);
+    white-space: nowrap;
+  }
+  &__ret {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  &--up &__ret {
+    color: var(--success, #1f9d6b);
+  }
+  &--neg &__ret {
+    color: var(--danger, #d24545);
+  }
+  &__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+    flex-shrink: 0;
+  }
+}
+.cal-years {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+.cal-year {
+  height: 56px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border, #e5e6eb);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+  &:hover {
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
+  }
+
+  &--up {
+    border-color: rgba(31, 157, 107, 0.35);
+    background: rgba(31, 157, 107, 0.1);
+  }
+  &--neg {
+    border-color: rgba(210, 69, 69, 0.32);
+    background: rgba(210, 69, 69, 0.09);
+  }
+  &--active {
+    box-shadow: 0 0 0 2px var(--primary);
+  }
+
+  &__label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #1f2329);
+  }
+  &__ret {
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  &--up &__ret {
+    color: var(--success, #1f9d6b);
+  }
+  &--neg &__ret {
+    color: var(--danger, #d24545);
+  }
+  &__dot {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--primary);
   }
 }
-.calendar-detail {
-  margin-top: 16px;
-  padding-top: 14px;
+.period-cal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border, #e5e6eb);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-card, #ffffff);
+  margin-bottom: 12px;
+
+  &__day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 52px;
+    padding: 4px 6px;
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    transition: box-shadow 0.15s ease;
+
+    &:hover {
+      box-shadow: 0 0 0 2px var(--primary);
+    }
+
+    &--up {
+      background: rgba(31, 157, 107, 0.12);
+      border-color: rgba(31, 157, 107, 0.28);
+    }
+    &--neg {
+      background: rgba(210, 69, 69, 0.11);
+      border-color: rgba(210, 69, 69, 0.26);
+    }
+    &--flat {
+      background: var(--bg-tertiary, #f2f3f5);
+    }
+    &--na {
+      background: var(--bg-tertiary, #f2f3f5);
+      color: var(--text-tertiary, #8a9099);
+    }
+    &--weekend {
+      opacity: 0.55;
+    }
+    &--active {
+      box-shadow: 0 0 0 2px var(--primary);
+    }
+  }
+
+  &__wd {
+    font-size: 11px;
+    color: var(--text-tertiary, #8a9099);
+  }
+  &__date {
+    font-size: 11px;
+    color: var(--text-secondary, #4e5969);
+  }
+  &__ret {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  &__day--up .period-cal__ret {
+    color: var(--success, #1f9d6b);
+  }
+  &__day--neg .period-cal__ret {
+    color: var(--danger, #d24545);
+  }
+}
+.cal-detail {
+  margin-top: 18px;
+  padding-top: 16px;
   border-top: 1px solid var(--border, #e5e6eb);
 
   &__head {
     display: flex;
     align-items: center;
-    gap: 16px;
-    margin-bottom: 12px;
+    gap: 12px;
+    margin-bottom: 14px;
     flex-wrap: wrap;
   }
 
@@ -2424,11 +3197,17 @@ onBeforeUnmount(() => {
     font-size: 16px;
     font-weight: 700;
     color: var(--text-primary, #1f2329);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__close {
+    margin-left: auto;
   }
 
   &__time {
     font-size: 12px;
     color: var(--text-tertiary, #8a9099);
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -2473,7 +3252,7 @@ onBeforeUnmount(() => {
 }
 .chart-body {
   width: 100%;
-  height: 320px;
+  height: 260px;
 }
 
 /* 交易明细（回测动作与行为） */
@@ -2510,6 +3289,171 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+/* 交易明细 · 收益日历（合并双栏） */
+.trade-workspace {
+  &__body {
+    display: grid;
+    grid-template-columns: minmax(340px, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  &__cal {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg-secondary, #f7f8fa);
+    border: 1px solid var(--border, #e5e6eb);
+    border-radius: var(--radius-lg, 12px);
+    padding: 10px;
+    position: sticky;
+    top: 8px;
+
+    .cal-unit-switch {
+      display: flex;
+      justify-content: center;
+    }
+    .cal-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0;
+    }
+    .cal-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .cal-legend {
+      justify-content: center;
+    }
+    .cal-cell {
+      min-height: 48px;
+      padding: 3px 5px;
+      gap: 2px;
+    }
+    .cal-month {
+      height: 56px;
+    }
+  }
+
+  &__list {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  // 表格框架：浅灰表头 + 行 hover（关闭斑马纹）
+  :deep(.el-table) {
+    --el-table-border-color: var(--border-light, #eef2f7);
+    --el-table-header-bg-color: var(--bg-tertiary, #f1f4f9);
+    --el-table-header-text-color: var(--text-secondary, #5b6b85);
+    --el-table-row-hover-bg-color: var(--bg-hover, rgba(22, 33, 58, 0.04));
+
+    th.el-table__cell {
+      font-weight: 600;
+    }
+  }
+}
+.trades-daybar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--bg-secondary, #f6f8fb);
+  border: 1px solid var(--border, #e5e6eb);
+  border-bottom: 2px solid var(--primary, #1677ff);
+  border-radius: var(--radius-md, 8px);
+  padding: 8px 16px;
+
+  &__date {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 150px;
+    padding-right: 14px;
+    border-right: 1px dashed var(--border, #e5e6eb);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__day {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary, #1f2329);
+  }
+
+  &__full {
+    font-size: 13px;
+    color: var(--text-tertiary, #8a9099);
+  }
+
+  &__stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__chip {
+    padding: 3px 11px;
+    border-radius: var(--radius-full, 999px);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+
+    &--up {
+      background: rgba(31, 157, 107, 0.14);
+      color: var(--success, #1f9d6b);
+    }
+    &--neg {
+      background: rgba(210, 69, 69, 0.13);
+      color: var(--danger, #d24545);
+    }
+    &--muted {
+      background: var(--bg-tertiary, #f2f3f5);
+      color: var(--text-secondary, #4e5969);
+    }
+  }
+
+  &__clear {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  &__hint {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-tertiary, #8a9099);
+    white-space: nowrap;
+  }
+
+  &--all {
+    border-bottom: 1px solid var(--border, #e5e6eb);
+  }
+}
+
+.trades-empty {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+@media (max-width: 1200px) {
+  .trade-workspace__body {
+    grid-template-columns: 1fr;
+  }
+  .trade-workspace__cal {
+    position: static;
+    order: 2;
+  }
+  .trade-workspace__list {
+    order: 1;
+  }
 }
 
 /* Walk-forward 样式 */

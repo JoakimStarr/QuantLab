@@ -282,7 +282,7 @@ async def init_db():
 要点：
 - **baostock** 是主源（一次拉全市场日K，含 ST 标记和估值字段）
 - **akshare** 作补充（新闻/市值/行业/EOD 增量兜底）
-- **全量回填**：`POST /api/v1/quant/data/sync?years=N`，从最新向旧逐交易日拉取
+- **全量回填**：`POST /api/v1/quant/data/sync-full?years=N`（一键全同步的第一阶段），从最新向旧逐交易日拉取
 - **幂等写入**：PG 使用 `ON CONFLICT DO NOTHING`，重复执行只补缺口
 
 ### 2.10 GPU 检测（`backend/app/core/gpu_utils.py`）
@@ -307,7 +307,7 @@ if is_gpu_available():
 | 模块 | 代表端点 | 说明 |
 |------|----------|------|
 | `auth` | `POST /auth/login`、`GET /auth/status`、`GET /auth/ai-status` | 登录、状态、可用 provider 探测 |
-| `quant_data` | `GET /quant/data/qlib-status`、`POST /quant/data/sync` | qlib 可用性、数据同步 |
+| `quant_data` | `GET /quant/data/qlib-status`、`POST /quant/data/sync-full` | qlib 可用性、数据同步 |
 | `factor` | `GET /factors`、`POST /factors/{id}/evaluate` | 因子 CRUD + 评价 |
 | `factor_ext` | `POST /factors/compare`、`GET /factors/{id}/decay`、`POST /factors/seed-alpha158` | 因子对比、衰减、Alpha158、中性化 |
 | `strategy` | `POST /strategies/{id}/backtest`、`GET /strategies/{id}/backtest-results` | 策略 + 回测 |

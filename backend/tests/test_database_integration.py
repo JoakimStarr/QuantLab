@@ -31,11 +31,21 @@ async def test_health_check_ok(db_ready):
 
 
 async def test_factor_crud_roundtrip(db_ready):
-    """向 factor 表 insert 一行 + select 回读。"""
+    """向 factor 表 insert 一行 + select 回读。
+
+    该测试固定插入 name/expression 相同的行且不清理，第二次运行会撞
+    uq_factor_expression 唯一约束 → 开头先删除上次残留，保证可重复运行。
+    """
     if not db_ready:
         pytest.skip("需要 Postgres")
     from app.core.database import async_session
     from app.models.factor import Factor
+
+    async with async_session() as session:
+        stale = await session.execute(select(Factor).where(Factor.expression == "Mean($close, 5)"))
+        for row in stale.scalars():
+            await session.delete(row)
+        await session.commit()
 
     async with async_session() as session:
         rec = Factor(

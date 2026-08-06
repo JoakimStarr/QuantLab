@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 class SyncProgress:
     universe: str = ""
     data_source: str = ""
+    # 任务归属 kind：backfill/eod/repair/indices/fundamental/macro/etf/full。
+    # 与 data_source 的区别：data_source 是"真实数据源"（baostock/eastmoney/...）或 full
+    # 的阶段性标识；kind 稳定标识"谁触发的任务"，前端据此区分展示（如 Macro 页匹配 kind=macro）。
+    kind: str = ""
     status: str = "idle"  # idle / downloading / extracting / verifying / done / failed
     progress_pct: float = 0.0
     downloaded_mb: float = 0.0
@@ -118,11 +122,12 @@ class SyncProgressManager:
         self._progress: Optional[SyncProgress] = None
 
     def init_progress(self, universe: str, data_source: str, total_mb: float = 0,
-                      writes_bins: bool = False) -> None:
+                      writes_bins: bool = False, kind: str = None) -> None:
         """初始化进度跟踪
 
         writes_bins: 该任务是否写 qlib bin（读 bin 的操作应被阻塞）；
             fetch-only 任务传 False，允许挖掘/校验等读 bin 操作并行。
+        kind: 任务归属（backfill/eod/repair/...），None 时回退用 data_source。
         """
         with self._lock:
             # 保留仍存活的 worker_pid：独立 worker 子进程内任务可能再次
@@ -139,6 +144,7 @@ class SyncProgressManager:
             self._progress = SyncProgress(
                 universe=universe,
                 data_source=data_source,
+                kind=kind or data_source,
                 status="downloading",
                 total_mb=total_mb,
                 started_at=datetime.now().isoformat(),
@@ -249,9 +255,9 @@ def _get_manager() -> SyncProgressManager:
 
 
 def init_progress(universe: str, data_source: str, total_mb: float = 0,
-                  writes_bins: bool = False) -> None:
+                  writes_bins: bool = False, kind: str = None) -> None:
     """初始化进度跟踪"""
-    _get_manager().init_progress(universe, data_source, total_mb, writes_bins=writes_bins)
+    _get_manager().init_progress(universe, data_source, total_mb, writes_bins=writes_bins, kind=kind)
 
 
 def update_progress(
@@ -357,10 +363,12 @@ def clear_progress() -> None:
 # 任务类型 → 可读标签（与前端 taskLabel 保持一致）
 _TASK_LABEL = {
     "baostock": "baostock 全量回填",
+    "backfill": "baostock 全量回填",
     "eod": "增量同步",
     "repair": "数据补齐",
     "indices": "指数同步",
     "etf": "ETF 同步",
+    "macro": "宏观同步",
     "eastmoney": "宏观同步",
     "fundamental": "财报同步",
     "full": "一键全同步",
@@ -378,7 +386,7 @@ def busy_message(waiting_task: str = "") -> str:
     if not progress:
         return "正在同步/修复中，请稍候"
     universe = progress.get("universe") or "?"
-    source = progress.get("data_source") or "同步"
+    source = progress.get("kind") or progress.get("data_source") or "同步"
     label = _TASK_LABEL.get(source, source)
     pct = progress.get("progress_pct")
     pct_str = f"，进度 {pct:.0f}%" if isinstance(pct, (int, float)) else ""

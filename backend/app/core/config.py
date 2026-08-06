@@ -142,7 +142,7 @@ class MiningSettings(SettingsBaseModel):
     llm: dict[str, Any] = Field(
         default_factory=lambda: {
             "candidates_per_run": 10,
-            "eval_timeout_seconds": 60,
+            "eval_timeout_seconds": 300,
             "ic_threshold": 0.03,
             "eval_horizon": 5,
             "significance_alpha": 0.05,
