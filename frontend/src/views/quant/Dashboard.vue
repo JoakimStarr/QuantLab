@@ -69,20 +69,31 @@
         @clear-stock="onClearStock"
       />
 
-      <MacroSnapshot :items="macroItems" :loading="macroLoading" />
+      <!-- 以下为折叠区：滚动到视口附近才加载（按需懒加载，减少首屏请求） -->
+      <LazySection @activate="activateMacro">
+        <MacroSnapshot :items="macroItems" :loading="macroLoading" />
+      </LazySection>
 
       <el-row :gutter="16">
         <el-col :xs="24" :sm="12" class="dashboard-col">
-          <FactorStats :total="factorTotal" :by-source="factorBySource" />
+          <LazySection @activate="activateFactorStats">
+            <FactorStats :total="factorTotal" :by-source="factorBySource" />
+          </LazySection>
         </el-col>
         <el-col :xs="24" :sm="12" class="dashboard-col">
-          <MiningTasks :tasks="recentMining" :loading="loading" />
+          <LazySection>
+            <MiningTasks :tasks="recentMining" :loading="loading" />
+          </LazySection>
         </el-col>
       </el-row>
 
-      <DecayAlert />
+      <LazySection>
+        <DecayAlert />
+      </LazySection>
 
-      <BacktestList :backtests="recentBacktests" :loading="loading" />
+      <LazySection>
+        <BacktestList :backtests="recentBacktests" :loading="loading" />
+      </LazySection>
 
       <Guide v-model:visible="guideVisible" />
     </template>
@@ -105,6 +116,7 @@ import BacktestList from '@/components/dashboard/BacktestList.vue'
 import MacroSnapshot from '@/components/dashboard/MacroSnapshot.vue'
 import DecayAlert from '@/components/dashboard/DecayAlert.vue'
 import Guide from '@/components/common/Guide.vue'
+import LazySection from '@/components/common/LazySection.vue'
 import { listFactors } from '@/api/factor'
 import { listStrategies, listAllBacktestResults } from '@/api/strategy'
 import { listMiningTasks } from '@/api/mining'
@@ -284,7 +296,6 @@ const DASH_STATS_TTL = 5 * 60 * 1000
 
 function applyStats(s) {
   factorTotal.value = s.factorTotal ?? 0
-  factorBySource.value = s.factorBySource ?? { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 }
   strategies.value = s.strategies ?? []
   recentMining.value = s.recentMining ?? []
   miningTotal.value = s.miningTotal ?? 0
@@ -303,11 +314,11 @@ function computeFactorBySource(items) {
   return bySource
 }
 
-async function fetchStats() {
+// 首屏紧加载核心统计（不含重量级的「因子逐一全量列表」），保证首屏尽快渲染
+async function fetchKpi() {
   try {
-    const [factors, factorsAll, strategiesData, mining, backtests, status, indicesData] = await Promise.all([
+    const [factors, strategiesData, mining, backtests, status, indicesData] = await Promise.all([
       listFactors({ limit: 1 }),
-      listFactors({ limit: 500 }),
       listStrategies(),
       listMiningTasks({ limit: 5 }),
       listAllBacktestResults({ limit: 5 }),
@@ -316,7 +327,6 @@ async function fetchStats() {
     ])
     const stats = {
       factorTotal: factors?.total ?? 0,
-      factorBySource: computeFactorBySource(factorsAll?.items ?? []),
       strategies: strategiesData?.items ?? [],
       recentMining: mining?.items ?? [],
       miningTotal: mining?.total ?? 0,
@@ -341,20 +351,59 @@ async function loadAll(force = false) {
     applyStats(cached)
     loading.value = false
     // 命中缓存：快速展示，后台静默刷新（不阻塞首屏）
-    fetchStats().finally(() => {
+    fetchKpi().finally(() => {
       loading.value = false
     })
     return
   }
-  await fetchStats()
+  await fetchKpi()
   loading.value = false
+}
+
+// 因子来源分布：依赖全量因子列表（最重的请求），滚动到该区块才加载
+const FACTOR_BREAKDOWN_KEY = 'dashboard_factor_breakdown'
+const FACTOR_BREAKDOWN_TTL = 5 * 60 * 1000
+let factorBreakdownLoaded = false
+
+async function fetchFactorBreakdown() {
+  if (factorBreakdownLoaded) return
+  try {
+    const res = await listFactors({ limit: 500 })
+    factorBySource.value = computeFactorBySource(res?.items ?? [])
+    factorBreakdownLoaded = true
+    setCache(FACTOR_BREAKDOWN_KEY, factorBySource.value, FACTOR_BREAKDOWN_TTL)
+  } catch {
+    // 静默失败，区块不展示也未阻塞页面
+  }
+}
+
+function activateFactorStats() {
+  const cached = getCached(FACTOR_BREAKDOWN_KEY)
+  if (cached) {
+    factorBySource.value = cached
+    factorBreakdownLoaded = true
+    return
+  }
+  fetchFactorBreakdown()
+}
+
+// 宏观快照：滚动到该区块才拉取（含环比计算）
+let macroLoaded = false
+async function activateMacro() {
+  if (macroLoaded) return
+  macroLoaded = true
+  await loadMacroSnapshot()
 }
 
 function refreshAll() {
   loadAll(true)
   loadOverview()
   loadKline()
-  loadMacroSnapshot()
+  // 因子分布已加载过则连同一起刷新（未滚动到则保持懒加载）
+  if (factorBreakdownLoaded) {
+    factorBreakdownLoaded = false
+    fetchFactorBreakdown()
+  }
 }
 
 function onSelectIndex(code) {
@@ -405,7 +454,7 @@ watch([klineCode, selectedPeriod, timeRange, customRange], () => loadKline())
 
 onMounted(async () => {
   if (!localStorage.getItem('quantlab_guide_seen')) guideVisible.value = true
-  await Promise.all([loadAll(), loadOverview(), loadKline(), loadMacroSnapshot()])
+  await Promise.all([loadAll(), loadOverview(), loadKline()])
   initialLoading.value = false
 })
 </script>
