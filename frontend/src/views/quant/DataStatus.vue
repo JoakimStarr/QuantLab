@@ -114,44 +114,21 @@
               {{ syncing ? '同步中...' : '开始同步' }}
             </el-button>
           </div>
-          <el-button
-            type="success"
-            @click="showEodDialog = true"
-            :loading="eodSyncing"
-            :disabled="!qlib.available || eodSyncing"
-          >
-            {{ eodSyncing ? '增量同步中...' : '增量同步' }}
-          </el-button>
-          <el-button
-            type="warning"
-            @click="doSyncIndices"
-            :loading="indexSyncing"
-            :disabled="!qlib.available || indexSyncing"
-          >
-            {{ indexSyncing ? '指数同步中...' : '同步指数' }}
-          </el-button>
-          <el-button
-            type="warning"
-            plain
-            @click="doSyncEtf"
-            :loading="etfSyncing"
-            :disabled="!qlib.available || etfSyncing"
-          >
-            {{ etfSyncing ? 'ETF同步中...' : '同步ETF' }}
-          </el-button>
-          <el-radio-group v-model="etfSource" size="small" style="margin-left: 4px">
-            <el-radio-button value="baostock">baostock 增量</el-radio-button>
-            <el-radio-button value="tencent">腾讯 qfq 对齐</el-radio-button>
-          </el-radio-group>
-          <el-button
-            type="success"
-            plain
-            @click="doSyncFundamental"
-            :loading="fundamentalSyncing"
-            :disabled="!qlib.available || fundamentalSyncing"
-          >
-            {{ fundamentalSyncing ? '财报同步中...' : '同步财报' }}
-          </el-button>
+          <el-dropdown trigger="click" @command="onSyncMaintenance" :disabled="!qlib.available">
+            <el-button :loading="anySyncing" :disabled="!qlib.available">
+              {{ anySyncing ? '同步中...' : '同步维护' }}
+              <el-icon style="margin-left: 4px"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="eod">增量同步（EOD）</el-dropdown-item>
+                <el-dropdown-item command="indices">指数同步</el-dropdown-item>
+                <el-dropdown-item divided command="etf_baostock">ETF 增量（baostock）</el-dropdown-item>
+                <el-dropdown-item command="etf_tencent">ETF 腾讯对齐（qfq）</el-dropdown-item>
+                <el-dropdown-item divided command="fundamental">财报同步</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
             {{ integrityChecking ? '校验中...' : '数据校验' }}
           </el-button>
@@ -694,7 +671,7 @@ defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
+import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled, ArrowDown } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import {
@@ -747,7 +724,6 @@ const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, over
 const syncYears = ref(5)
 const indexSyncing = ref(false)
 const etfSyncing = ref(false)
-const etfSource = ref('tencent')  // baostock=按日全市场增量 / tencent=qfq 对齐现有时间范围
 const fundamentalSyncing = ref(false)
 const externalMarket = ref({ synced_at: null, items: {} })
 const externalSyncing = ref(false)
@@ -1061,15 +1037,14 @@ async function doSyncIndices() {
   }
 }
 
-// 全市场 ETF 同步（baostock 按日拉全市场 / 腾讯 qfq 对齐现有时间范围）
-async function doSyncEtf() {
+// 全市场 ETF 同步（source: baostock=按日全市场增量 / tencent=qfq 对齐现有时间范围）
+async function doSyncEtf(source = 'tencent') {
   etfSyncing.value = true
   try {
     const years = syncYears.value || 2
-    const src = etfSource.value || 'tencent'
-    await syncEtfData(years, src)
+    await syncEtfData(years, source)
     ElMessage.success(
-      src === 'tencent'
+      source === 'tencent'
         ? 'ETF 同步已提交（腾讯 qfq 对齐现有时间范围，后台执行中）'
         : `ETF 同步已提交（baostock 约 ${years} 年历史，后台执行中）`
     )
@@ -1097,6 +1072,20 @@ async function doSyncFundamental() {
   } finally {
     fundamentalSyncing.value = false
   }
+}
+
+// 「同步维护」下拉是否任一子任务在跑（用于按钮 loading 态）
+const anySyncing = computed(
+  () => eodSyncing.value || indexSyncing.value || etfSyncing.value || fundamentalSyncing.value
+)
+
+// 同步维护下拉分发
+function onSyncMaintenance(cmd) {
+  if (cmd === 'eod') showEodDialog.value = true
+  else if (cmd === 'indices') doSyncIndices()
+  else if (cmd === 'etf_baostock') doSyncEtf('baostock')
+  else if (cmd === 'etf_tencent') doSyncEtf('tencent')
+  else if (cmd === 'fundamental') doSyncFundamental()
 }
 
 async function loadExternalMarket() {
