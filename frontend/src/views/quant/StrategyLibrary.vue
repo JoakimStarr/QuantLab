@@ -41,11 +41,57 @@
         </el-form-item>
         <el-form-item label="标的">
           <div v-if="currentTpl?.kind === 'pairs'" class="sym-pair">
-            <el-input v-model="formSymbols[0]" placeholder="如 sh600000 / 600000" />
+            <el-select
+              v-model="formSymbols[0]"
+              filterable
+              remote
+              allow-create
+              reserve-keyword
+              placeholder="输入名称/拼音/代码搜索"
+              :remote-method="(q) => querySymbols(0, q)"
+              :loading="symbolLoading[0]"
+              style="width: 100%"
+            >
+              <el-option v-for="s in symbolOptions[0]" :key="s.value" :label="s.label" :value="s.value">
+                <span>{{ s.label }}</span>
+                <span v-if="s.type" class="sym-type">{{ typeLabel(s.type) }}</span>
+              </el-option>
+            </el-select>
             <span class="sym-sep">vs</span>
-            <el-input v-model="formSymbols[1]" placeholder="如 sh600004 / 600004" />
+            <el-select
+              v-model="formSymbols[1]"
+              filterable
+              remote
+              allow-create
+              reserve-keyword
+              placeholder="输入名称/拼音/代码搜索"
+              :remote-method="(q) => querySymbols(1, q)"
+              :loading="symbolLoading[1]"
+              style="width: 100%"
+            >
+              <el-option v-for="s in symbolOptions[1]" :key="s.value" :label="s.label" :value="s.value">
+                <span>{{ s.label }}</span>
+                <span v-if="s.type" class="sym-type">{{ typeLabel(s.type) }}</span>
+              </el-option>
+            </el-select>
           </div>
-          <el-input v-else v-model="formSymbols[0]" placeholder="如 sh600000 / 600000" />
+          <el-select
+            v-else
+            v-model="formSymbols[0]"
+            filterable
+            remote
+            allow-create
+            reserve-keyword
+            placeholder="输入名称/拼音/代码搜索"
+            :remote-method="(q) => querySymbols(0, q)"
+            :loading="symbolLoading[0]"
+            style="width: 100%"
+          >
+            <el-option v-for="s in symbolOptions[0]" :key="s.value" :label="s.label" :value="s.value">
+              <span>{{ s.label }}</span>
+              <span v-if="s.type" class="sym-type">{{ typeLabel(s.type) }}</span>
+            </el-option>
+          </el-select>
         </el-form-item>
         <el-form-item label="日期区间">
           <el-date-picker
@@ -140,6 +186,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { getStrategyTemplates, runStrategyLibraryBacktest } from '@/api/strategyLibrary'
+import { searchStocks } from '@/api/quant'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
 import { fmtNum, fmtPct } from '@/utils/format'
 import { useThemeRev } from '@/composables/useChartTheme'
@@ -157,6 +204,40 @@ const running = ref(false)
 const result = ref(null)
 
 const catType = (c) => ({ 均值回归: 'success', 趋势: 'primary', 统计套利: 'warning' })[c] || 'info'
+
+// === 标的远程搜索（名称/拼音/代码提示） ===
+const symbolOptions = reactive([[], []])
+const symbolLoading = reactive([false, false])
+const symbolSearchSeq = [0, 0]
+
+function typeLabel(t) {
+  return { stock: '股票', index: '指数', etf: 'ETF' }[t] || ''
+}
+
+function querySymbols(idx, query) {
+  const q = (query || '').trim()
+  if (!q) {
+    symbolOptions[idx] = []
+    return
+  }
+  const seq = ++symbolSearchSeq[idx]
+  symbolLoading[idx] = true
+  searchStocks(q, 10)
+    .then((res) => {
+      if (seq !== symbolSearchSeq[idx]) return // 丢弃过期结果
+      symbolOptions[idx] = (res?.items ?? []).map((s) => ({
+        value: s.qlib_code || s.code,
+        label: `${s.name} (${s.qlib_code || s.code})`,
+        type: s.type,
+      }))
+    })
+    .catch(() => {
+      if (seq === symbolSearchSeq[idx]) symbolOptions[idx] = []
+    })
+    .finally(() => {
+      if (seq === symbolSearchSeq[idx]) symbolLoading[idx] = false
+    })
+}
 
 function openConfig(t) {
   currentTpl.value = t
@@ -373,6 +454,16 @@ onMounted(async () => {
   color: var(--text-tertiary);
   font-size: 12px;
   flex-shrink: 0;
+}
+.sym-type {
+  float: right;
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 16px;
 }
 
 .result-head {

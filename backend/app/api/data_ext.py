@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, Depends
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import async_session, get_db
 from app.core.errors import AppError
 from app.models.stock_index import StockIndex
 from app.models.sync_history import SyncHistory
@@ -57,6 +57,42 @@ async def _get_stock_catalog() -> list[dict]:
     from app.services.quant.data_adapter import get_stock_list
 
     return await get_stock_list()
+
+
+async def _get_index_catalog() -> list[dict]:
+    """加载 stock_index 表（指数/ETF）清单，code 为 qlib 格式（sh000001）。"""
+    async with async_session() as session:
+        rows = await session.execute(
+            select(StockIndex.code, StockIndex.name, StockIndex.type)
+            .order_by(StockIndex.type, StockIndex.code)
+        )
+        return [{"code": r.code, "name": r.name or "", "type": r.type or "index"} for r in rows.all()]
+
+
+async def _build_search_catalog() -> list[dict]:
+    """构建搜索清单：A 股（type=stock）+ 注册指数/ETF（type=index/etf），预计算拼音。"""
+    items: list[dict] = []
+    for s in await _get_stock_catalog():
+        initials, pinyin = _get_name_keys(str(s.get("name", "")))
+        items.append({
+            "code": str(s.get("code", "")),
+            "name": s.get("name", ""),
+            "qlib_code": s.get("qlib_code"),
+            "type": "stock",
+            "initials": initials,
+            "pinyin": pinyin,
+        })
+    for it in await _get_index_catalog():
+        initials, pinyin = _get_name_keys(str(it.get("name", "")))
+        items.append({
+            "code": it["code"],
+            "name": it.get("name", ""),
+            "qlib_code": it["code"],
+            "type": it.get("type", "index"),
+            "initials": initials,
+            "pinyin": pinyin,
+        })
+    return items
 
 
 @router.get("/sync-progress")
@@ -157,55 +193,60 @@ async def search_stocks_api(
     q: str = Query(..., min_length=1, description="股票名称 / 首字母 / 代码"),
     limit: int = Query(20, ge=1, le=50, description="返回条数上限"),
 ):
-    """搜索 A 股：支持中文名称、拼音首字母和股票代码。"""
+    """搜索证券（A 股 + 注册指数/ETF）：支持中文名称、拼音首字母和代码。"""
     q_norm = _normalize_search_text(q)
     if not q_norm:
         return ApiResponse(ok=True, data={"items": [], "query": q, "count": 0})
 
-    catalog = await _get_stock_catalog()
+    catalog = await _build_search_catalog()
     matches: list[dict] = []
     for item in catalog:
-        code = str(item.get("code", "")).strip().lower()
-        name = str(item.get("name", "")).strip()
-        initials, pinyin = _get_name_keys(name)
-        name_norm = _normalize_search_text(name)
-
-        score = -1
-        if q_norm == code:
-            score = 1000
-        elif q_norm == name_norm:
-            score = 950
-        elif q_norm == initials:
-            score = 900
-        elif code.startswith(q_norm):
-            score = 850
-        elif name_norm.startswith(q_norm):
-            score = 800
-        elif initials.startswith(q_norm):
-            score = 760
-        elif q_norm in code:
-            score = 700
-        elif q_norm in name_norm:
-            score = 650
-        elif q_norm in initials:
-            score = 600
-        elif q_norm in pinyin:
-            score = 550
-
+        score = _score_search_item(q_norm, item)
         if score < 0:
             continue
-
         matches.append({
             "code": item.get("code"),
-            "name": name,
+            "name": str(item.get("name", "")).strip(),
             "qlib_code": item.get("qlib_code"),
-            "initials": initials,
-            "pinyin": pinyin,
+            "type": item.get("type", "stock"),  # stock/index/etf
+            "initials": item.get("initials", ""),
+            "pinyin": item.get("pinyin", ""),
             "score": score,
         })
 
     matches.sort(key=lambda x: (-x["score"], x["code"]))
     return ApiResponse(ok=True, data={"items": matches[:limit], "query": q, "count": len(matches)})
+
+
+def _score_search_item(q_norm: str, item: dict) -> int:
+    """搜索评分：代码精确/名称/拼音首字母/前缀/包含 依次降权；无匹配返回 -1。"""
+    code = str(item.get("code", "")).strip().lower()
+    name = str(item.get("name", "")).strip()
+    initials = str(item.get("initials", "")).strip()
+    pinyin = str(item.get("pinyin", "")).strip()
+    name_norm = _normalize_search_text(name)
+
+    if q_norm == code:
+        return 1000
+    if q_norm == name_norm:
+        return 950
+    if q_norm == initials:
+        return 900
+    if code.startswith(q_norm):
+        return 850
+    if name_norm.startswith(q_norm):
+        return 800
+    if initials.startswith(q_norm):
+        return 760
+    if q_norm in code:
+        return 700
+    if q_norm in name_norm:
+        return 650
+    if q_norm in initials:
+        return 600
+    if q_norm in pinyin:
+        return 550
+    return -1
 
 
 @router.get("/sync-history")
