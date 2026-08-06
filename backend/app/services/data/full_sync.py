@@ -58,20 +58,9 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
 
         # 阶段 2/6: 指数同步（baostock/akshare，自动注册 stock_index）
         _restage(32, "阶段2/6: 指数同步（8大指数，注册 stock_index）...")
-        from app.services.data.index_registry import register_indices
-        from app.services.data.index_sync import INDEX_NAMES, sync_indices_to_qlib
+        from app.services.data.index_registry import sync_and_register_indices
 
-        idx = sync_indices_to_qlib(qlib_dir, days=365)
-        try:
-            items = [
-                {"code": c, "name": INDEX_NAMES.get(c), "source": idx.get("source") or "baostock"}
-                for c in idx.get("indices") or []
-            ]
-            n = await register_indices(items)
-            if n:
-                logger.info("阶段2/6 注册 %d 个新指数", n)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("注册指数失败（可稍后同步指数）: %s", e)
+        idx = await sync_and_register_indices(qlib_dir)
         steps.append(f"indices({idx.get('success', 0)}ok/{idx.get('failed', 0)}fail)")
         logger.info("阶段2/6 完成: %s", idx)
 

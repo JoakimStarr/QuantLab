@@ -209,25 +209,9 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                 await run_full_sync(years=args.years or 5, universe=args.universe)
             elif args.kind == "indices":
                 from app.core.config import settings
-                from app.services.data.index_registry import register_indices
-                from app.services.data.index_sync import INDEX_NAMES, sync_indices_to_qlib
+                from app.services.data.index_registry import sync_and_register_indices
 
-                result = sync_indices_to_qlib(settings.qlib_provider_path, days=365)
-                if result.get("ok"):
-                    logger.info("指数同步完成: %s", result)
-                    # 同步成功的指数注册到 stock_index 主表，供数据校验区分指数/股票
-                    try:
-                        items = [
-                            {"code": c, "name": INDEX_NAMES.get(c), "source": result.get("source") or "baostock"}
-                            for c in result.get("indices") or []
-                        ]
-                        n = await register_indices(items)
-                        if n:
-                            logger.info("已注册 %d 个新指数到 stock_index", n)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("注册指数到 stock_index 失败: %s", e)
-                else:
-                    logger.error("指数同步返回错误: %s", result)
+                result = await sync_and_register_indices(settings.qlib_provider_path)
                 finish_progress(bool(result.get("ok")), result.get("error"))
             elif args.kind == "etf":
                 from app.services.data.etf_sync import (

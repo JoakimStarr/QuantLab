@@ -57,6 +57,31 @@ async def register_indices(items: list[dict]) -> int:
     return added
 
 
+async def sync_and_register_indices(provider_uri: str, days: int = 365) -> dict:
+    """同步指数并注册到 stock_index（供 sync_worker / full_sync 复用）。
+
+    Returns:
+        dict: sync_indices_to_qlib 的结果（ok/success/failed/indices/source/...）。
+    """
+    from app.services.data.index_sync import INDEX_NAMES, sync_indices_to_qlib
+
+    result = sync_indices_to_qlib(provider_uri, days=days)
+    if result.get("ok"):
+        items = [
+            {"code": c, "name": INDEX_NAMES.get(c), "source": result.get("source") or "baostock"}
+            for c in result.get("indices") or []
+        ]
+        try:
+            n = await register_indices(items)
+            if n:
+                logger.info("已注册 %d 个新指数到 stock_index", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("注册指数到 stock_index 失败: %s", e)
+    else:
+        logger.error("指数同步返回错误: %s", result)
+    return result
+
+
 async def load_index_codes() -> set[str]:
     """返回全部已注册指数/ETF 代码集合（小写，如 {'sh000001', 'sh510300'}）。
 

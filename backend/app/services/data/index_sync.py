@@ -11,14 +11,13 @@
 """
 import os
 import logging
-import numpy as np
 import pandas as pd
 from datetime import datetime
 
 from app.core.config import settings
 from app.services.data.eod_incremental import (
-    _write_bin,
     _get_calendar,
+    _sync_stock_bin,
 )
 
 logger = logging.getLogger(__name__)
@@ -176,7 +175,6 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
         return {"ok": False, "error": "日历为空"}
 
     cal_set = set(calendar)
-    cal_index = {d: i for i, d in enumerate(calendar)}
 
     index_list = _get_index_list(indices)
     success = 0
@@ -220,20 +218,13 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
                 failed += 1
                 continue
 
-            # 写入 bin 文件
+            # 写入 bin 文件（复用 _sync_stock_bin 统一日历契约与原子写盘）
             feat_dir = os.path.join(provider_uri, "features", qlib_code.lower())
-            os.makedirs(feat_dir, exist_ok=True)
-
+            out = pd.DataFrame({"date": df["date"].astype(str)})
             for field in INDEX_FIELDS:
-                if field not in df.columns:
-                    continue
-                bin_path = os.path.join(feat_dir, f"{field}.day.bin")
-                # 构建完整数组，按日历索引填充
-                values = np.full(len(calendar), np.nan, dtype=np.float32)
-                for d, val in zip(df["date"].tolist(), df[field].tolist()):
-                    if d in cal_index and val is not None and not pd.isna(val):
-                        values[cal_index[d]] = float(val)
-                _write_bin(bin_path, values, 0)
+                if field in df.columns:
+                    out[field] = pd.to_numeric(df[field], errors="coerce")
+            _sync_stock_bin(feat_dir, out, calendar, INDEX_FIELDS, overwrite=True)
 
             logger.info("指数 %s 同步完成(%s): %d 条数据", qlib_code, source_used, len(df))
             success += 1
