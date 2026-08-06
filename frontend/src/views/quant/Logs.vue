@@ -146,6 +146,7 @@ import { Delete, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { getLogFiles, getLogs, clearLogs } from '@/api/logs'
+import { humanSize } from '@/utils/format'
 
 const STORAGE_KEY = 'quantlab:logview:state'
 
@@ -289,17 +290,6 @@ function toggleAutoRefresh(val) {
     if (refreshTimer) clearInterval(refreshTimer)
     refreshTimer = null
   }
-}
-
-function humanSize(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB']
-  let size = bytes
-  let i = 0
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024
-    i++
-  }
-  return `${size.toFixed(size >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
 function clearCurrentLog() {

@@ -345,6 +345,7 @@ import { ElButton } from 'element-plus/es/components/button/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import { Plus, Refresh, Download, Warning, MagicStick, Search } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import { fmt, numClass } from '@/utils/format'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
@@ -880,20 +881,6 @@ const categoryMap = {
 }
 const categoryLabel = (c) => categoryMap[c]?.label || c || '—'
 const categoryBadge = (c) => categoryMap[c]?.badge || 'muted'
-
-// 数值格式化：空值显示 —
-function fmt(val, digits = 3) {
-  if (val === null || val === undefined || val === '') return '—'
-  const n = Number(val)
-  return Number.isNaN(n) ? '—' : n.toFixed(digits)
-}
-
-// 正负数着色：正数 success，负数 danger
-function numClass(val) {
-  const n = Number(val)
-  if (Number.isNaN(n) || n === 0) return ''
-  return n > 0 ? 'is-positive' : 'is-negative'
-}
 
 // 换手率：小数 → 百分比；阈值着色（过低稳定性存疑 success，过高区分度存疑 warning）
 function turnoverPct(val) {

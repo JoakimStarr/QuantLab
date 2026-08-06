@@ -111,6 +111,7 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { deepAnalysis } from '@/api/quant'
+import { fmt as fmtNum, numClass } from '@/utils/format'
 import { chartTheme, quantileGradient } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
 
@@ -218,20 +219,7 @@ const hasIcDist = computed(() => icDistribution.value.counts.length > 0)
 const hasQuantile = computed(() => quantileReturns.value.dates.length > 0)
 const hasTurnover = computed(() => turnoverCurve.value.turnover.length > 0)
 const hasDecay = computed(() => decay.value.ic.length > 0)
-// === 数值格式化 ===
-function fmtNum(val, digits = 2, suffix = '') {
-  if (val === null || val === undefined || val === '') return '—'
-  const n = Number(val)
-  if (Number.isNaN(n)) return '—'
-  const display = suffix === '%' ? n * 100 : n
-  return display.toFixed(digits) + suffix
-}
-
-function numClass(val) {
-  const n = Number(val)
-  if (Number.isNaN(n) || n === 0) return ''
-  return n > 0 ? 'is-positive' : 'is-negative'
-}
+// === 数值格式化 ===（fmtNum/numClass 收敛到 utils/format.js）
 
 // 提取分箱中心（兼容数值 / "[-0.1,0.0)" / "-0.1~0.0" 等格式）
 function binCenter(b) {

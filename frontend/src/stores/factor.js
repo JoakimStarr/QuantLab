@@ -30,26 +30,29 @@ export const useFactorStore = defineStore('factor', () => {
     lastFetch.value = null
   }
 
+  // 写操作后的统一刷新：失效缓存 + 重新拉取（等价于 fetchList(true)，去掉三连冗余）
+  async function refresh() {
+    invalidate()
+    await fetchList()
+  }
+
   async function create(data) {
     const res = await addFactor(data)
-    invalidate()
-    await fetchList(true)
+    await refresh()
     return res
   }
 
   async function remove(id) {
     const res = await disableFactor(id)
-    invalidate()
-    await fetchList(true)
+    await refresh()
     return res
   }
 
   async function evaluate(id, params) {
     const res = await evaluateFactor(id, params)
-    invalidate()
-    await fetchList(true)
+    await refresh()
     return res
   }
 
-  return { factors, loading, factorCount, activeFactors, fetchList, invalidate, create, remove, evaluate }
+  return { factors, loading, factorCount, activeFactors, fetchList, invalidate, create, remove, evaluate, refresh }
 })

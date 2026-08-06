@@ -175,6 +175,7 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
+import { fmt, numClass } from '@/utils/format'
 import { useThemeRev } from '@/composables/useChartTheme'
 
 const themeRev = useThemeRev()
@@ -452,20 +453,6 @@ const radarOption = computed(() => {
 })
 
 // 数值格式化（suffix='%' 时将小数转为百分比）
-function fmt(val, digits = 3, suffix = '') {
-  if (val === null || val === undefined || val === '') return '—'
-  const n = Number(val)
-  if (Number.isNaN(n)) return '—'
-  const display = suffix === '%' ? n * 100 : n
-  return display.toFixed(digits) + suffix
-}
-
-function numClass(val) {
-  const n = Number(val)
-  if (Number.isNaN(n) || n === 0) return ''
-  return n > 0 ? 'is-positive' : 'is-negative'
-}
-
 // 标准化净值数据
 function normalizeNavSeries(data) {
   // 后端返回 nav_curves: [{ result_id, curve: { dates, portfolio, benchmark } }]

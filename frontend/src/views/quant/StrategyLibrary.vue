@@ -141,6 +141,7 @@ import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { getStrategyTemplates, runStrategyLibraryBacktest } from '@/api/strategyLibrary'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
+import { fmtNum, fmtPct } from '@/utils/format'
 import { useThemeRev } from '@/composables/useChartTheme'
 
 const themeRev = useThemeRev()
@@ -199,15 +200,6 @@ async function runBacktest() {
   } finally {
     running.value = false
   }
-}
-
-function fmtPct(v, digits = 2) {
-  if (v == null || v === '') return '--'
-  return (v * 100).toFixed(digits) + '%'
-}
-function fmtNum(v, digits = 2) {
-  if (v == null || v === '') return '--'
-  return Number(v).toFixed(digits)
 }
 
 const metricList = computed(() => {

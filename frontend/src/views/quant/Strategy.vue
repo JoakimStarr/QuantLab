@@ -1032,6 +1032,8 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
+import { formatTime, fmtNum, fmtPct } from '@/utils/format'
+import { downloadBlob } from '@/utils/download'
 import { useThemeRev } from '@/composables/useChartTheme'
 
 const themeRev = useThemeRev()
@@ -1152,22 +1154,6 @@ const form = reactive({
 // === 轮询控制 ===
 let pollTimer = null
 let statusPollTimer = null
-
-// === 时间格式化 ===
-function formatTime(ts) {
-  if (!ts) return '--'
-  return ts.replace('T', ' ').slice(0, 19)
-}
-
-// === 数值格式化 ===
-function fmtPct(v, digits = 2) {
-  if (v == null || v === '') return '--'
-  return (v * 100).toFixed(digits) + '%'
-}
-function fmtNum(v, digits = 2) {
-  if (v == null || v === '') return '--'
-  return Number(v).toFixed(digits)
-}
 
 // === 交易明细（回测动作与行为） ===
 const tradeType = ref('all')
@@ -1689,14 +1675,7 @@ async function exportTrades() {
     if (id == null) return
     const { exportTrades } = await import('@/api/quant')
     const res = await exportTrades(id)
-    // blob 下载：res.data 为 Blob（blobRequest 无统一拦截器）
-    const blob = res?.data || res
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `backtest_${id}_trades.csv`
-    a.click()
-    window.URL.revokeObjectURL(url)
+    downloadBlob(res?.data || res, `backtest_${id}_trades.csv`)
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('导出交易明细失败')
   }

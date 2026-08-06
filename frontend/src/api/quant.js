@@ -2,10 +2,10 @@ import request from './index'
 import axios from 'axios'
 
 // 用于文件下载的 axios 实例（不走统一响应拦截器，直接返回完整响应）
+// 复用基础 request 的 baseURL/paramsSerializer 配置，避免重复定义
 const blobRequest = axios.create({
-  baseURL: '/api/v1',
+  ...request.defaults,
   timeout: 60000,
-  paramsSerializer: { indexes: null },
 })
 
 // === 量化数据同步与状态 ===

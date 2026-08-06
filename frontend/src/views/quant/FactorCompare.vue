@@ -149,6 +149,7 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme } from '@/utils/chartTheme'
+import { fmt, numClass } from '@/utils/format'
 import { useThemeRev } from '@/composables/useChartTheme'
 
 const themeRev = useThemeRev()
@@ -301,20 +302,6 @@ const seriesOption = computed(() => {
     series,
   }
 })
-
-// 数值格式化：空值显示 —
-function fmt(val, digits = 3) {
-  if (val === null || val === undefined || val === '') return '—'
-  const n = Number(val)
-  return Number.isNaN(n) ? '—' : n.toFixed(digits)
-}
-
-// 正负数着色
-function numClass(val) {
-  const n = Number(val)
-  if (Number.isNaN(n) || n === 0) return ''
-  return n > 0 ? 'is-positive' : 'is-negative'
-}
 
 // 标准化衰减数据
 function normalizeDecay(data) {

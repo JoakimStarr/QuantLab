@@ -657,6 +657,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled, ArrowDown } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { formatDuration, formatTime, humanSize } from '@/utils/format'
 import {
   getQuantDataStatus,
   syncFullData,
@@ -755,32 +756,6 @@ function getStatusClass(status) {
   if (status === 'syncing') return 'warning'
   if (status === 'failed') return 'danger'
   return ''
-}
-
-function formatTime(ts) {
-  if (!ts) return '--'
-  return ts.replace('T', ' ').slice(0, 19)
-}
-
-function formatDuration(seconds) {
-  if (!seconds || seconds <= 0) return '--'
-  if (seconds < 60) return seconds + 's'
-  if (seconds < 3600) return Math.floor(seconds / 60) + 'm' + (seconds % 60 > 0 ? Math.round(seconds % 60) + 's' : '')
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  return h + 'h' + (m > 0 ? m + 'm' : '')
-}
-
-function humanSize(bytes) {
-  if (!bytes && bytes !== 0) return '--'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let size = bytes
-  let i = 0
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024
-    i++
-  }
-  return `${size.toFixed(size >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
 async function loadPreview(code) {
