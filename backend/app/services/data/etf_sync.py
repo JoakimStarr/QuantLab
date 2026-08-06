@@ -301,6 +301,8 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
         return {"ok": False, "error": "qlib 日历为空，请先同步 A 股数据"}
 
     # 对齐窗口：现有 etf_daily 最早日期 → 主日历末日；无数据时回退 days 窗口
+    from app.services.data.sync_progress import update_progress as _up
+
     existing_min = await _load_etf_min_date()
     end = calendar[-1]
     if existing_min:
@@ -316,6 +318,7 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
     total = len(codes)
     success = fail = 0
     pg_rows = []
+    _up(pct=2, status="running", message=f"腾讯 ETF 对齐回填开始（{total} 只，窗口 {start}~{end}）")
     for idx, code in enumerate(codes):
         df = fetch_etf_history_tencent(code.lower(), start, end)
         if df is None or df.empty:
@@ -342,7 +345,10 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
         except Exception as e:  # noqa: BLE001
             logger.debug("腾讯写 %s 失败: %s", code, e)
             fail += 1
-        if (idx + 1) % 200 == 0 or idx + 1 == total:
+        if (idx + 1) % 100 == 0 or idx + 1 == total:
+            pct = 5 + int(90 * (idx + 1) / total)
+            _up(pct=pct, status="running",
+                message=f"腾讯 ETF 对齐 {idx + 1}/{total}（成功{success} 失败{fail}）")
             logger.info("腾讯 ETF 对齐进度: %d/%d (成功%d 失败%d)", idx + 1, total, success, fail)
             await _insert_etf_daily(pg_rows, upsert=True)
             pg_rows = []
@@ -351,6 +357,7 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
 
     pool = await rebuild_etf_pool(provider_uri)
     registered = await _register_synced_etfs(codes)
+    _up(pct=100, status="running", message=f"腾讯 ETF 对齐完成: 成功{success} 失败{fail}")
     return {
         "ok": True, "source": "tencent", "success": success, "failed": fail,
         "window": [start, end], "etf_count": total, "pool_count": len(pool),

@@ -360,6 +360,7 @@ _TASK_LABEL = {
     "eod": "增量同步",
     "repair": "数据补齐",
     "indices": "指数同步",
+    "etf": "ETF 同步",
     "eastmoney": "宏观同步",
     "fundamental": "财报同步",
     "full": "一键全同步",

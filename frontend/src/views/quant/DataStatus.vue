@@ -955,6 +955,7 @@ const taskLabel = (src) =>
     backfill: '数据回填',
     baostock: '数据同步',
     eod: '增量同步',
+    etf: 'ETF 同步',
     eastmoney: '宏观同步',
     indices: '指数同步',
     fundamental: '财报同步',
