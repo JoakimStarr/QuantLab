@@ -127,6 +127,30 @@ async def register_etf(code: str, name: str | None = None, source: str | None = 
     return inserted
 
 
+async def register_etfs_bulk(items: list[dict], source: str = "baostock") -> int:
+    """批量注册 ETF（幂等 ON CONFLICT DO NOTHING），返回新增数。
+
+    替代逐只 ``register_etf`` 的 N+1 次 commit（全市场 ETF ~1600 只）。
+    """
+    if not items:
+        return 0
+    rows = [{
+        "code": (it.get("code") or "").strip().lower(),
+        "name": it.get("name"),
+        "source": it.get("source") or source,
+        "type": "etf",
+    } for it in items]
+    rows = [r for r in rows if r["code"]]
+    if not rows:
+        return 0
+    from app.services.data.db_utils import bulk_upsert
+
+    inserted = await bulk_upsert(StockIndex, rows, ["code"], batch=500)
+    if inserted:
+        logger.info("已批量注册 %d 个 ETF", inserted)
+    return inserted
+
+
 async def load_index_map() -> dict[str, dict]:
     """返回 code -> {name, source} 映射（小写 code）。"""
     async with async_session() as session:

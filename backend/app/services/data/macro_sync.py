@@ -507,6 +507,36 @@ async def _load_macro_series(indicator: str, field_name: str) -> pd.Series:
     return s[~s.index.duplicated(keep="last")].sort_index()
 
 
+async def _load_all_macro_series() -> dict[tuple[str, str], pd.Series]:
+    """一次加载全部宏观字段序列 → {(indicator, field_name): pd.Series}。
+
+    替代广播时逐字段顺序查询（51 个字段 = 51 次 DB 往返）。
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(
+                MacroIndicator.indicator,
+                MacroIndicator.field_name,
+                MacroIndicator.available_date,
+                MacroIndicator.value,
+            )
+            .where(
+                MacroIndicator.available_date.isnot(None),
+                MacroIndicator.value.isnot(None),
+            )
+            .order_by(MacroIndicator.available_date)
+        )
+        rows = result.all()
+    buckets: dict[tuple[str, str], list] = {}
+    for ind, fname, d, v in rows:
+        buckets.setdefault((ind, fname), []).append((d, float(v)))
+    out: dict[tuple[str, str], pd.Series] = {}
+    for key, pairs in buckets.items():
+        s = pd.Series([v for _, v in pairs], index=pd.to_datetime([d for d, _ in pairs]))
+        out[key] = s[~s.index.duplicated(keep="last")].sort_index()
+    return out
+
+
 def forward_fill_to_daily(provider_uri: str, field_name: str, series: pd.Series) -> np.ndarray:
     """把月度序列按日历 forward-fill 成日频数组（长度=日历长度）。
 
@@ -604,14 +634,15 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
     ]
     total_fields = len(all_field_specs)
     total_written = 0
+    series_map = await _load_all_macro_series()  # 一次批量加载全部字段，避免逐字段 N+1
     for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
         if progress_cb:
             progress_cb(
                 45 + int(55 * (j + 1) / total_fields),
                 f"广播字段 {j + 1}/{total_fields}（{field_name}）...",
             )
-        series = await _load_macro_series(indicator_key, field_name)
-        if series.empty:
+        series = series_map.get((indicator_key, field_name))
+        if series is None or series.empty:
             logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
             continue
         values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)

@@ -16,6 +16,7 @@ AKShare 返回 6 位代码，需按前缀映射交易所：
 import logging
 import tempfile
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from functools import partial
 from typing import Callable, Optional
@@ -48,8 +49,20 @@ def _get_stock_list_sync() -> pd.DataFrame:
     return ak.stock_info_a_code_name()
 
 
-async def get_stock_list() -> list[dict]:
-    """获取 A 股列表 [{code, name, qlib_code}]。"""
+# A 股列表进程级缓存（1 小时），避免每次搜索/选股池打 akshare 网络请求。
+# 收拢 data_ext 与 get_universe 各自维护的重复缓存。
+_stock_list_cache: Optional[list[dict]] = None
+_stock_list_updated_at: Optional[datetime] = None
+_STOCK_LIST_TTL_SECONDS = 3600
+
+
+async def get_stock_list(force_refresh: bool = False) -> list[dict]:
+    """获取 A 股列表 [{code, name, qlib_code}]（1 小时进程级缓存）。"""
+    global _stock_list_cache, _stock_list_updated_at
+    now = datetime.now()
+    if not force_refresh and _stock_list_cache is not None and _stock_list_updated_at is not None:
+        if (now - _stock_list_updated_at).total_seconds() < _STOCK_LIST_TTL_SECONDS:
+            return _stock_list_cache
     df = await _run_async(_get_stock_list_sync, timeout=60)
     if df is None or df.empty:
         raise DataFetchError("获取 A 股列表为空")
@@ -63,6 +76,8 @@ async def get_stock_list() -> list[dict]:
             "name": str(row[col_name]).strip(),
             "qlib_code": to_qlib_code(code),
         })
+    _stock_list_cache = items
+    _stock_list_updated_at = now
     return items
 
 

@@ -67,24 +67,28 @@ def _rebuild_one_stock(code_upper: str, rows: list, calendar: list, qlib_dir: st
     _sync_stock_bin(feat_dir, out, calendar, BIN_FIELDS, overwrite=True)
 
 
-async def _fetch_stock_rows(code: str) -> list:
-    """取某只股票在 stock_daily 的全部行（按日期升序），返回 dict 列表。
+async def _fetch_stock_rows_bulk(codes: list) -> dict:
+    """一次查询多只股票的全部 stock_daily 行，按 code 分组（大写）。
 
-    stock_daily.code 存大写（如 SH600000），而校验/修复目标的 repair_codes
-    来自 features 目录名（小写 sh600000），查询前必须归一化大小写，否则
-    所有目标都查不到行、bin 重建被静默跳过（表现为 bins(0ok/0failed)）。
+    消除逐只查询的 N+1 DB 往返（全市场 ~5000 只）。
     """
+    if not codes:
+        return {}
     stmt = (
         select(*StockDaily.__table__.columns)
-        .where(StockDaily.code == code.upper())
-        .order_by(StockDaily.trade_date)
+        .where(StockDaily.code.in_([c.upper() for c in codes]))
+        .order_by(StockDaily.code, StockDaily.trade_date)
     )
     async with async_session() as session:
-        return [dict(r) for r in (await session.execute(stmt)).mappings().all()]
+        rows = [dict(r) for r in (await session.execute(stmt)).mappings().all()]
+    grouped: dict[str, list] = {}
+    for r in rows:
+        grouped.setdefault(r["code"], []).append(r)
+    return grouped
 
 
 async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> dict:
-    """对目标股票逐只从 PG 重建 bin（写盘走全局线程池并行）。
+    """对目标股票从 PG 重建 bin（一次批量查询 + 写盘走全局线程池并行）。
 
     Returns:
         dict: {"ok": 重建成功数, "failed": 失败数, "skipped": 无 DB 记录跳过数}
@@ -94,18 +98,19 @@ async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> d
 
     if not codes:
         return {"ok": 0, "failed": 0, "skipped": 0}
+    grouped = await _fetch_stock_rows_bulk(codes)
     ex = _get_write_pool()
     ok = failed = skipped = 0
     total = len(codes)
     for i, code_upper in enumerate(codes):
+        rows = grouped.get(code_upper.upper())
+        if not rows:
+            # stock_daily 无此代码（指数目录 / 从未入库）→ 无法从 PG 重建。
+            # 记录 warning 而非静默跳过，否则用户会误以为"补齐没生效"。
+            skipped += 1
+            logger.warning("跳过重建 %s: stock_daily 无记录（可能为指数或数据缺失）", code_upper)
+            continue
         try:
-            rows = await _fetch_stock_rows(code_upper)
-            if not rows:
-                # stock_daily 无此代码（指数目录 / 从未入库）→ 无法从 PG 重建。
-                # 记录 warning 而非静默跳过，否则用户会误以为"补齐没生效"。
-                skipped += 1
-                logger.warning("跳过重建 %s: stock_daily 无记录（可能为指数或数据缺失）", code_upper)
-                continue
             fut = ex.submit(_rebuild_one_stock, code_upper, rows, list(calendar), qlib_dir)
             fut.result()
             ok += 1

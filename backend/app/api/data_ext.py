@@ -19,8 +19,6 @@ from app.services.data.sync_progress import ensure_no_bin_sync, get_progress
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
-_stock_catalog_cache: list[dict] | None = None
-_stock_catalog_updated_at: datetime | None = None
 
 
 def _read_eod_result() -> dict | None:
@@ -55,16 +53,10 @@ def _get_name_keys(name: str) -> tuple[str, str]:
 
 
 async def _get_stock_catalog() -> list[dict]:
-    global _stock_catalog_cache, _stock_catalog_updated_at
-    if _stock_catalog_cache and _stock_catalog_updated_at and (datetime.now() - _stock_catalog_updated_at).seconds < 3600:
-        return _stock_catalog_cache
-
+    # 进程级缓存收敛到 data_adapter.get_stock_list（1h TTL），这里直接透传
     from app.services.quant.data_adapter import get_stock_list
 
-    items = await get_stock_list()
-    _stock_catalog_cache = items
-    _stock_catalog_updated_at = datetime.now()
-    return items
+    return await get_stock_list()
 
 
 @router.get("/sync-progress")

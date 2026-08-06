@@ -164,7 +164,7 @@ async def _register_synced_etfs(codes: list) -> int:
     from sqlalchemy import select
     from app.core.database import async_session
     from app.models.baostock import StockBasic
-    from app.services.data.index_registry import register_etf
+    from app.services.data.index_registry import register_etfs_bulk
 
     name_map = {}
     try:
@@ -176,11 +176,8 @@ async def _register_synced_etfs(codes: list) -> int:
     except Exception as e:  # noqa: BLE001
         logger.warning("加载 ETF 名称失败: %s", e)
 
-    added = 0
-    for c in sorted(set(codes)):
-        if await register_etf(c, name_map.get(c.lower())):
-            added += 1
-    return added
+    items = [{"code": c, "name": name_map.get(c.lower())} for c in sorted(set(codes))]
+    return await register_etfs_bulk(items)
 
 
 # ============ 腾讯源（qfq 对齐回填） ============
