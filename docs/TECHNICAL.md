@@ -1,6 +1,6 @@
 # QuantLab 技术文档 - 架构总览
 
-> 版本：v3.0.2 · 最后更新：2026-08-02
+> 版本：v3.1.0 · 最后更新：2026-08-06
 > 配套仓库：[JoakimStarr/QuantLab](https://github.com/JoakimStarr/QuantLab)
 
 本文档是 QuantLab 的**架构总览**：回答"整个系统由哪些模块组成、各模块怎么协作、数据从哪来到哪去"。读完后你应该能在脑海里画出系统的完整地图。
@@ -34,7 +34,7 @@
 │  ├─ api/        路由层（auth/quant_data/factor/strategy/mining/market）│
 │  ├─ core/       配置/数据库/鉴权/限流/调度/执行器/任务恢复/Metrics  │
 │  ├─ models/     ORM（Factor/Strategy/BacktestResult/MiningTask/...）│
-│  ├─ scheduler/  APScheduler 定时任务（数据同步、归档、清理）          │
+│  ├─ scheduler/  APScheduler 定时任务（因子衰减、任务回收、归档、清理）     │
 │  ├─ migrations/ Alembic 数据库迁移                                   │
 │  └─ services/   业务核心                                             │
 │     ├─ quant/   qlib 封装（数据适配/因子评价/回测引擎/组合指标）       │
@@ -226,10 +226,13 @@ async def init_db():
 |------|------|
 | `qlib_init.py` | qlib 单例初始化（线程锁保护，可并发调用） |
 | `data_adapter.py` | qlib 数据读取封装 |
-| `factor_eval.py` | 因子评价（IC/RankIC/ICIR/换手/衰减） |
-| `factor_validator.py` | **多维验证**（v2.4.0+）：样本分割 + 滚动 IC + t-test + 多样性 |
+| `factor_eval.py` | 因子评价（IC/RankIC/ICIR/换手/衰减），AutoML 表达式经训练 bundle 解析 |
+| `factor_validator.py` | **多维验证**：样本分割 + 滚动 IC + t-test + 多样性 |
+| `factor_monitor.py` | 因子衰减检测（定时任务 18:05） |
 | `backtest_engine.py` | top-k dropout 选股回测 + 涨跌停/停牌过滤 + 滑点 |
-| `backtest_metrics.py` | 组合指标（年化、夏普、索提诺、最大回撤、卡玛） |
+| `qlib_backtest.py` / `vbt_backtest.py` / `rule_backtest.py` | qlib / vbt / 规则策略回测后端 |
+| `portfolio.py` / `portfolio_report.py` | 组合指标（年化、夏普、索提诺、最大回撤、卡玛） |
+| `walk_forward.py` | walk-forward 滚动回测 |
 
 **qlib 初始化的陷阱**：
 - pyqlib 不支持 Python 3.13，必须 3.11
@@ -242,11 +245,12 @@ async def init_db():
 |------|------|
 | `expression.py` | 表达式沙箱（AST 白名单 + look-ahead bias 检测） |
 | `library.py` | 因子 CRUD + 批量导入 + 评价更新 |
-| `alpha158.py` | 158 个 qlib 标准因子导入 + **批量评价（v2.5.x 优化重点）** |
+| `alpha158.py` | 158 个 qlib 标准因子导入 + 批量评价/回补指标 |
 | `neutralize.py` | 中性化（市值、行业） |
 | `orthogonalize.py` | 正交化（去除与已有因子的相关性） |
-| `compare.py` | 因子对比 |
-| `decay.py` | IC 衰减分析 |
+| `factor_compare.py` | 因子对比 |
+| `ai_explain.py` | LLM 因子解释 |
+| `builtin_factors.py` / `etf_factors.py` | 内置因子 / ETF 因子 |
 
 **表达式沙箱关键点**：
 - 算子白名单（`Ref/Mean/Std/Max/Min/Sum/Rank/Corr/Cov/Delta/Slope/Resi/WMA/EMA` 等）
@@ -280,9 +284,10 @@ async def init_db():
 详见 [docs/DATA_LAYER.md](DATA_LAYER.md)。
 
 要点：
-- **baostock** 是主源（一次拉全市场日K，含 ST 标记和估值字段）
-- **akshare** 作补充（新闻/市值/行业/EOD 增量兜底）
-- **全量回填**：`POST /api/v1/quant/data/sync-full?years=N`（一键全同步的第一阶段），从最新向旧逐交易日拉取
+- **baostock** 是主源（一次拉全市场日K，含 ST 标记和估值字段）+ ETF 日K
+- **akshare** 作补充（宏观指标/财报摘要/指数/外盘/EOD 增量兜底）
+- **一键全同步**：`POST /api/v1/quant/data/sync-full?years=N`，按序串联 A股回填 → 指数 → 宏观(广播) → 财报(拉取+广播) → 外盘（bin 需对齐最终日历）
+- **ETF**：`POST /api/v1/quant/data/sync-etf`（`etf_daily` 窄表 + `instruments/etf_all.txt` + `stock_index(type='etf')`）
 - **幂等写入**：PG 使用 `ON CONFLICT DO NOTHING`，重复执行只补缺口
 
 ### 2.10 GPU 检测（`backend/app/core/gpu_utils.py`）
@@ -308,6 +313,8 @@ if is_gpu_available():
 |------|----------|------|
 | `auth` | `POST /auth/login`、`GET /auth/status`、`GET /auth/ai-status` | 登录、状态、可用 provider 探测 |
 | `quant_data` | `GET /quant/data/qlib-status`、`POST /quant/data/sync-full` | qlib 可用性、数据同步 |
+| `data_ext` | `POST /quant/data/eod-sync`、`/sync-etf`、`/fundamental/sync`、`GET /quant/data/validate`、`POST /quant/data/repair` | 增量同步/校验/补齐 |
+| `macro` | `POST /macro/sync`、`GET /macro/indicators`、`/macro/status`、`/macro/snapshot` | 宏观指标同步/查询 |
 | `factor` | `GET /factors`、`POST /factors/{id}/evaluate` | 因子 CRUD + 评价 |
 | `factor_ext` | `POST /factors/compare`、`GET /factors/{id}/decay`、`POST /factors/seed-alpha158` | 因子对比、衰减、Alpha158、中性化 |
 | `strategy` | `POST /strategies/{id}/backtest`、`GET /strategies/{id}/backtest-results` | 策略 + 回测 |
@@ -338,11 +345,12 @@ frontend/src/
 │       ├── FactorCompare.vue        # 因子对比
 │       ├── FactorDeepAnalysis.vue   # 深度分析（分布、衰减、显著性）
 │       ├── Strategy.vue             # 策略回测
-│       ├── ParamSweep.vue           # 参数寻优
+│       ├── StrategyLibrary.vue      # 策略库
 │       ├── BacktestCompare.vue      # 回测对比
 │       ├── Mining.vue               # AI 因子挖掘
-│       ├── DataStatus.vue           # 数据状态
-│       └── Market.vue               # 行情
+│       ├── DataStatus.vue           # 数据管理（同步/校验/补齐/指数）
+│       ├── Macro.vue                # 宏观指标
+│       └── Logs.vue                 # 日志
 ├── stores/                  # Pinia 状态管理
 │   ├── auth.js              # 用户登录态
 │   ├── app.js               # 全局 UI 状态

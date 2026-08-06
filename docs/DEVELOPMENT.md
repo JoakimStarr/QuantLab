@@ -8,7 +8,7 @@ summary: 环境准备、项目结构、配置、启动流程、代码规范、�
 
 # 开发手册
 
-> 文档版本：v3.0.2 · 最后更新：2026-08-02
+> 文档版本：v3.1.0 · 最后更新：2026-08-06
 > 本文档面向 QuantLab 开发者，覆盖环境搭建、项目结构、配置、启动、规范、部署与排障。
 > 所有命令与字段均来自实际代码，WSL Ubuntu 为主开发环境。
 
@@ -55,7 +55,7 @@ python3.11 -m venv .venv
 ```
 
 **关键依赖约束**（见 `requirements.txt`）：
-- `akshare==1.18.63`：补充数据源（新闻/市值/行业/EOD 增量兜底），版本锁定，接口变动频繁，升级需测试
+- `akshare==1.18.63`：补充数据源（宏观指标/财报摘要/指数/外盘/EOD 增量兜底），版本锁定，接口变动频繁，升级需测试
 - `pyqlib>=0.9.6` + `protobuf<4` + `setuptools<81`：qlib 依赖 mlflow，需约束 protobuf（5.x 移除 service 模块）与 setuptools（83 移除 pkg_resources）
 - `gplearn>=0.4.2`：符号回归
 - `baostock>=0.8.9`：主数据源（A 股日 K 全市场回填）
@@ -93,21 +93,23 @@ QuantLab/
 │   │   │   ├── auth.py          认证（登录/状态/me/ai-status）
 │   │   │   ├── config.py        运行时配置
 │   │   │   ├── docs.py          技术文档列表/详情
-│   │   │   ├── quant_data.py    量化数据同步/状态
-│   │   │   ├── data_ext.py      数据扩展（进度/预览/历史/数据源/EOD/指数/行业/完整性）
+│   │   │   ├── quant_data.py    量化数据同步/状态/外盘
+│   │   │   ├── data_ext.py      数据扩展（进度/预览/搜索/历史/统计/EOD/同步/校验/补齐）
+│   │   │   ├── macro.py         宏观指标（同步/序列/状态/快照）
 │   │   │   ├── factor.py        因子 CRUD/评价/种子
 │   │   │   ├── factor_ext.py    因子对比/衰减/导出/分层/中性化/深度分析
 │   │   │   ├── strategy.py      策略 CRUD/回测/结果
 │   │   │   ├── strategy_ext.py  参数扫描/回测对比/交易明细/walk-forward
+│   │   │   ├── strategy_rule.py 规则策略
 │   │   │   ├── mining.py        挖掘任务（llm/symbolic/automl/text）
 │   │   │   ├── mining_ext.py    挖掘模板
 │   │   │   ├── market.py        市场行情（指数K线/概览）
 │   │   │   └── logs.py          日志查询
 │   │   ├── core/                基础设施（config/auth/database/middleware/scheduler/ratelimit/recovery/executor/websocket_manager/logging_config/errors）
-│   │   ├── models/              ORM 模型（factor/strategy/backtest_result/mining_task/...）
+│   │   ├── models/              ORM 模型（factor/strategy/backtest_result/mining_task/macro/fundamental/stock_index/...）
 │   │   ├── schemas/             Pydantic 模型（common.ApiResponse / quant.SyncDataRequest）
 │   │   └── services/            业务层
-│   │       ├── data/            数据采集层（详见 DATA_LAYER.md）
+│   │       ├── data/            数据采集层（回填/EOD/指数/ETF/宏观/财报/外盘/校验/补齐，详见 DATA_LAYER.md）
 │   │       ├── factor/          因子库/表达式沙箱/Alpha158/中性化/正交化/对比
 │   │       ├── quant/           因子评价/回测引擎/QLib回测/组合/优化器/walk-forward
 │   │       ├── mining/          LLM/符号回归/AutoML/文本因子挖掘
@@ -184,7 +186,7 @@ QuantLab/
 | `mining.symbolic` | `population` / `generations` / `tournament_size` / `parsimony_coefficient` | 1000 / 30 / 20 / 0.001 | gplearn 参数 |
 | `mining.text` | `max_news_per_day` / `sentiment_labels` | 50 / [positive,neutral,negative] | 文本因子配置 |
 | `mining.automl` | `combo_method` | lightgbm | AutoML 方法 |
-| `scheduler` | `quant_data_update_time` | 18:00 | 定时同步时间 |
+| `scheduler` | `quant_data_update_time` | 18:00 | 遗留字段，**已不使用**（数据同步改手动触发，见 §4.5） |
 | `task` | `max_concurrent` | 2 | 挖掘任务并发上限 |
 | `task` | `cpu_workers` / `io_workers` | 4 / 8 | 进程池/线程池大小 |
 | `task.timeouts` | `llm` / `llm_hard_limit_seconds` / `symbolic` / `text` / `automl` / `optimize` | 300 / 7200 / 1800 / 900 / 600 / 600 | 任务分级超时 |
@@ -284,9 +286,12 @@ python -m alembic revision --autogenerate -m "描述"
 
 | 任务 | 触发 | 说明 |
 |------|------|------|
-| `daily_quant_data_update` | cron 工作日 18:00 | qlib 数据增量同步（含 3 次重试，间隔 10 分钟） |
-| `factor_decay_check` | cron 工作日 18:05 | 因子衰减检测（错开 5 分钟） |
+| `factor_decay_check` | cron 工作日 18:05 | 因子衰减检测 |
 | `reap_stale_mining` | interval 每 10 分钟 | 回收僵尸挖掘任务 |
+| `data_cleanup` | cron 周日 03:00 | 数据库归档清理（`core/scheduler.py`） |
+| `log_cleanup` | cron 每天 03:30 | 日志文件定期清理（普通 7 天 / 错误 15 天） |
+
+> **没有自动数据同步**：数据仅通过手动 API 触发（baostock 回填/EOD/指数/ETF/宏观/财报/外盘，见 DATA_LAYER.md §3）。
 
 ---
 
@@ -338,12 +343,12 @@ class ApiResponse(BaseModel, Generic[T]):
 ### 5.4 测试
 
 - 框架：pytest，`asyncio_mode=auto`，`pythonpath=["backend"]`
-- 测试目录：`backend/tests/`（test_auth/test_backtest_engine/test_expression/test_factor_eval/test_symbolic）
-- **基线：112 tests collected**（`pytest --collect-only`）
+- 测试目录：`backend/tests/`
+- **基线：314 tests collected**（`pytest --collect-only -q`）；DB 相关测试需 `DATABASE_URL`（缺失自动跳过，见 `conftest.py`）
 - 运行：
   ```bash
   cd ~/QuantLab
-  .venv/bin/python -m pytest
+  DATABASE_URL=postgresql+asyncpg://quantlab:quantlab@localhost:5432/quantlab .venv/bin/python -m pytest
   ```
 - 覆盖率：`[tool.coverage.run] source=["app"]`，omit `verify_pipeline.py` 与 `migrations/*`
 
@@ -428,10 +433,11 @@ LOGIN_RATE_LIMIT=5/minute
 | 现象 | 排查 |
 |------|------|
 | 状态卡 `syncing` | 超过 30 分钟自动标 failed；或调 `GET /quant/data/status` 触发 `_detect_stale_sync` |
-| 重复触发 409 | 10 分钟内重复同步返回 `SYNC_IN_PROGRESS`，等待或超时后重试 |
+| 重复触发 409 | 有写 bin 的同步正在进行（`writes_bins_active`）时返回 `SYNC_IN_PROGRESS`，等待其完成再触发 |
 | bin 长度异常 | `GET /quant/data/validate?universe=csi300` 查看报告，`POST /quant/data/repair` 一键补齐 |
 | 同步历史 | `GET /quant/data/sync-history` 查看版本/耗时/错误 |
 | 进度无更新 | `GET /quant/data/sync-progress` 查看实时进度 |
+| EOD 结果 | `GET /quant/data/eod-result` 查看最近一次 EOD 同步的真实结果 |
 
 ### 7.5 挖掘任务卡 running
 

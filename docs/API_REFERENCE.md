@@ -3,12 +3,12 @@ title: API 参考
 slug: api-reference
 order: 5
 group: API
-summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
+summary: 后端 API 接口完整参考 —— 涵盖 80+ 端点 / 15 个模块
 ---
 
 # API 参考
 
-> 文档版本：v3.0.2 · 最后更新：2026-08-02
+> 文档版本：v3.1.0 · 最后更新：2026-08-06
 > **版本对应**：FastAPI 0.115+ · Python 3.11+ · qlib >= 0.9
 > 所有路由统一挂载在前缀 `/api/v1` 之下；本文件列出的路径均为**去除前缀后**的形式（开发环境拼接 `http://localhost:8000/api/v1`）。
 
@@ -29,7 +29,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 2. [认证 Auth](#2-认证-authpy--4-端点)
 3. [运行时配置 Config](#3-运行时配置-configpy--1-端点)
 4. [技术文档 Docs](#4-技术文档-docspy--2-端点)
-5. [数据管理 Quant Data](#5-数据管理-quant-datapydatapy--13-端点)
+5. [数据管理 Quant Data](#5-数据管理-quant-datapydatapy--23-端点)
 6. [市场行情 Market](#6-市场行情-marketpy--3-端点)
 7. [日志 Logs](#7-日志-logspy--2-端点)
 8. [因子库 Factor](#8-因子库-factorpy--14-端点)
@@ -230,7 +230,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 
 ---
 
-## 5. 数据管理（`quant_data.py` + `data_ext.py`，13 端点）
+## 5. 数据管理（`quant_data.py` + `data_ext.py` + `macro.py`，23 端点）
 
 > 前缀：`/quant/data`；几乎全部依赖 qlib，依赖缺失会抛 `503 QLIB_NOT_AVAILABLE`。
 
@@ -347,17 +347,18 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 
 ### 5.10 `POST /quant/data/eod-sync`
 - **Query**：
-  - `universe`（默认 `csi300`）—— `csi300` / `csi500` / `all`
+  - `universe`（默认 `csi300`）—— `csi300` / `csi500` / `all` / `etf_all`
   - `days`（默认 5，1–30）
   - `overwrite`（默认 false）
-- **说明**：通过 akshare 国内源拉取最近 N 个交易日的 OHLCV（补充源，主源走 baostock 全量回填）。
+  - `source`（默认 `baostock`）—— `baostock`（主源，一次拉全市场）/ `akshare`（兜底，逐只爬）
+- **说明**：增量拉取最近 N 个交易日的 OHLCV，追加到 qlib bin（**独立 worker 后台执行**）；真实结果由 worker 写 `data/eod_last_result.json`，前端轮询 `GET /quant/data/eod-result`。
 - **响应**：
 ```json
 {
   "ok": true,
   "data": {
-    "message": "EOD增量同步已提交（universe=csi300, days=5），后台执行中",
-    "universe": "csi300", "days": 5, "overwrite": false
+    "message": "EOD增量同步已提交（universe=csi300, days=5, source=baostock），独立进程后台执行中",
+    "universe": "csi300", "days": 5, "overwrite": false, "source": "baostock"
   }
 }
 ```
@@ -389,6 +390,77 @@ summary: 后端 API 接口完整参考 —— 涵盖 65 个端点 / 13 个模块
 ```json
 {"ok": true, "data": {"message": "已触发数据补齐（universe=all，含 baostock 增量）"}}
 ```
+
+### 5.14 `POST /quant/data/sync-full`
+- **Query**：`years`（默认 5，0–30，A股回填年数；0=仅增量补最新）、`universe`（默认 `all`，仅状态标签）
+- **说明**：一键全同步（**独立 worker 后台执行**）：A股回填 → 指数 → 宏观(广播) → 财报(拉取+广播) → 外盘，分阶段推进进度。
+- **响应**：
+```json
+{
+  "ok": true,
+  "data": {
+    "message": "一键全同步已提交（A股回填 5 年 → 指数 → 宏观 → 财报 → 外盘），独立进程后台执行中",
+    "universe": "all", "years": 5
+  }
+}
+```
+
+### 5.15 `POST /quant/data/sync-etf`
+- **Query**：`years`（回看年数，默认 2）、`days`（自然日窗口，覆盖 years）、`overwrite`（默认 false）、`source`（`baostock` 按日全市场增量 / `tencent` qfq 对齐现有时间范围修正复权）
+- **说明**：全市场 ETF 日K 同步（**独立 worker 后台执行**）：写 qlib bin（OHLCV+amount+change+tradable+factor）、落 `etf_daily` 窄表、重建 `instruments/etf_all.txt`、注册 `stock_index(type='etf')`。
+
+### 5.16 `GET /quant/data/eod-result`
+- **说明**：读取最近一次 EOD 增量同步的真实结果（`data/eod_last_result.json`，含 success/total_stocks/new_dates 等），前端轮询用。
+
+### 5.17 `GET /quant/data/stocks/search`
+- **Query**：`q`（必填，中文名/拼音首字母/代码）、`limit`（默认 20，上限 50）
+- **说明**：搜索 A 股（股票名录来自 `get_stock_list`）。
+
+### 5.18 `GET /quant/data/sync-stats`
+- **Query**：`days`（默认 30，1–365）、`universe`
+- **说明**：同步统计聚合：路径分布 / 成功率 / 耗时（avg/max/p50/p95）/ 每日耗时 / 失败原因 / 完整性趋势，供前端统计面板展示。
+
+### 5.19 `GET /quant/data/universes`
+- **说明**：列出可用标的池（`instruments/*.txt`：文件名 + 成分数），供前端渲染标的池下拉（csi300/csi500/all/etf_all）。
+
+### 5.20 `GET /quant/data/indices`
+- **说明**：已注册指数/ETF 清单（`stock_index` 表）：代码/名称/来源/类型（index|etf）+ qlib bin 状态与字段。
+
+### 5.21 `POST /quant/data/fundamental/sync`
+- **Query**：`broadcast`（默认 false，是否 PIT 广播写 qlib bin）
+- **说明**：财报同步（**独立 worker 后台执行**）：akshare 逐股财务摘要 → PG `financial_indicator` 窄表（全市场约 5400 次请求）；`broadcast=true` 时按 `available_date` forward-fill 写 `$roe`/`$netprofit_yoy` 等 bin 字段。
+- **响应**：
+```json
+{"ok": true, "data": {"message": "财报同步已提交（独立进程后台执行，全市场逐股拉取）", "broadcast": false}}
+```
+
+### 5.22 `GET /quant/data/external-market`
+- **说明**：外盘隔夜情绪因子最新状态（读最近一次同步缓存，不实时拉数据）。
+
+### 5.23 `POST /quant/data/sync-external-market`
+- **说明**：拉取外盘指数（标普/纳指/道指/恒指）→ 对齐 A股日历 → 广播成 `$us_sp500_ret`/`$us_nasdaq_ret` 等 bin 字段（轻量操作，web 进程内直接执行；建议每个交易日 A股开盘后触发一次）。
+- **响应**：
+```json
+{"ok": true, "data": {"items": {"sp500": {"ok": true, "latest": "2026-08-05", "fields": ["us_sp500_ret"]}}}}
+```
+
+### 5.24 `POST /macro/sync`
+- **Query**：`broadcast`（默认 false，是否同时广播写 qlib bin）
+- **说明**：宏观指标同步（东财 datacenter + akshare → PG `macro_indicator`，**独立 worker 后台执行**）；`broadcast=true` 时 forward-fill 广播写 bin（建议数据校验/补齐阶段执行）。
+- **响应**：
+```json
+{"ok": true, "data": {"message": "宏观指标同步已提交（独立进程后台执行），含 bin 广播", "broadcast": true}}
+```
+
+### 5.25 `GET /macro/indicators`
+- **Query**：`indicator`（PMI/CPI/PPI/GDP 等，空则全部）、`field`（pmi/cpi 等）、`start`/`end`（按 `available_date`）
+- **说明**：查询宏观指标序列（按 `available_date` 升序）。
+
+### 5.26 `GET /macro/status`
+- **说明**：宏观数据状态：各 `(indicator, field_name)` 最新日期与记录数。
+
+### 5.27 `GET /macro/snapshot`
+- **说明**：宏观快照：每个 `(indicator, field_name)` 返回最新一条 + 环比所需上一条，供前端"最新值"卡片使用。
 
 ---
 
