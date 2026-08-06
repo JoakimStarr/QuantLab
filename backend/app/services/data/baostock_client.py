@@ -247,6 +247,33 @@ def fetch_daily_all_a_stock_sync(date: str) -> pd.DataFrame:
     return pd.DataFrame(data_list, columns=rs.fields)
 
 
+def fetch_etf_daily_sync(date: str) -> pd.DataFrame:
+    """同步获取某日全市场 ETF 日 K 线（一次请求返回全部 ETF）。
+
+    与 ``fetch_daily_all_a_stock_sync`` 同构：按交易日拉全市场，code 为 baostock
+    格式（如 sh.510300），用 ``from_baostock_code`` 转 qlib 格式。
+
+    Args:
+        date: 日期字符串 'YYYY-MM-DD'
+
+    Returns:
+        DataFrame, 列: date,code,open,high,low,close,preclose,volume,amount,
+                      adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST
+    Raises:
+        RuntimeError: baostock 调用失败
+    """
+    _consume_request_slot()
+    _ensure_login()
+    import baostock as bs
+    rs = bs.query_daily_history_k_ETF(date=date)
+    if rs.error_code != '0':
+        raise RuntimeError(f"query_daily_history_k_ETF failed: {rs.error_code} {rs.error_msg}")
+    data_list = []
+    while (rs.error_code == '0') and rs.next():
+        data_list.append(rs.get_row_data())
+    return pd.DataFrame(data_list, columns=rs.fields)
+
+
 def fetch_stock_history_sync(code: str, start_date: str, end_date: str,
                              frequency: str = "d", adjustflag: str = "3") -> pd.DataFrame:
     """同步版。"""

@@ -170,17 +170,35 @@ async def seed_alpha158_api():
     return ApiResponse(ok=True, data=result)
 
 
+@router.post("/etf/seed")
+async def seed_etf_factors_api():
+    """导入内置 ETF 因子集（OHLCV-only，category='etf'，供 ETF 标的池使用）。
+
+    只导入不评价；评价需在 ETF 池（etf_all）上通过补算指标/单因子评价触发。
+    """
+    from app.services.factor.etf_factors import seed_etf_factors
+
+    result = await seed_etf_factors()
+    if not result.get("ok"):
+        return ApiResponse(ok=False, error={
+            "code": "ETF_SEED_FAILED", "message": result.get("error", "导入失败"), "status": 400,
+        })
+    return ApiResponse(ok=True, data=result)
+
+
 @router.post("/backfill-alpha158-metrics")
 async def backfill_alpha158_metrics_api(
     factor_ids: list[int] = Query(None, description="指定重算的因子 ID 列表；不传则只补算缺指标的 Alpha158 因子"),
     start_date: str = Query(None, description="评价区间起始日期"),
     end_date: str = Query(None, description="评价区间结束日期"),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
     传 factor_ids：仅重算所选因子的指标（支持任意类别，覆盖已有值）。
     不传：只补算历史遗留中指标为 NULL 的 Alpha158 因子。
     start_date/end_date：指定评价区间（不传则用默认回测区间）。
+    universe：标的池（默认 config.quant.universe，可选 etf_all 评价 ETF 因子）。
     进度通过 WebSocket `alpha158_progress` 事件推送。
     """
     from app.services.factor.alpha158 import backfill_alpha158_metrics
@@ -193,7 +211,7 @@ async def backfill_alpha158_metrics_api(
 
     result = await backfill_alpha158_metrics(
         progress_callback=progress_cb, factor_ids=factor_ids,
-        eval_start=start_date, eval_end=end_date,
+        eval_start=start_date, eval_end=end_date, universe=universe,
     )
     try:
         await ws_manager.broadcast("alpha158_progress", {
@@ -321,6 +339,7 @@ async def deep_analysis_api(
     horizon: int = Query(5, ge=1, le=60),
     n_groups: int = Query(5, ge=2, le=10),
     ic_window: int = Query(60, ge=20, le=250),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """因子深度分析：IC 分布/时序/显著性 + horizon 调仓分层净值 + 换手率曲线 + 衰减。"""
     import time
@@ -338,10 +357,10 @@ async def deep_analysis_api(
     period = settings.quant.get("default_backtest_period", {})
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
-    universe = settings.quant.get("universe", "csi300")
+    universe = universe or settings.quant.get("universe", "csi300")
 
     # 缓存命中直接返回（含 factor_id/factor_name）
-    cache_key = f"{factor_id}|{start}|{end}|{horizon}|{n_groups}|{ic_window}"
+    cache_key = f"{factor_id}|{start}|{end}|{horizon}|{n_groups}|{ic_window}|{universe}"
     now = time.time()
     cached = _deep_analysis_cache.get(cache_key)
     if cached and (now - cached["ts"]) < _DEEP_CACHE_TTL:

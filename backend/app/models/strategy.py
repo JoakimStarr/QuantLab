@@ -21,6 +21,9 @@ class Strategy(Base):
     benchmark = Column(String, default="SH000300")
     # 是否启用因子 Gram-Schmidt 正交化（0/1）
     orthogonalize = Column(Integer, default=0)
+    # AI 生成偏好（JSON 字符串）：{style, risk_tolerance, rebalance_pref, capital, other}
+    # 一个字段保存全部偏好，供 AI 参数建议/复盘感知；手动建策略可为空
+    ai_prefs = Column(Text, nullable=True, comment="AI 生成偏好 JSON")
 
     status = Column(String, default="active")  # active / archived
     created_at = Column(TIMESTAMP, default=func.now())

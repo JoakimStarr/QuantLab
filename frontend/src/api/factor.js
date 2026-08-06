@@ -22,11 +22,16 @@ export function seedAlpha158() {
   return request.post('/factors/seed-alpha158')
 }
 
-// 补算 Alpha158 因子的评价指标：传 factorIds 只重算所选因子，不传则补算缺指标的；
-// start/end 指定评价区间（不传则用默认回测区间）
-export function backfillAlpha158Metrics(factorIds, start = '', end = '') {
+// 导入内置 ETF 因子集（OHLCV-only，category='etf'）
+export function seedEtfFactors() {
+  return request.post('/factors/etf/seed')
+}
+
+// 补算因子的评价指标：传 factorIds 只重算所选因子，不传则补算缺指标的；
+// params 可含 start_date/end_date（评价区间）、universe（标的池）
+export function backfillAlpha158Metrics(factorIds, params = {}) {
   return request.post('/factors/backfill-alpha158-metrics', null, {
-    params: { factor_ids: factorIds, start_date: start || undefined, end_date: end || undefined },
+    params: { factor_ids: factorIds, ...params },
   })
 }
 
@@ -44,15 +49,17 @@ export function neutralizeFactor(id, params) {
 }
 
 // 批量 AI 因子解释（幂等：已有解释且非 force 时跳过，不重复调 LLM）
+// LLM 调用后端 route_budget 120s，远超 axios 默认 30s，需放宽超时
 export function aiExplainFactorsBatch(factorIds, force = false) {
   return request.post('/factors/ai-explain-batch', null, {
     params: { factor_ids: factorIds, force },
+    timeout: 130000,
   })
 }
 
 // 单因子 AI 解释（force=true 强制重新生成）
 export function aiExplainFactor(id, force = false) {
-  return request.post('/factors/' + id + '/ai-explain', null, { params: { force } })
+  return request.post('/factors/' + id + '/ai-explain', null, { params: { force }, timeout: 130000 })
 }
 
 // 获取因子完整 AI 解释 + 追问历史（弹窗展示）
@@ -62,5 +69,5 @@ export function getFactorAiDetail(id) {
 
 // AI 追问：基于已有解释回答，对话历史持久化
 export function chatFactorAi(id, question) {
-  return request.post('/factors/' + id + '/ai-chat', { question })
+  return request.post('/factors/' + id + '/ai-chat', { question }, { timeout: 130000 })
 }

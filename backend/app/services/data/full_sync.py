@@ -3,12 +3,13 @@
 顺序约束（bin 必须对齐最终日历 day.txt，否则 qlib 读位错位、因子全 NaN）：
   1. A股回填（baostock）——确立/扩展 day.txt，写股票 OHLCV
   2. 指数同步（baostock/akshare）——写指数目录，注册 stock_index
-  3. 宏观指标 拉取+广播（东财/akshare）
-  4. 财报 拉取(增量)+广播（akshare，PIT forward-fill）
-  5. 外盘数据 拉取+广播（akshare）
+  3. ETF 同步（baostock）——全市场 ETF 日K + 全量池
+  4. 宏观指标 拉取+广播（东财/akshare）
+  5. 财报 拉取(增量)+广播（akshare，PIT forward-fill）
+  6. 外盘数据 拉取+广播（akshare）
 
 并发约束：
-- baostock 有爬取锁（kind=full 走锁），回填/指数串行；宏观/财报/外盘不走该锁。
+- baostock 有爬取锁（kind=full 走锁），回填/指数/ETF 串行；宏观/财报/外盘不走该锁。
 - 各阶段内部自行管理进度生命周期（init→finish→clear），因此每阶段结束后
   重新 init_progress 恢复"一键全同步"的进度标识。
 
@@ -46,17 +47,17 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
         update_progress(pct=pct, status="running", message=message)
 
     try:
-        # 阶段 1/5: A股回填（含外盘/宏观按最终日历重广播）
+        # 阶段 1/6: A股回填（含外盘/宏观按最终日历重广播）
         update_progress(pct=4, status="running",
-                        message=f"阶段1/5: baostock A股回填 {years} 年...")
+                        message=f"阶段1/6: baostock A股回填 {years} 年...")
         from app.services.data.baostock_backfill import run_baostock_backfill
 
         backfill = await run_baostock_backfill(years=years, universe=universe)
         steps.append(f"a-share({backfill.get('stocks', 0)}stocks)")
-        logger.info("阶段1/5 完成: %s", backfill)
+        logger.info("阶段1/6 完成: %s", backfill)
 
-        # 阶段 2/5: 指数同步（baostock/akshare，自动注册 stock_index）
-        _restage(32, "阶段2/5: 指数同步（8大指数，注册 stock_index）...")
+        # 阶段 2/6: 指数同步（baostock/akshare，自动注册 stock_index）
+        _restage(32, "阶段2/6: 指数同步（8大指数，注册 stock_index）...")
         from app.services.data.index_registry import register_indices
         from app.services.data.index_sync import INDEX_NAMES, sync_indices_to_qlib
 
@@ -68,35 +69,43 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
             ]
             n = await register_indices(items)
             if n:
-                logger.info("阶段2/5 注册 %d 个新指数", n)
+                logger.info("阶段2/6 注册 %d 个新指数", n)
         except Exception as e:  # noqa: BLE001
             logger.warning("注册指数失败（可稍后同步指数）: %s", e)
         steps.append(f"indices({idx.get('success', 0)}ok/{idx.get('failed', 0)}fail)")
-        logger.info("阶段2/5 完成: %s", idx)
+        logger.info("阶段2/6 完成: %s", idx)
 
-        # 阶段 3/5: 宏观指标 拉取 + 广播
-        _restage(48, "阶段3/5: 宏观指标同步+广播（PMI/CPI/利率/汇率等）...")
+        # 阶段 3/6: ETF 同步 + 全量池
+        _restage(42, "阶段3/6: ETF 同步（全市场日K，重建全量池）...")
+        from app.services.data.etf_sync import sync_etf_task
+
+        etf = await sync_etf_task(qlib_dir, days=730)
+        steps.append(f"etf({etf.get('etf_count', 0)}etfs/{etf.get('pool_count', 0)}pool)")
+        logger.info("阶段3/6 完成: %s", etf)
+
+        # 阶段 4/6: 宏观指标 拉取 + 广播
+        _restage(56, "阶段4/6: 宏观指标同步+广播（PMI/CPI/利率/汇率等）...")
         from app.services.data.macro_sync import run_macro_sync_task
 
         await run_macro_sync_task(broadcast=True)
         steps.append("macro")
-        logger.info("阶段3/5 完成: 宏观同步+广播")
+        logger.info("阶段4/6 完成: 宏观同步+广播")
 
-        # 阶段 4/5: 财报 拉取(增量) + PIT 广播
-        _restage(64, "阶段4/5: 财报同步（增量拉取）+广播...")
+        # 阶段 5/6: 财报 拉取(增量) + PIT 广播
+        _restage(68, "阶段5/6: 财报同步（增量拉取）+广播...")
         from app.services.data.fundamental_sync import run_financial_sync
 
         fin = await run_financial_sync(broadcast=True)
         steps.append(f"fin({fin.get('fetched', 0)}fetched/{fin.get('inserted', 0)}rows)")
-        logger.info("阶段4/5 完成: %s", fin)
+        logger.info("阶段5/6 完成: %s", fin)
 
-        # 阶段 5/5: 外盘数据 拉取 + 广播
-        _restage(90, "阶段5/5: 外盘隔夜情绪因子同步...")
+        # 阶段 6/6: 外盘数据 拉取 + 广播
+        _restage(88, "阶段6/6: 外盘隔夜情绪因子同步...")
         from app.services.data.external_market import sync_external_market
 
         ext = await sync_external_market()
         steps.append("external")
-        logger.info("阶段5/5 完成: %s", ext)
+        logger.info("阶段6/6 完成: %s", ext)
 
         update_progress(pct=100, status="running", message=f"全同步完成: {', '.join(steps)}")
         finish_progress(True)

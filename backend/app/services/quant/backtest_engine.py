@@ -8,6 +8,7 @@
 import logging
 import numpy as np
 import pandas as pd
+from app.core.config import settings
 from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,46 @@ def compute_combine_weights(
     return {k: v / total for k, v in weights.items()}
 
 
+def clamp_backtest_end(end: str, score_df: pd.DataFrame = None) -> str:
+    """将回测 end 收敛到安全上界，manager 预收敛与 run_backtest 兜底共用同一逻辑。
+
+    两个上界（取更早者）：
+    1. 交易日历倒数第二日：qlib 需要 end 之后一天的价格计算最后一期收益，
+       end 落在数据末日会越界（index N out of bounds with size N）；且当日
+       日K 要收盘后才入库，end=今天 时当日数据缺失。
+    2. 因子数据倒数第二日（传入 score_df 时启用）：因子信号只覆盖到数据末日，
+       end 超过它会进入无信号尾段；直接调用 run_backtest 的路径由此兜底。
+
+    返回归一化的 "YYYY-MM-DD" 字符串。
+    """
+    if not end:
+        return end
+    end_ts = pd.Timestamp(end)
+    # 上界 1：交易日历
+    try:
+        from app.services.data.eod_incremental import _get_calendar
+        data_cal = _get_calendar(settings.qlib_provider_path)
+        if len(data_cal) >= 2:
+            cal_end = pd.Timestamp(data_cal[-2])
+            if end_ts > cal_end:
+                logger.info("回测 end %s 收敛到数据倒数第二日 %s", end, data_cal[-2])
+                end_ts = cal_end
+    except Exception as e:  # noqa: BLE001
+        logger.debug("回测 end 日历收敛失败（保持原值）: %s", e)
+    # 上界 2：因子信号覆盖
+    if score_df is not None and not score_df.empty:
+        try:
+            dates = sorted(score_df.index.get_level_values("datetime").unique())
+            if len(dates) >= 2:
+                score_end = pd.Timestamp(dates[-2].date())
+                if end_ts > score_end:
+                    logger.info("回测 end %s 收敛到因子数据倒数第二日 %s", end, score_end.date())
+                    end_ts = score_end
+        except Exception as e:  # noqa: BLE001
+            logger.debug("回测 end 因子收敛失败（保持原值）: %s", e)
+    return str(end_ts.date())
+
+
 def run_backtest(
     score_df: pd.DataFrame,
     start: str = None,
@@ -155,12 +196,27 @@ def run_backtest(
     portfolio_method: str = None,
     backend: str = "qlib",
     capital: float = None,
+    trade_unit: int = None,
+    deal_price: str = None,
+    slippage_bps: float = None,
+    cost_buy: float = None,
+    cost_sell: float = None,
+    min_cost: float = None,
+    asset_class: str = "stock",
 ) -> dict:
     """运行 top-k dropout 回测。
 
     backend:
         - "qlib"（默认）: QLib backtest_daily + TopkDropoutStrategy（工业级，原生A股约束）
         - "vbt": VectorBT 矢量化回测（高频调仓 A/B，快但无 strict A 股执行约束）
+
+    执行/成本参数（用户可选，透传 qlib exchange）：
+        trade_unit / deal_price / slippage_bps / cost_buy / cost_sell / min_cost
+        vbt 后端支持 slippage_bps 与 cost_buy/cost_sell（fees）；trade_unit 在 vbt 无原生整手取整。
+
+    asset_class:
+        - "stock"（默认）: A 股约束（T+1、整手、涨跌停）
+        - "etf": ETF 约束（T+0 语义、无整手 trade_unit=1、涨跌停放宽）
 
     收敛说明：自研 "self" 逐日回测已被 qlib（工业级约束）覆盖，已移除。
     vbt 与 qlib 功能重叠部分收敛为：严格约束/生产用 qlib，快速扫描 A/B 用 vbt。
@@ -172,6 +228,12 @@ def run_backtest(
     Returns:
         {returns, benchmark, turnover, portfolios, start_date, end_date, ...}
     """
+    # 回测区间不超过数据实际范围：调用方（前端/参数扫描）可能传 end=今天，
+    # 而当日数据未入库；且 qlib 需要 end 之后一天的数据算最后一期收益，
+    # end 落在数据末日会越界（index N out of bounds with size N）。
+    # qlib/vbt 统一在此收敛（含 score_df 因子覆盖上界），避免各后端口径漂移。
+    end = clamp_backtest_end(end, score_df)
+
     # backend=qlib（默认，工业级 A 股约束）：任何非 vbt 值都归一为 qlib
     if backend == "vbt":
         from app.services.quant.vbt_backtest import run_vbt_backtest
@@ -179,21 +241,9 @@ def run_backtest(
             score_df, start=start, end=end, topk=topk, n_drop=n_drop,
             benchmark=benchmark, rebalance_freq=rebalance_freq,
             portfolio_method=portfolio_method, capital=capital,
+            slippage_bps=slippage_bps, cost_buy=cost_buy, cost_sell=cost_sell,
+            asset_class=asset_class,
         )
-
-    # 回测区间不超过因子数据实际范围：调用方（前端/参数扫描）可能传 end=今天，
-    # 而当日数据未入库；且 qlib 需要 end 之后一天的数据算最后一期收益，
-    # end 落在数据末日会越界（index N out of bounds with size N），故收敛到倒数第二日。
-    if score_df is not None and not score_df.empty and end:
-        try:
-            dates = sorted(score_df.index.get_level_values("datetime").unique())
-            if len(dates) >= 2:
-                data_end = str(dates[-2].date())
-                if end > data_end:
-                    logger.info("回测 end %s 收敛到因子数据倒数第二日 %s", end, data_end)
-                    end = data_end
-        except Exception as e:  # noqa: BLE001
-            logger.debug("回测 end 收敛失败（保持原值）: %s", e)
 
     init_qlib()
     from app.services.quant.qlib_backtest import run_qlib_backtest
@@ -201,5 +251,8 @@ def run_backtest(
         score_df, start=start, end=end, topk=topk, n_drop=n_drop,
         benchmark=benchmark, rebalance_freq=rebalance_freq,
         portfolio_method=portfolio_method, capital=capital,
+        trade_unit=trade_unit, deal_price=deal_price,
+        slippage_bps=slippage_bps, cost_buy=cost_buy, cost_sell=cost_sell,
+        min_cost=min_cost, asset_class=asset_class,
     )
 

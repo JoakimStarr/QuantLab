@@ -58,10 +58,48 @@ async def register_indices(items: list[dict]) -> int:
 
 
 async def load_index_codes() -> set[str]:
-    """返回全部已注册指数代码集合（小写，如 {'sh000001', 'sz399001'}）。"""
+    """返回全部已注册指数/ETF 代码集合（小写，如 {'sh000001', 'sh510300'}）。
+
+    validation/repair 用它排除"非股票"目录——ETF 注册进同表后自动被排除，
+    无需改动校验/修复逻辑。
+    """
     async with async_session() as session:
         rows = await session.execute(select(StockIndex.code))
         return {r[0].lower() for r in rows}
+
+
+async def load_etf_codes() -> set[str]:
+    """返回已注册 ETF 代码集合（小写，type='etf'）。"""
+    async with async_session() as session:
+        rows = await session.execute(
+            select(StockIndex.code).where(StockIndex.type == "etf")
+        )
+        return {r[0].lower() for r in rows}
+
+
+async def register_etf(code: str, name: str | None = None, source: str | None = None) -> bool:
+    """注册一个 ETF（幂等：已存在则忽略），type='etf'。
+
+    Args:
+        code: qlib ETF 代码，小写（如 sh510300）
+        name: ETF 名称（如 沪深300ETF）
+        source: 数据源（baostock/akshare）
+
+    Returns:
+        bool: True 表示新增，False 表示已存在
+    """
+    code = (code or "").strip().lower()
+    if not code:
+        return False
+    stmt = pg_insert(StockIndex).values(code=code, name=name, source=source, type="etf")
+    stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
+    async with async_session() as session:
+        res = await session.execute(stmt)
+        await session.commit()
+        inserted = (res.rowcount or 0) > 0
+    if inserted:
+        logger.info("已注册 ETF %s (%s, source=%s)", code, name, source)
+    return inserted
 
 
 async def load_index_map() -> dict[str, dict]:

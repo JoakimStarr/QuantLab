@@ -265,6 +265,7 @@ async def walk_forward_api(
     topk_list: list[int] = Query(None, description="候选 topk 列表，默认 [10,20,30,50]"),
     n_drop: int = Query(5, description="每期剔除数"),
     rebalance: str = Query("day", description="调仓频率 day/week/month"),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """Walk-forward 滚动回测：训练窗选最优 topk，测试窗做样本外验证，评估跨窗一致性。"""
     from app.services.quant.qlib_init import is_qlib_available
@@ -316,7 +317,7 @@ async def walk_forward_api(
             loop = asyncio.get_running_loop()
             score_df = await loop.run_in_executor(
                 None, build_score_df_from_exprs,
-                factor_exprs, weights, combination_method, start, end,
+                factor_exprs, weights, combination_method, start, end, universe,
             )
             result = await loop.run_in_executor(
                 None, run_walk_forward,
@@ -371,6 +372,8 @@ async def ai_generate_strategy_api(
     style: str = Query(None, description="偏好风格: momentum/reversal/lowvol/value/growth/volprice"),
     risk_tolerance: str = Query(None, description="风险偏好: conservative/balanced/aggressive"),
     rebalance_pref: str = Query(None, description="调仓频率偏好: day/week/month"),
+    capital: float = Query(None, description="初始资金（元），供 AI 权衡 topk/换手/流动性"),
+    other: str = Query(None, description="其他要求（自由文本），AI 自动权衡并说明取舍"),
 ):
     """AI 生成策略：参考因子库评价自动推荐因子组合与参数，创建策略。"""
     from app.services.strategy.ai_strategy import generate_strategy_with_ai
@@ -379,6 +382,7 @@ async def ai_generate_strategy_api(
             universe=universe, start=start, end=end,
             prefer_factor_ids=factor_ids,
             style=style, risk_tolerance=risk_tolerance, rebalance_pref=rebalance_pref,
+            capital=capital, other=other,
         )
         return ApiResponse(ok=True, data=result)
     except ValueError as e:

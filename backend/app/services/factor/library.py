@@ -122,8 +122,12 @@ async def update_factor_metrics(factor_id: int, metrics: dict) -> None:
         await session.commit()
 
 
-async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = None) -> dict:
-    """对库中因子执行评价（调用 qlib，CPU 密集，应由 worker 调用）。"""
+async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = None,
+                                universe: str = None) -> dict:
+    """对库中因子执行评价（调用 qlib，CPU 密集，应由 worker 调用）。
+
+    universe: 标的池（None=config 默认）。
+    """
     from app.core.config import settings
     from app.services.quant.factor_eval import evaluate_factor as _eval
     factor = await get_factor(factor_id)
@@ -138,7 +142,8 @@ async def evaluate_factor_by_id(factor_id: int, start: str = None, end: str = No
     # 多周期评价：额外评价 1/10/20 天（主 horizon 由 config 决定）
     horizons = [1, 5, 10, 20]
     metrics = await run_cpu(_eval, factor["expression"], start, end,
-                            horizon=horizon, horizons=horizons)
+                            horizon=horizon, horizons=horizons,
+                            universe=universe)
     await update_factor_metrics(factor_id, metrics)
     return metrics
 

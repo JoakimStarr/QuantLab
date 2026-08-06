@@ -105,17 +105,20 @@ def _spearman_ic(a, b):
     return float(corr) if not np.isnan(corr) else 0.0
 
 
-def _build_dataset(start: str, end: str) -> tuple:
-    """加载基础特征与前向收益，返回 (X, y, feature_names, merged_index)。"""
+def _build_dataset(start: str, end: str, universe: str = None) -> tuple:
+    """加载基础特征与前向收益，返回 (X, y, feature_names, merged_index)。
+
+    universe: 标的池（None=config 默认）。
+    """
     from app.services.quant.factor_eval import load_factor_values, load_label
     feature_names = list(_BASE_FEATURES.keys())
     frames = []
     for name in feature_names:
-        df = load_factor_values(_BASE_FEATURES[name], start, end)
+        df = load_factor_values(_BASE_FEATURES[name], start, end, universe=universe)
         df = df.rename(columns={"factor": name})
         frames.append(df)
     X_df = pd.concat(frames, axis=1)
-    label_df = load_label(start, end)
+    label_df = load_label(start, end, universe=universe)
     merged = X_df.join(label_df, how="inner").dropna()
     y = merged["label"].values
     X = merged[feature_names].values
@@ -301,8 +304,11 @@ def _fold_const_named(gname: str, vals: list) -> float | None:
     return None
 
 
-async def mine_with_symbolic(task_id: int) -> dict:
-    """符号回归挖掘主流程（使用多维验证 + GPU 检测）。"""
+async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
+    """符号回归挖掘主流程（使用多维验证 + GPU 检测）。
+
+    universe: 标的池（None=config 默认）。
+    """
     sym_cfg = settings.mining.get("symbolic", {})
     ic_threshold = sym_cfg.get("ic_threshold", 0.03)
     horizon = sym_cfg.get("eval_horizon") or settings.mining.get("llm", {}).get("eval_horizon", 5)
@@ -319,7 +325,7 @@ async def mine_with_symbolic(task_id: int) -> dict:
 
         # 构建数据集（CPU 密集）
         X, y, feature_names, merged_index = await asyncio.get_running_loop().run_in_executor(
-            None, _build_dataset, start, end
+            None, _build_dataset, start, end, universe
         )
         if len(X) < 100:
             raise ValueError(f"符号回归数据不足: {len(X)} 行")

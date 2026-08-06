@@ -120,11 +120,13 @@ async def _run_walk_forward(task_id: int, merged: pd.DataFrame, names: list,
 
 
 async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = None,
-                           walk_forward: bool = False) -> dict:
+                           walk_forward: bool = False, universe: str = None) -> dict:
     """AutoML 因子组合：训练模型预测收益，综合打分作为新因子入库。
 
     walk_forward=True 时使用 Walk-Forward 滚动重训：仅用历史窗口数据训练，
     当日打分全部为样本外预测，从根本上避免单次切分的 in-sample 高估。
+
+    universe: 标的池（None=config 默认）。
     """
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values, load_label
@@ -157,7 +159,8 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
             skipped = []
             for f in factors:
                 try:
-                    df = load_factor_values(f.expression, start, end).rename(columns={"factor": f.name})
+                    df = load_factor_values(f.expression, start, end, universe=universe).rename(
+                        columns={"factor": f.name})
                     frames.append(df)
                     names.append(f.name)
                 except (FileNotFoundError, ValueError) as e:
@@ -169,7 +172,7 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
             if skipped:
                 logger.warning("AutoML 训练跳过 %d 个不可用因子: %s", len(skipped), skipped)
             X_df = pd.concat(frames, axis=1)
-            label_df = load_label(start, end)
+            label_df = load_label(start, end, universe=universe)
             return X_df, label_df, names
 
         X_df, label_df, names = await asyncio.get_running_loop().run_in_executor(None, _load_all)

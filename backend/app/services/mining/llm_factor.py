@@ -121,12 +121,13 @@ async def _load_existing_ic_series() -> list:
     return series_list
 
 
-async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
+async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = None) -> dict:
     """LLM 因子挖掘主流程（并行IC评价 + 批量入库）。
 
     Args:
         task_id: MiningTask.id
         n_candidates: 候选因子数量
+        universe: 标的池（csi300/csi500/all/etf_all...），None=config 默认
     Returns:
         统计 dict
     """
@@ -176,7 +177,8 @@ async def mine_with_llm(task_id: int, n_candidates: int = None) -> dict:
         # 多样性检测：加载已有因子 IC 序列（缓存，仅需一次）
         existing_ic_series = await _load_existing_ic_series()
         eval_results = await asyncio.gather(
-            *[_evaluate_with_validation(v["expression"], existing_ic_series=existing_ic_series)
+            *[_evaluate_with_validation(v["expression"], existing_ic_series=existing_ic_series,
+                                        universe=universe)
               for v in valid],
             return_exceptions=True,
         )
@@ -362,6 +364,7 @@ async def iterative_mine_factors(
     n_rounds: int = 3,
     candidates_per_round: int = 5,
     task_id: int = None,
+    universe: str = None,
     **kwargs,
 ) -> dict:
     """LLM 迭代因子挖掘
@@ -450,7 +453,8 @@ async def iterative_mine_factors(
                 if existing_ic_series is None:
                     existing_ic_series = await _load_existing_ic_series()
                 eval_results = await asyncio.gather(
-                    *[_evaluate_safe_cached(v["expression"], existing_ic_series=existing_ic_series)
+                    *[_evaluate_safe_cached(v["expression"], existing_ic_series=existing_ic_series,
+                                            universe=universe)
                       for v in valid_exprs],
                     return_exceptions=True,
                 )
@@ -570,7 +574,8 @@ async def iterative_mine_factors(
 
 
 async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
-                                  n_candidates: int = None) -> dict:
+                                  n_candidates: int = None,
+                                  universe: str = None) -> dict:
     """迭代挖掘任务包装器：构建默认模板并调用 iterative_mine_factors。"""
     mining_cfg = settings.mining.get("llm", {})
     n_candidates = n_candidates or mining_cfg.get("candidates_per_run", 5)
@@ -583,12 +588,13 @@ async def mine_with_llm_iterative(task_id: int, n_rounds: int = 3,
     }
     return await iterative_mine_factors(
         template, n_rounds=n_rounds, candidates_per_round=n_candidates,
-        task_id=task_id,
+        task_id=task_id, universe=universe,
     )
 
 
 async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
-                                    baseline_exprs: list = None) -> dict:
+                                    baseline_exprs: list = None,
+                                    universe: str = None) -> dict:
     """在进程池中运行多维因子验证，带超时保护。
 
     使用 evaluate_factor_with_validation 替代旧的 evaluate_factor：
@@ -597,6 +603,8 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
     - 多样性检测（existing_ic_series）
     - 正交后 IC（baseline_exprs：已有高 IC 因子表达式）
     - 使用 valid_ic 作为主筛选指标
+
+    universe: 标的池（None=config 默认），透传给 evaluate_factor_with_validation。
     """
     from app.services.quant.factor_validator import evaluate_factor_with_validation
     period = settings.quant.get("default_backtest_period", {})
@@ -616,18 +624,19 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
                 horizon=horizon, existing_ic_series=existing_ic_series,
                 baseline_exprs=baseline_exprs, roll_windows=roll_windows,
                 industry_neutralize_enabled=ind_neutralize,
-                robustness_enabled=robustness),
+                robustness_enabled=robustness,
+                universe=universe),
         timeout=timeout,
     )
 
 
-def _ic_cache_key(expr: str, diversity: bool = False) -> str:
-    """生成 IC 缓存 key：表达式 + 评价区间 + horizon + 多样性状态。"""
+def _ic_cache_key(expr: str, diversity: bool = False, universe: str = None) -> str:
+    """生成 IC 缓存 key：表达式 + 评价区间 + horizon + 多样性状态 + 标的池。"""
     period = settings.quant.get("default_backtest_period", {})
     start = period.get("start", "2020-01-01")
     end = period.get("end", "2024-12-31")
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
-    raw = f"{expr}|{start}|{end}|{horizon}|{'div' if diversity else 'nodiv'}"
+    raw = f"{expr}|{start}|{end}|{horizon}|{universe or ''}|{'div' if diversity else 'nodiv'}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -636,17 +645,19 @@ def _ic_cache_put(key: str, value: dict) -> None:
     _IC_CACHE[key] = value
 
 
-async def _evaluate_safe_cached(expr: str, existing_ic_series: list = None) -> dict:
+async def _evaluate_safe_cached(expr: str, existing_ic_series: list = None,
+                                universe: str = None) -> dict:
     """带内存缓存的因子评价（使用 evaluate_factor_with_validation）。
 
-    缓存 key 包含多样性状态：启用多样性检测与未启用的结果分开缓存，
-    避免复用旧缓存导致多样性约束失效。
+    缓存 key 包含多样性状态与标的池：不同 universe/多样性开关的结果分开缓存，
+    避免复用旧缓存导致多样性约束失效或跨池污染。
     """
     diversity = bool(existing_ic_series)
-    key = _ic_cache_key(expr, diversity=diversity)
+    key = _ic_cache_key(expr, diversity=diversity, universe=universe)
     if key in _IC_CACHE:
         logger.debug("IC 缓存命中: %s", expr[:40])
         return _IC_CACHE[key]
-    result = await _evaluate_with_validation(expr, existing_ic_series=existing_ic_series)
+    result = await _evaluate_with_validation(expr, existing_ic_series=existing_ic_series,
+                                             universe=universe)
     _ic_cache_put(key, result)
     return result

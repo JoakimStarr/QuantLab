@@ -113,6 +113,13 @@ def run_qlib_backtest(
     rebalance_freq: str = "day",
     portfolio_method: str = None,
     capital: float = None,
+    trade_unit: int = None,
+    deal_price: str = None,
+    slippage_bps: float = None,
+    cost_buy: float = None,
+    cost_sell: float = None,
+    min_cost: float = None,
+    asset_class: str = "stock",
 ) -> dict:
     """用 QLib backtest_daily 运行 top-k dropout 回测。
 
@@ -121,6 +128,20 @@ def run_qlib_backtest(
     - T+1: deal_price + signal 时序（T日决策，T+1成交）
     - 停牌: only_tradable=True 自动过滤
     - 交易成本: open_cost/close_cost/min_cost
+
+    执行/成本参数（用户可选，覆盖 config 默认）：
+    - trade_unit: A股整手大小。None=不传（qlib 默认 100=整手开启）；
+        传 1 = 关闭整手约束（允许小数股）；传 100 = 显式整手。
+    - deal_price: 'close'（默认,T+1收盘成交）/ 'open'（T+1开盘成交,更保守）
+    - slippage_bps: 滑点（基点），>0 时写 impact_cost
+    - cost_buy/cost_sell: 买入/卖出费率（小数），覆盖 config
+    - min_cost: 单笔最低佣金（元）
+
+    asset_class:
+        - "stock"（默认）: A 股约束（T+1、整手、9.5% 涨跌停）
+        - "etf": ETF 约束（无整手 trade_unit=1、涨跌停放宽 0.20、deal_price=open
+          更快成交）。注：日频 bar 无法建模盘内 T+0 买卖，T+0 在此体现为
+          "无整手/无涨跌停限制"，成交时序仍为信号 T 收盘→T+1 成交（无前视）。
 
     Args:
         score_df: MultiIndex (datetime, instrument) 含 'score' 列
@@ -137,12 +158,13 @@ def run_qlib_backtest(
     period = settings.quant.get("default_backtest_period", {})
     start = start or period.get("start", "2020-01-01")
     end = end or period.get("end", "2024-12-31")
-    topk = topk or settings.quant.get("topk", 50)
-    n_drop = n_drop or settings.quant.get("n_drop", 5)
+    topk = topk if topk is not None else settings.quant.get("topk", 50)
+    n_drop = n_drop if n_drop is not None else settings.quant.get("n_drop", 5)
     benchmark = normalize_benchmark(benchmark)
-    cost_buy = settings.quant.get("cost_buy", 0.0013)
-    cost_sell = settings.quant.get("cost_sell", 0.0023)
-    slippage_bps = settings.quant.get("slippage_bps", 0)
+    cost_buy = cost_buy if cost_buy is not None else settings.quant.get("cost_buy", 0.0013)
+    cost_sell = cost_sell if cost_sell is not None else settings.quant.get("cost_sell", 0.0023)
+    slippage_bps = slippage_bps if slippage_bps is not None else settings.quant.get("slippage_bps", 0)
+    min_cost = min_cost if min_cost is not None else 5
 
     # 准备 signal: QLib 要求 DataFrame, index=(datetime, instrument), 含 score 列
     signal = score_df.copy()
@@ -175,15 +197,23 @@ def run_qlib_backtest(
         only_tradable=True,
     )
 
-    # A 股交易约束
+    # A 股交易约束（stock 默认）；ETF 放开整手/涨跌停，成交价默认 open（更快成交）
+    is_etf = asset_class == "etf"
     exchange_kwargs = {
         "freq": "day",
-        "limit_threshold": 0.095,   # A 股涨跌停 9.5%
-        "deal_price": "close",       # T 日决策，T+1 收盘成交（无未来函数）
+        # A 股涨跌停 9.5%；ETF 涨跌停放宽（跨境 ETF 无涨跌停）
+        "limit_threshold": 0.20 if is_etf else 0.095,
+        # T 日决策，T+1 成交；close=收盘成交，open=开盘成交（更保守/更快成交）
+        "deal_price": deal_price or ("open" if is_etf else "close"),
         "open_cost": cost_buy,
         "close_cost": cost_sell,
-        "min_cost": 5,
+        "min_cost": min_cost,
     }
+    if trade_unit is not None or is_etf:
+        # None=不传（qlib 默认 100=整手开启）；1=关闭整手；100=显式整手。
+        # ETF 默认 trade_unit=1（等效无约束），可被调用方 trade_unit 显式覆盖。
+        # 注意：trade_unit=1 时 round_amount_by_trade_unit 取整到 1 股，等效无约束
+        exchange_kwargs["trade_unit"] = trade_unit if trade_unit is not None else 1
     if slippage_bps > 0:
         exchange_kwargs["impact_cost"] = slippage_bps / 10000.0
 

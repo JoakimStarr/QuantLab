@@ -9,6 +9,7 @@
       <div class="page-header__actions">
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
+        <el-button :icon="Download" :loading="seedingEtf" @click="onSeedEtfFactors">导入 ETF 因子</el-button>
         <el-button type="primary" :icon="Plus" @click="openAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </div>
@@ -66,6 +67,15 @@
           clearable
         />
         <div class="filter-toolbar__spacer" />
+        <el-select
+          v-model="evalUniverse"
+          clearable
+          placeholder="标的池（默认）"
+          style="width: 180px"
+          title="评价/补算指标所用的标的池（ETF 池需先同步 ETF 数据）"
+        >
+          <el-option v-for="o in universeOptions" :key="o.value" :label="o.label" :value="o.value" />
+        </el-select>
         <el-date-picker
           v-model="backfillPeriod"
           type="daterange"
@@ -339,9 +349,10 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { useFactorStore } from '@/stores/factor'
-import { syncQuantData } from '@/api/quant'
+import { syncQuantData, listUniverses } from '@/api/quant'
 import {
   seedAlpha158,
+  seedEtfFactors,
   backfillAlpha158Metrics,
   getQuantileAnalysis,
   neutralizeFactor,
@@ -364,6 +375,20 @@ const factors = computed(() => factorStore.factors)
 const loading = computed(() => factorStore.loading)
 const syncing = ref(false)
 const seedingAlpha158 = ref(false)
+const seedingEtf = ref(false)
+// 评价/补算指标所用的标的池（空 = 后端 config 默认）；选项从 GET /quant/universes 拉取
+const evalUniverse = ref('')
+const universeOptions = ref([])
+async function loadUniverses() {
+  try {
+    const items = await listUniverses()
+    if (Array.isArray(items) && items.length) {
+      universeOptions.value = items.map((u) => ({ value: u.name, label: `${u.name}（${u.count}）` }))
+    }
+  } catch (e) {
+    // 拉取失败保留空选项
+  }
+}
 const backfillingMetrics = ref(false)
 const backfillPeriod = ref([])
 const aiExplaining = ref(false)
@@ -480,6 +505,25 @@ async function onSeedAlpha158() {
   }
 }
 
+// 导入内置 ETF 因子集（OHLCV-only；评价需在 ETF 池上补算）
+async function onSeedEtfFactors() {
+  seedingEtf.value = true
+  try {
+    const data = await seedEtfFactors()
+    if (data?.already_imported) {
+      ElMessage.info(data?.message || 'ETF 因子集已导入，无需重复操作')
+    } else {
+      ElMessage.success(data?.message || `已导入 ${data?.count ?? 0} 个 ETF 因子`)
+    }
+    factorStore.invalidate()
+    await loadFactors()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    seedingEtf.value = false
+  }
+}
+
 async function onBackfillMetrics() {
   const ids = selectedKeys.value
   if (ids.length === 0) {
@@ -489,7 +533,9 @@ async function onBackfillMetrics() {
   backfillingMetrics.value = true
   try {
     const [start, end] = backfillPeriod.value || []
-    const data = await backfillAlpha158Metrics(ids, start, end)
+    const params = { start_date: start || undefined, end_date: end || undefined }
+    if (evalUniverse.value) params.universe = evalUniverse.value
+    const data = await backfillAlpha158Metrics(ids, params)
     ElMessage.success(data?.message || `重算完成 ${data?.evaluated || 0}/${data?.total || 0}`)
     factorStore.invalidate()
     await loadFactors()
@@ -1170,7 +1216,10 @@ async function confirmDisable() {
   }
 }
 
-onMounted(loadFactors)
+onMounted(() => {
+  loadFactors()
+  loadUniverses()
+})
 </script>
 
 <style scoped lang="scss">

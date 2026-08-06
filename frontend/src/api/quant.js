@@ -20,6 +20,16 @@ export function syncFullData(years, universe = 'all') {
   return request.post('/quant/data/sync-full', null, { params: { years, universe } })
 }
 
+// 列出可用标的池（instruments/*.txt：文件名 + 成分数）
+export function listUniverses() {
+  return request.get('/quant/data/universes')
+}
+
+// ETF 全市场同步（baostock，独立进程；years 回看年数，默认 2 年）
+export function syncEtfData(years = 2) {
+  return request.post('/quant/data/sync-etf', null, { params: { years } })
+}
+
 export function getQuantDataStatus() {
   return request.get('/quant/data/status')
 }
@@ -142,7 +152,7 @@ export function exportTrades(result_id) {
 
 // === 因子挖掘 ===
 
-// 因子深度分析
+// 因子深度分析（CPU 密集，多因子×多年分层计算，可能超过默认 30s）
 export function deepAnalysis(factorId, params = {}) {
-  return request.get(`/factors/${factorId}/deep-analysis`, { params })
+  return request.get(`/factors/${factorId}/deep-analysis`, { params, timeout: 180000 })
 }

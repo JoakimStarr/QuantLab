@@ -131,6 +131,15 @@
             {{ indexSyncing ? '指数同步中...' : '同步指数' }}
           </el-button>
           <el-button
+            type="warning"
+            plain
+            @click="doSyncEtf"
+            :loading="etfSyncing"
+            :disabled="!qlib.available || etfSyncing"
+          >
+            {{ etfSyncing ? 'ETF同步中...' : '同步ETF' }}
+          </el-button>
+          <el-button
             type="success"
             plain
             @click="doSyncFundamental"
@@ -273,17 +282,24 @@
       </el-table>
     </SectionCard>
 
-    <!-- 指数数据（stock_index 主表：与股票区分，只含 OHLCV，不参与股票校验） -->
-    <SectionCard title="指数数据" class="mt-6">
+    <!-- 指数数据（stock_index 主表：指数/ETF 与股票区分，只含 OHLCV，不参与股票校验） -->
+    <SectionCard title="指数 / ETF 数据" class="mt-6">
       <div class="card-header">
         <div class="card-title-group">
           <span class="text-muted" style="font-size: var(--font-size-sm)">
-            features/ 下的指数目录（共 {{ indicesList.length }} 个），只含 OHLCV 字段，校验时跳过股票专属要求
+            stock_index 注册的指数与 ETF（共 {{ indicesList.length }} 个），只含 OHLCV 字段，校验时跳过股票专属要求
           </span>
         </div>
         <el-button size="small" @click="loadIndices" :loading="indicesLoading">刷新</el-button>
       </div>
-      <el-table :data="indicesList" size="small" stripe empty-text="暂无指数注册" max-height="300">
+      <el-table :data="indicesList" size="small" stripe empty-text="暂无指数/ETF 注册" max-height="300">
+        <el-table-column label="类型" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.type === 'etf' ? 'success' : 'info'">
+              {{ row.type === 'etf' ? 'ETF' : '指数' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="code" label="代码" width="120" align="center">
           <template #default="{ row }">
             <span class="font-mono">{{ row.code }}</span>
@@ -689,6 +705,7 @@ import {
   getEodResult,
   syncIndices,
   getIndices,
+  syncEtfData,
   getSyncProgress,
   validateData,
   repairData,
@@ -725,6 +742,7 @@ const eodResult = ref(null)
 const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, overwrite: false })
 const syncYears = ref(5)
 const indexSyncing = ref(false)
+const etfSyncing = ref(false)
 const fundamentalSyncing = ref(false)
 const externalMarket = ref({ synced_at: null, items: {} })
 const externalSyncing = ref(false)
@@ -1034,6 +1052,23 @@ async function doSyncIndices() {
     if (e !== 'cancel') ElMessage.error('指数同步失败: ' + (e?.message || e))
   } finally {
     indexSyncing.value = false
+  }
+}
+
+// 全市场 ETF 同步（baostock 按日拉全市场，重建精选流动池 etf_all）
+async function doSyncEtf() {
+  etfSyncing.value = true
+  try {
+    const years = syncYears.value || 2
+    await syncEtfData(years)
+    ElMessage.success(`ETF 同步已提交（约 ${years} 年历史，后台执行中）`)
+    syncing.value = true
+    syncProgress.value = null
+    startProgressPolling()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('ETF 同步失败: ' + (e?.message || e))
+  } finally {
+    etfSyncing.value = false
   }
 }
 

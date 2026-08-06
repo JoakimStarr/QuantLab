@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_STRATEGY_FACTORS = 5
 _MIN_STRATEGY_FACTORS = 2
+_OTHER_MAXLEN = 300  # 其他要求输入上限（前后端一致，防 prompt 膨胀）
 
 
 async def _load_qualified_factors(limit: int = 30) -> list[dict]:
@@ -114,8 +115,14 @@ async def generate_strategy_with_ai(
     style: str = None,
     risk_tolerance: str = None,
     rebalance_pref: str = None,
+    capital: float = None,
+    other: str = None,
 ) -> dict:
     """AI 生成策略：参考因子评价自动推荐因子组合与参数。
+
+    capital: 初始资金（元），供 AI 权衡 topk/换手（资金小→低换手小 topk 防佣金侵蚀；
+        资金大→注意流动性冲击）。
+    other: 用户自由文本要求（如规避板块/目标收益/降低换手等），AI 自动权衡并取舍。
 
     Returns:
         {"strategy": {...}, "rationale": "...", "raw": {...}}
@@ -147,6 +154,17 @@ async def generate_strategy_with_ai(
         constraints.append(f"风险偏好: {risk_label}（稳健=低换手低回撤、小 topk；激进=更高收益弹性）")
     if rebalance_pref in ("day", "week", "month"):
         constraints.append(f"调仓频率偏好: {rebalance_pref}")
+    # 资金规模：影响 topk/换手/流动性的权衡
+    if capital is not None and capital > 0:
+        cap_wan = capital / 10000.0
+        constraints.append(
+            f"初始资金: {capital:,.0f} 元（约 {cap_wan:,.0f} 万元）。"
+            "资金小应控制 topk 与换手以降低佣金占比；资金大需注意小市值/低流动性股票的冲击成本"
+        )
+    # 其他自由要求：AI 自动权衡，不可实现时在 rationale 中说明取舍
+    if other and other.strip():
+        other = other.strip()[:_OTHER_MAXLEN]  # 长度防护，避免 prompt 被异常撑大
+        constraints.append(f"其他要求: {other}（请结合因子库与数据能力判断，冲突时优先保证策略可实现并说明取舍）")
     constraint_str = "；".join(constraints) or None
 
     messages = build_strategy_gen_prompt(
@@ -178,6 +196,33 @@ async def generate_strategy_with_ai(
         name = f"{name}-{dup + 1}"
     rationale = raw.get("rationale") or "AI 根据因子 IC/ICIR 与相关性自动推荐"
 
+    # AI 生成偏好：一个 JSON 字段保存全部用户偏好（供 AI 参数建议/复盘感知）
+    ai_prefs = {}
+    if style:
+        ai_prefs["style"] = style
+    if risk_tolerance:
+        ai_prefs["risk_tolerance"] = risk_tolerance
+    if rebalance_pref in ("day", "week", "month"):
+        ai_prefs["rebalance_pref"] = rebalance_pref
+    if capital is not None and capital > 0:
+        ai_prefs["capital"] = capital
+    if other and other.strip():
+        ai_prefs["other"] = other.strip()
+
+    # description 标签从 ai_prefs 派生（单一数据源），便于策略列表追溯生成条件
+    desc_tags = ["[AI生成]"]
+    if "capital" in ai_prefs:
+        desc_tags.append(f"[资金{ai_prefs['capital'] / 10000.0:,.0f}万]")
+    if "style" in ai_prefs:
+        desc_tags.append(f"[{style_label}]")
+    if "risk_tolerance" in ai_prefs:
+        desc_tags.append(f"[{risk_label}]")
+    if "rebalance_pref" in ai_prefs:
+        rebalance_label = {"day": "日", "week": "周", "month": "月"}.get(ai_prefs["rebalance_pref"], ai_prefs["rebalance_pref"])
+        desc_tags.append(f"[{rebalance_label}调仓]")
+    if "other" in ai_prefs:
+        desc_tags.append(f"[要求:{ai_prefs['other'][:60]}]")
+
     strategy = await create_strategy(
         name=name,
         factor_ids=factor_ids,
@@ -185,7 +230,8 @@ async def generate_strategy_with_ai(
         topk=topk,
         n_drop=n_drop,
         rebalance_freq=rebalance,
-        description=f"[AI生成] {rationale}",
+        description=f"{''.join(desc_tags)} {rationale}",
+        ai_prefs=ai_prefs or None,
     )
     return {
         "strategy": strategy,
@@ -217,6 +263,10 @@ async def suggest_params_with_ai(strategy_id: int) -> dict:
         f"- {f['name']} | IC={f.get('ic'):.4f} | ICIR={f.get('icir') or '--'}"
         for f in selected
     ) or f"(策略 {strategy_id} 的因子未在达标列表)"
+    # 资金规模：影响 topk/换手/流动性权衡（从 ai_prefs 单字段读取）
+    cap = (strategy.get("ai_prefs") or {}).get("capital")
+    if cap:
+        summary = f"初始资金: {cap:,.0f} 元（约 {cap / 10000.0:,.0f} 万）\n" + summary
 
     backtest_summary = None
     try:
@@ -262,6 +312,7 @@ async def review_backtest_with_ai(strategy_id: int, result_id: int = None) -> di
     metrics = _extract_metrics(result)
     key_events = _extract_key_events(result)
 
+    ai_cap = (strategy.get("ai_prefs") or {}).get("capital")
     strategy_summary = {
         "name": strategy.get("name"),
         "factor_ids": strategy.get("factor_ids"),
@@ -269,6 +320,7 @@ async def review_backtest_with_ai(strategy_id: int, result_id: int = None) -> di
         "n_drop": strategy.get("n_drop"),
         "rebalance_freq": strategy.get("rebalance_freq"),
         "benchmark": strategy.get("benchmark"),
+        "capital": f"{ai_cap:,.0f} 元" if ai_cap else None,
     }
 
     messages = build_review_prompt(strategy_summary, metrics, key_events)

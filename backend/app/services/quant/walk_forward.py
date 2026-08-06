@@ -209,10 +209,12 @@ def run_walk_forward(
 
 
 def build_score_df_from_exprs(factor_exprs: dict, weights: dict,
-                              method: str, start: str, end: str) -> pd.DataFrame:
+                              method: str, start: str, end: str,
+                              universe: str = None) -> pd.DataFrame:
     """由因子表达式构建组合打分 DataFrame（同步，需在线程池调用）。
 
     复用 _compute_backtest_sync 的组合逻辑，仅返回 score_df。
+    universe: 标的池（None=config 默认）。
     """
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values
@@ -221,6 +223,6 @@ def build_score_df_from_exprs(factor_exprs: dict, weights: dict,
     init_qlib()
     factor_values = {}
     for name, expr in factor_exprs.items():
-        factor_values[name] = load_factor_values(expr, start, end)
+        factor_values[name] = load_factor_values(expr, start, end, universe=universe)
     score_df = combine_factors(factor_values, weights=weights, method=method)
     return score_df

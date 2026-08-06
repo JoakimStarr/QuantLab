@@ -67,13 +67,14 @@ def _llm_timeout(n_candidates: int, n_rounds: int = 1):
 
 
 async def _ensure_sync_idle() -> str | None:
-    """挖掘任务需要读取 qlib bin；仅当活跃任务会写 bin（回填/补齐/指数/EOD/广播）
-    时才拒绝。fetch-only 任务（如财报拉取只写 PG）不影响 bin，允许挖掘。"""
-    from app.services.data.sync_progress import busy_message, writes_bins_active
+    """挖掘任务需要读取 qlib bin；仅当活跃任务会"重塑日历对齐"（回填历史扩展/
+    补齐重建）时才拒绝，避免读到错位数据。EOD/ETF/指数等纯追加同步写 bin 为
+    原子写，挖掘可并发执行（数据同步与挖掘解耦）。"""
+    from app.services.data.sync_progress import busy_message, calendar_shifting_active
 
-    if not writes_bins_active():
+    if not calendar_shifting_active():
         return None
-    return busy_message() + "；挖掘需要读取 qlib bin 数据，回填/同步期间数据不稳定，请稍后重试"
+    return busy_message() + "；挖掘需要读取 qlib bin 数据，回填/补齐会重塑日历，期间数据不稳定，请稍后重试"
 
 
 async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str = None, timeout: int = None) -> None:
@@ -91,13 +92,14 @@ async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str 
     try:
         # 信号量限流：超出 max_concurrent 的任务在此排队，超时只计实际执行时间
         async with sem:
-            # 兜底：任务真正开始时若恰逢数据回填/同步正在写 bin，
-            # 直接中止避免读到半写数据产生虚假 IC（fetch-only 任务不拦截）
-            from app.services.data.sync_progress import writes_bins_active
-            if writes_bins_active():
+            # 兜底：任务真正开始时若恰逢会重塑日历的回填/补齐正在写 bin，
+            # 直接中止避免读到错位数据产生虚假 IC；EOD/ETF 等纯追加同步
+            # 是原子写，不拦截（数据同步与挖掘解耦）
+            from app.services.data.sync_progress import calendar_shifting_active
+            if calendar_shifting_active():
                 await _mark_failed(
                     task_id,
-                    "数据回填/补齐正在写 qlib bin，挖掘任务已中止，请稍后重试",
+                    "数据回填/补齐正在重塑日历，挖掘任务已中止，请稍后重试",
                 )
                 return
             await asyncio.wait_for(coro_factory(), timeout=timeout)
@@ -187,14 +189,15 @@ async def get_task_api(task_id: int, db=Depends(get_db)):
     return ApiResponse(ok=True, data=_task_dict(r))
 
 
-async def _run_llm_task(task_id: int, n: int):
+async def _run_llm_task(task_id: int, n: int, universe: str = None):
     """LLM 挖掘任务执行器。不限时，依赖内部原子超时 + 硬上限兜底。"""
     from app.services.mining.llm_factor import mine_with_llm
     timeout = _llm_timeout(n, n_rounds=1)
-    await _safe_run_task(task_id, lambda: mine_with_llm(task_id, n), "LLM 挖掘", timeout=timeout)
+    await _safe_run_task(task_id, lambda: mine_with_llm(task_id, n, universe=universe),
+                         "LLM 挖掘", timeout=timeout)
 
 
-async def _run_llm_iterative_task(task_id: int, n_rounds: int, n: int):
+async def _run_llm_iterative_task(task_id: int, n_rounds: int, n: int, universe: str = None):
     """LLM 迭代挖掘任务执行器（n_rounds > 1 时使用）。
 
     动态超时：基础 + 每轮增量，避免多轮挖掘共用单轮超时。
@@ -204,7 +207,8 @@ async def _run_llm_iterative_task(task_id: int, n_rounds: int, n: int):
     timeout = _llm_timeout(n, n_rounds=n_rounds)
     await _safe_run_task(
         task_id,
-        lambda: mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n),
+        lambda: mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n,
+                                        universe=universe),
         "LLM 迭代挖掘", timeout=timeout,
     )
 
@@ -216,6 +220,7 @@ async def mine_llm_api(
     background_tasks: BackgroundTasks,
     n_candidates: int = Query(None),
     n_rounds: int = Query(1, ge=1, le=5, description="迭代轮数（>1 启用迭代挖掘）"),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """启动 LLM 因子挖掘（后台执行）。
 
@@ -228,26 +233,29 @@ async def mine_llm_api(
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     n = n_candidates or settings.mining.get("llm", {}).get("candidates_per_run", 10)
-    task_id = await _create_task("llm", {"n_candidates": n, "n_rounds": n_rounds})
+    task_id = await _create_task("llm", {"n_candidates": n, "n_rounds": n_rounds,
+                                         "universe": universe})
     if n_rounds and n_rounds > 1:
-        background_tasks.add_task(_run_llm_iterative_task, task_id, n_rounds, n)
+        background_tasks.add_task(_run_llm_iterative_task, task_id, n_rounds, n, universe)
         return ApiResponse(ok=True, data={
             "task_id": task_id, "type": "llm", "status": "pending", "n_rounds": n_rounds,
             "message": f"LLM 迭代因子挖掘已提交（{n_rounds} 轮，后台执行）",
         })
-    background_tasks.add_task(_run_llm_task, task_id, n)
+    background_tasks.add_task(_run_llm_task, task_id, n, universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "llm", "status": "pending",
                                       "message": "LLM 因子挖掘已提交（后台执行）"})
 
 
-async def _run_symbolic_task(task_id: int):
+async def _run_symbolic_task(task_id: int, universe: str = None):
     from app.services.mining.symbolic import mine_with_symbolic
-    await _safe_run_task(task_id, lambda: mine_with_symbolic(task_id), "符号回归挖掘", "symbolic")
+    await _safe_run_task(task_id, lambda: mine_with_symbolic(task_id, universe=universe),
+                         "符号回归挖掘", "symbolic")
 
 
 @router.post("/symbolic")
 @limiter.limit("3/minute")
-async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks):
+async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks,
+                            universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all")):
     """启动符号回归因子挖掘（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
@@ -255,18 +263,21 @@ async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks)
     busy = await _ensure_sync_idle()
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
-    task_id = await _create_task("symbolic", settings.mining.get("symbolic", {}))
-    background_tasks.add_task(_run_symbolic_task, task_id)
+    params = dict(settings.mining.get("symbolic", {}))
+    params["universe"] = universe
+    task_id = await _create_task("symbolic", params)
+    background_tasks.add_task(_run_symbolic_task, task_id, universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "symbolic", "status": "pending",
                                       "message": "符号回归因子挖掘已提交（后台执行）"})
 
 
 async def _run_automl_task(task_id: int, factor_ids: list[int], method: str,
-                           walk_forward: bool = False):
+                           walk_forward: bool = False, universe: str = None):
     from app.services.mining.automl import mine_with_automl
     await _safe_run_task(
         task_id,
-        lambda: mine_with_automl(task_id, factor_ids, method, walk_forward=walk_forward),
+        lambda: mine_with_automl(task_id, factor_ids, method, walk_forward=walk_forward,
+                                 universe=universe),
         "AutoML 组合", "automl",
     )
 
@@ -279,6 +290,7 @@ async def mine_automl_api(
     factor_ids: list[int] = Query(..., description="参与组合的因子 id 列表"),
     method: str = Query(None, description="lightgbm/linear"),
     walk_forward: int = Query(0, description="是否使用 Walk-Forward 滚动重训 0/1"),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """启动 AutoML 因子组合（后台执行）。"""
     if not factor_ids:
@@ -290,8 +302,10 @@ async def mine_automl_api(
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
     task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method,
-                                            "walk_forward": bool(walk_forward)})
-    background_tasks.add_task(_run_automl_task, task_id, factor_ids, method, bool(walk_forward))
+                                            "walk_forward": bool(walk_forward),
+                                            "universe": universe})
+    background_tasks.add_task(_run_automl_task, task_id, factor_ids, method,
+                              bool(walk_forward), universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "automl", "status": "pending",
                                       "message": f"AutoML 因子组合已提交（{('Walk-Forward ' if walk_forward else '')}后台执行）"})
 

@@ -225,14 +225,18 @@ def load_factor_values(
 
     # 因子中性化
     if neutralize in ("market_cap", "industry"):
-        from app.services.factor.neutralize import market_cap_neutralize, industry_neutralize
-        if neutralize == "market_cap":
-            df = market_cap_neutralize(df, factor_col="factor")
+        if market.startswith("etf"):
+            # ETF 无市值/行业数据，中性化无意义且行业中性化会引入噪音，显式跳过
+            logger.warning("ETF 标的池不支持市值/行业中性化，跳过（universe=%s）", market)
         else:
-            df = industry_neutralize(df, factor_col="factor")
-        # 用中性化后的值替换原始因子值，保持 "factor" 列名不变
-        df["factor"] = df["factor_neutralized"]
-        df = df.drop(columns=["factor_neutralized"])
+            from app.services.factor.neutralize import market_cap_neutralize, industry_neutralize
+            if neutralize == "market_cap":
+                df = market_cap_neutralize(df, factor_col="factor")
+            else:
+                df = industry_neutralize(df, factor_col="factor")
+            # 用中性化后的值替换原始因子值，保持 "factor" 列名不变
+            df["factor"] = df["factor_neutralized"]
+            df = df.drop(columns=["factor_neutralized"])
 
     return df
 
@@ -386,6 +390,10 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
 
     # 提取因子 Series
     factor_s = factor_df["factor"].copy()
+    # qlib D.features 返回 (instrument, datetime)，alphalens 要求 (date, asset)：
+    # 必须先换序再改名，否则 alphalens 把股票代码当日期，抛 "'Index' object has no attribute 'tz'"
+    if not isinstance(factor_s.index.levels[0], pd.DatetimeIndex):
+        factor_s = factor_s.swaplevel(0, 1).sort_index()
     factor_s.index = factor_s.index.set_names(["date", "asset"])
 
     # 使用 alphalens 多周期前向收益，一次计算所有 lag
@@ -516,6 +524,10 @@ def compute_quantile_returns(
 
     # 因子 Series
     factor_s = merged[factor_col].copy()
+    # qlib 索引 (instrument, datetime) → alphalens (date, asset)，需先换序再改名
+    # （与 compute_decay 相同：不换序会把股票代码当日期导致 alphalens 报错）
+    if not isinstance(factor_s.index.levels[0], pd.DatetimeIndex):
+        factor_s = factor_s.swaplevel(0, 1).sort_index()
     factor_s.index = factor_s.index.set_names(["date", "asset"])
 
     try:

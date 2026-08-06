@@ -186,3 +186,108 @@ class TestComputeTurnover:
         ])
         result = compute_turnover(fdf)
         assert result == pytest.approx(1.0, abs=1e-3)
+
+
+# ---------- compute_decay / compute_quantile_returns 索引序修复回归 ----------
+# qlib D.features 返回 (instrument, datetime) 索引；alphalens 要求 (date, asset)。
+# 旧实现只 set_names 不 swaplevel，导致 compute_decay 恒返回 {}、分层分析恒报错。
+
+
+def _make_qlib_style_data(days=40, n=30, seed=7):
+    """构造 qlib 风格的 (instrument, datetime) 因子/标签/close DataFrame。"""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=days, freq="B")
+    stocks = [f"s{i:03d}" for i in range(n)]
+    idx = pd.MultiIndex.from_product([stocks, dates], names=["instrument", "datetime"])
+
+    factor_vals = rng.standard_normal(len(idx))
+    label_vals = rng.standard_normal(len(idx)) * 0.02
+    # close：每只股票从各自 base 累计 1+label 的近似价格
+    lab2d = label_vals.reshape(n, days)
+    prices = []
+    for s in range(n):
+        base = rng.uniform(8, 30)
+        prices.extend(base * np.cumprod(1 + lab2d[s]))
+
+    fdf = pd.DataFrame({"factor": factor_vals}, index=idx)
+    ldf = pd.DataFrame({"label": label_vals}, index=idx)
+    cdf = pd.DataFrame({"$close": prices}, index=idx)
+    return fdf, ldf, cdf
+
+
+class TestComputeDecayIndexOrder:
+    """compute_decay 必须返回非空衰减序列（回归：索引未换序导致恒为 {}）。"""
+
+    def test_decay_returns_series_with_qlib_index(self):
+        from app.services.quant.factor_eval import compute_decay
+
+        fdf, ldf, cdf = _make_qlib_style_data()
+        decay = compute_decay(fdf, ldf, preloaded_close_df=cdf)
+        assert isinstance(decay, dict)
+        assert decay, "compute_decay 不应返回空 dict（索引换序后应能算出各 lag IC）"
+        assert 1 in decay and 10 in decay
+
+
+class TestQuantileReturnsIndexOrder:
+    """compute_quantile_returns 必须正常分组（回归：索引未换序导致 alphalens 报错）。"""
+
+    def test_quantile_returns_works_with_qlib_index(self):
+        from app.services.quant.factor_eval import compute_quantile_returns
+
+        fdf, ldf, _cdf = _make_qlib_style_data()
+        result = compute_quantile_returns(fdf, ldf, n_groups=5)
+        assert result.get("error") is None, f"不应报错: {result.get('error')}"
+        assert "group_returns" in result
+        assert result.get("n_groups") == 5
+        assert len(result.get("group_returns", {})) == 5
+
+
+class TestLoadFactorValuesEtfNeutralizeSkip:
+    """ETF 标的池加载因子值时跳过市值/行业中性化（S3）。"""
+
+    def _fake_feature_df(self):
+        import numpy as np
+        dates = pd.date_range("2024-01-01", periods=5, freq="B")
+        idx = pd.MultiIndex.from_product([dates, ["sh510300"]], names=["datetime", "instrument"])
+        return pd.DataFrame({"factor": [1.0, 2.0, 3.0, 4.0, 5.0]}, index=idx)
+
+    def test_etf_universe_skips_neutralize(self):
+        from unittest.mock import MagicMock, patch
+        from app.services.quant import factor_eval as fe
+
+        fake_df = self._fake_feature_df()
+        mock_d = MagicMock()
+        mock_d.features.return_value = fake_df
+        with patch.object(fe, "init_qlib"), \
+             patch.object(fe, "_load_instrument_spans", return_value=["sh510300"]), \
+             patch("qlib.data.D", mock_d), \
+             patch("app.services.factor.neutralize.industry_neutralize") as mock_ind:
+            df = fe.load_factor_values(
+                "$close/Ref($close,5)-1", "2024-01-01", "2024-01-10",
+                universe="etf_curated", neutralize="industry",
+            )
+        assert "factor_neutralized" not in df.columns
+        assert list(df["factor"]) == [1.0, 2.0, 3.0, 4.0, 5.0]
+        mock_ind.assert_not_called()
+
+    def test_stock_universe_still_neutralizes(self):
+        from unittest.mock import MagicMock, patch
+        from app.services.quant import factor_eval as fe
+
+        fake_df = self._fake_feature_df().copy()
+        neutralized = fake_df.copy()
+        neutralized["factor_neutralized"] = [0.1, 0.2, 0.3, 0.4, 0.5]
+        mock_d = MagicMock()
+        mock_d.features.return_value = fake_df
+        with patch.object(fe, "init_qlib"), \
+             patch.object(fe, "_load_instrument_spans", return_value=["sh600000"]), \
+             patch("qlib.data.D", mock_d), \
+             patch("app.services.factor.neutralize.industry_neutralize",
+                   return_value=neutralized) as mock_ind:
+            df = fe.load_factor_values(
+                "$close/Ref($close,5)-1", "2024-01-01", "2024-01-10",
+                universe="csi300", neutralize="industry",
+            )
+        mock_ind.assert_called_once()
+        assert "factor_neutralized" not in df.columns  # 中性化后替换回 factor
+        assert list(df["factor"]) == [0.1, 0.2, 0.3, 0.4, 0.5]

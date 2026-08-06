@@ -260,6 +260,7 @@ async def batch_evaluate_alpha158(
     eval_end: str = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     factor_ids: Optional[List[int]] = None,
+    universe: str = None,
 ) -> dict:
     """批量并行评价 Alpha158 因子（优化版：预加载共用数据 + 线程池 + 实时写入）。
 
@@ -294,7 +295,7 @@ async def batch_evaluate_alpha158(
     period = settings.quant.get("default_backtest_period", {})
     eval_start = eval_start or period.get("start", "2020-01-01")
     eval_end = eval_end or period.get("end", "2024-12-31")
-    universe = settings.quant.get("universe", "csi300")
+    universe = universe or settings.quant.get("universe", "csi300")
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
 
     # 2. 查询所有 alpha158 因子（可指定 factor_ids 只评价部分）
@@ -527,12 +528,14 @@ async def backfill_alpha158_metrics(
     factor_ids: Optional[List[int]] = None,
     eval_start: str = None,
     eval_end: str = None,
+    universe: str = None,
 ) -> dict:
     """为因子补算评价（IC/RankIC/ICIR/turnover）。
 
     - 不传 factor_ids：只对 category='alpha158' 且 ic IS NULL 的因子补算（历史遗留修复）
     - 传 factor_ids：对指定的任意类别因子重算（不管指标是否已存在），用于前端勾选后手动重算
     - eval_start/eval_end：评价区间，默认从 config 读取
+    - universe：标的池（None=config 默认），如 etf_all
     """
     from sqlalchemy import select
     from app.core.config import settings
@@ -568,6 +571,7 @@ async def backfill_alpha158_metrics(
         eval_end=eval_end,
         progress_callback=progress_callback,
         factor_ids=[r[0] for r in targets],
+        universe=universe,
     )
 
     evaluated = eval_result.get("evaluated", 0)

@@ -7,20 +7,14 @@ from .backtest_result import BacktestResult
 from .mining_task import MiningTask
 from .sync_history import SyncHistory
 from .task_result import TaskResult
-from .fundamental import FinancialIndicator, FundamentalPIT
+from .fundamental import FinancialIndicator
 from .macro import MacroIndicator
 from .baostock import (
     StockDaily,
     StockBasic,
     StockIndustry,
     TradeCalendar,
-    FinProfit,
-    FinOperation,
-    FinGrowth,
-    FinBalance,
-    FinCashflow,
-    FinDupont,
-    MarginDaily,
+    EtfDaily,
 )
 
 __all__ = [
@@ -33,18 +27,11 @@ __all__ = [
     "MiningTask",
     "SyncHistory",
     "TaskResult",
-    "FundamentalPIT",
     "FinancialIndicator",
     "MacroIndicator",
     "StockDaily",
     "StockBasic",
     "StockIndustry",
     "TradeCalendar",
-    "FinProfit",
-    "FinOperation",
-    "FinGrowth",
-    "FinBalance",
-    "FinCashflow",
-    "FinDupont",
-    "MarginDaily",
+    "EtfDaily",
 ]

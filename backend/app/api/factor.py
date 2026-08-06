@@ -62,12 +62,12 @@ async def seed_builtin_api():
     return ApiResponse(ok=True, data=result)
 
 
-async def _eval_factor_task(factor_id: int, start: str, end: str):
+async def _eval_factor_task(factor_id: int, start: str, end: str, universe: str = None):
     """后台因子评价任务（CPU 密集，应由 worker 执行）。"""
     try:
         from app.services.quant.qlib_init import QlibNotAvailableError
         from app.services.factor.library import evaluate_factor_by_id
-        await evaluate_factor_by_id(factor_id, start, end)
+        await evaluate_factor_by_id(factor_id, start, end, universe=universe)
     except QlibNotAvailableError as e:
         import logging
         logging.getLogger(__name__).error("qlib 不可用: %s", e)
@@ -82,6 +82,7 @@ async def evaluate_factor_api(
     background_tasks: BackgroundTasks,
     start_date: str = Query(None),
     end_date: str = Query(None),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """触发因子评价（后台执行，结果写回因子库）。"""
     from app.services.quant.qlib_init import is_qlib_available
@@ -90,7 +91,7 @@ async def evaluate_factor_api(
     factor = await get_factor(factor_id)
     if factor is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "因子不存在", "status": 404})
-    background_tasks.add_task(_eval_factor_task, factor_id, start_date, end_date)
+    background_tasks.add_task(_eval_factor_task, factor_id, start_date, end_date, universe)
     return ApiResponse(ok=True, data={
         "message": f"因子 {factor_id} 评价已提交（后台执行）",
         "factor_id": factor_id,

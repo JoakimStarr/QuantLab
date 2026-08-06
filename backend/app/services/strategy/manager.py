@@ -32,9 +32,9 @@ async def get_strategy(strategy_id: int) -> dict:
 async def create_strategy(name: str, factor_ids: list[int], combination_method: str = "equal_weight",
                           topk: int = None, n_drop: int = None, rebalance_freq: str = "day",
                           benchmark: str = None, description: str = None,
-                          orthogonalize: int = 0) -> dict:
-    topk = topk or settings.quant.get("topk", 50)
-    n_drop = n_drop or settings.quant.get("n_drop", 5)
+                          orthogonalize: int = 0, ai_prefs: dict = None) -> dict:
+    topk = topk if topk is not None else settings.quant.get("topk", 50)
+    n_drop = n_drop if n_drop is not None else settings.quant.get("n_drop", 5)
     benchmark = benchmark or settings.quant.get("benchmark", "SH000300")
     async with async_session() as session:
         s = Strategy(
@@ -42,6 +42,7 @@ async def create_strategy(name: str, factor_ids: list[int], combination_method: 
             combination_method=combination_method, topk=topk, n_drop=n_drop,
             rebalance_freq=rebalance_freq, benchmark=benchmark, description=description,
             orthogonalize=orthogonalize,
+            ai_prefs=json.dumps(ai_prefs, ensure_ascii=False) if ai_prefs else None,
         )
         session.add(s)
         await session.commit()
@@ -70,8 +71,16 @@ async def _load_factor_expressions(factor_ids: list[int]) -> dict:
 def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method: str,
                            topk: int, n_drop: int, benchmark: str, rebalance_freq: str,
                            start: str, end: str, orthogonalize: int = 0,
-                           backend: str = "qlib", capital: float = None) -> dict:
-    """同步执行回测计算（在 executor 中调用，不阻塞事件循环）。"""
+                           backend: str = "qlib", capital: float = None,
+                           trade_unit: int = None, deal_price: str = None,
+                           slippage_bps: float = None, cost_buy: float = None,
+                           cost_sell: float = None, min_cost: float = None,
+                           universe: str = None, asset_class: str = "stock") -> dict:
+    """同步执行回测计算（在 executor 中调用，不阻塞事件循环）。
+
+    universe: 标的池（None=config 默认），透传给 load_factor_values。
+    asset_class: stock/etf，透传给回测后端（ETF 无整手/涨跌停放宽）。
+    """
     from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors, run_backtest
@@ -80,7 +89,7 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     init_qlib()
     factor_values = {}
     for name, expr in factor_exprs.items():
-        factor_values[name] = load_factor_values(expr, start, end)
+        factor_values[name] = load_factor_values(expr, start, end, universe=universe)
     score_df = combine_factors(factor_values, weights=weights, method=combination_method,
                                orthogonalize=bool(orthogonalize))
     # 默认过滤北交所股票（防御性，factor_eval 已过滤）
@@ -94,7 +103,9 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
             logger.info("回测过滤北交所股票: %d -> %d", before, len(score_df.index.get_level_values("instrument").unique()))
     bt = run_backtest(score_df, start=start, end=end, topk=topk, n_drop=n_drop,
                       benchmark=benchmark, rebalance_freq=rebalance_freq, backend=backend,
-                      capital=capital)
+                      capital=capital, trade_unit=trade_unit, deal_price=deal_price,
+                      slippage_bps=slippage_bps, cost_buy=cost_buy, cost_sell=cost_sell,
+                      min_cost=min_cost, asset_class=asset_class)
     returns = bt.get("returns")
     bench = bt.get("benchmark")
     metrics = analyze_portfolio(returns, bench)
@@ -115,10 +126,19 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
 
 
 async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = None,
-                                backend: str = "qlib", capital: float = None) -> dict:
+                                backend: str = "qlib", capital: float = None,
+                                trade_unit: int = None, deal_price: str = None,
+                                slippage_bps: float = None, cost_buy: float = None,
+                                cost_sell: float = None, min_cost: float = None,
+                                universe: str = None, asset_class: str = "stock") -> dict:
     """执行策略回测（CPU 密集计算放入线程池，不阻塞事件循环）。
 
     流程：加载因子元数据(async) -> 回测计算(executor) -> 落库(async)
+
+    执行/成本参数（用户可选，覆盖 config 默认，随结果落库标注口径）：
+        trade_unit / deal_price / slippage_bps / cost_buy / cost_sell / min_cost
+    universe: 标的池（None=config 默认）。
+    asset_class: stock/etf（ETF 无整手/涨跌停放宽）。
     """
     import asyncio
     strategy = await get_strategy(strategy_id)
@@ -131,17 +151,10 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     # 回测区间不超过数据实际范围：前端常传 end=今天，但当日日K 数据 baostock
     # 要到收盘后（~17:30）才入库；且 qlib 回测需要 end 之后一天的数据计算
     # 最后一期收益，end 落在数据末日会越界（index N out of bounds with size N）。
-    # 因此收敛到倒数第二个交易日。
-    try:
-        from app.services.data.eod_incremental import _get_calendar
-        data_cal = _get_calendar(settings.qlib_provider_path)
-        if len(data_cal) >= 2:
-            data_end = data_cal[-2]
-            if end > data_end:
-                logger.info("回测 end %s 收敛到数据倒数第二日 %s", end, data_end)
-                end = data_end
-    except Exception as e:  # noqa: BLE001
-        logger.debug("回测 end 收敛失败（保持原值）: %s", e)
+    # 这里用共享函数先做日历收敛（score_df 尚未加载，因子上界由 run_backtest 兜底），
+    # 同时让后续因子加载少拉一天的无效数据。
+    from app.services.quant.backtest_engine import clamp_backtest_end
+    end = clamp_backtest_end(end)
     factor_ids = strategy["factor_ids"] if strategy["factor_ids"] else []
     if not factor_ids:
         raise ValueError("策略未关联任何因子")
@@ -183,7 +196,8 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
         factor_exprs, weights, strategy["combination_method"],
         strategy["topk"], strategy["n_drop"], strategy["benchmark"],
         strategy["rebalance_freq"], start, end, strategy.get("orthogonalize", 0),
-        backend, capital,
+        backend, capital, trade_unit, deal_price, slippage_bps, cost_buy, cost_sell, min_cost,
+        universe, asset_class,
     )
     metrics = computed["metrics"]
     nav_curve = computed["nav_curve"]
@@ -197,6 +211,17 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
 
     # async: 落库
     async with async_session() as session:
+        # 回测口径（执行/成本设置），随结果落库标注，便于对比不同设置
+        exec_config = {
+            "backend": backend,
+            "asset_class": asset_class,
+            "trade_unit": trade_unit if trade_unit is not None else "default(100)",
+            "deal_price": deal_price or "close",
+            "slippage_bps": slippage_bps if slippage_bps is not None else settings.quant.get("slippage_bps", 0),
+            "cost_buy": cost_buy if cost_buy is not None else settings.quant.get("cost_buy", 0.0013),
+            "cost_sell": cost_sell if cost_sell is not None else settings.quant.get("cost_sell", 0.0023),
+            "min_cost": min_cost if min_cost is not None else 5,
+        }
         result = BacktestResult(
             strategy_id=strategy_id, start_date=start, end_date=end,
             topk=strategy["topk"], n_drop=strategy["n_drop"],
@@ -218,7 +243,8 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             excess_return=metrics.get("excess_return"),
             nav_curve=json.dumps(nav_curve),
             metrics=json.dumps({**metrics, "topk": strategy["topk"], "n_drop": strategy["n_drop"],
-                                "initial_capital": capital or settings.quant.get("initial_capital", 100000000)}),
+                                "initial_capital": capital or settings.quant.get("initial_capital", 100000000),
+                                "exec_config": exec_config}),
             trades=json.dumps(trades, ensure_ascii=False),
         )
         session.add(result)
@@ -257,6 +283,7 @@ async def delete_backtest_result(result_id: int) -> bool:
 
 
 def _strategy_dict(r: Strategy) -> dict:
+    ai_prefs = json.loads(r.ai_prefs) if r.ai_prefs else None
     return {
         "id": r.id, "name": r.name, "description": r.description,
         "factor_ids": json.loads(r.factor_ids) if r.factor_ids else [],
@@ -264,6 +291,9 @@ def _strategy_dict(r: Strategy) -> dict:
         "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
         "benchmark": r.benchmark, "status": r.status,
         "orthogonalize": r.orthogonalize,
+        "ai_prefs": ai_prefs,
+        # 兼容便捷字段：capital 从 ai_prefs 派生（前端回测预填用）
+        "capital": (ai_prefs or {}).get("capital"),
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 

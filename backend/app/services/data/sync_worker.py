@@ -149,6 +149,7 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
         args.kind == "backfill"
         or args.kind == "indices"
         or args.kind == "full"
+        or args.kind == "etf"
         or (args.kind == "repair" and args.include_baostock)
         or (args.kind == "eod" and (args.source or "baostock") == "baostock")
     )
@@ -217,6 +218,13 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                 else:
                     logger.error("指数同步返回错误: %s", result)
                 finish_progress(bool(result.get("ok")), result.get("error"))
+            elif args.kind == "etf":
+                from app.services.data.etf_sync import sync_etf_task
+
+                days = args.days or (args.years * 365 if args.years else 730)
+                result = await sync_etf_task(days=days, overwrite=args.overwrite)
+                logger.info("ETF 同步完成: %s", result)
+                finish_progress(bool(result.get("ok")), result.get("error"))
 
         # 留出前端轮询读取 done/failed 状态的窗口
         await asyncio.sleep(3)
@@ -241,7 +249,11 @@ def main() -> None:
     from app.core.config import settings
 
     parser = argparse.ArgumentParser(description="QuantLab 数据同步独立 worker")
-    parser.add_argument("--kind", choices=["backfill", "eod", "repair", "indices", "fundamental", "full"], default="backfill")
+    parser.add_argument(
+        "--kind",
+        choices=["backfill", "eod", "repair", "indices", "fundamental", "etf", "full"],
+        default="backfill",
+    )
     parser.add_argument("--universe", default="csi300")
     parser.add_argument("--years", type=int, default=None)
     parser.add_argument("--days", type=int, default=None)

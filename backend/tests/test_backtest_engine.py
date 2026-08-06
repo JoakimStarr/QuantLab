@@ -8,6 +8,7 @@ import pandas as pd
 from unittest.mock import patch
 
 from app.services.quant.backtest_engine import (
+    clamp_backtest_end,
     combine_factors,
     run_backtest,
 )
@@ -121,6 +122,58 @@ class TestCombineFactors:
 
 
 
+class TestClampBacktestEnd:
+    """回测 end 收敛函数测试：日历上界 + 因子数据上界，取更早者。"""
+
+    _CAL = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
+
+    @staticmethod
+    def _make_score_df(days=3):
+        idx = pd.MultiIndex.from_product(
+            [pd.date_range("2024-01-02", periods=days, freq="D"), ["s1", "s2"]],
+            names=["datetime", "instrument"],
+        )
+        return pd.DataFrame({"score": [1.0, 2.0, 3.0, 1.0, 2.0, 3.0][: days * 2]}, index=idx)
+
+    @patch("app.services.data.eod_incremental._get_calendar", return_value=_CAL)
+    def test_calendar_clamp(self, mock_cal):
+        """end 超过日历倒数第二日时收敛。"""
+        assert clamp_backtest_end("2024-12-31") == "2024-01-04"  # _CAL[-2]
+
+    @patch("app.services.data.eod_incremental._get_calendar", return_value=_CAL)
+    def test_calendar_within_range_no_clamp(self, mock_cal):
+        """end 在日历范围内保持不变。"""
+        assert clamp_backtest_end("2024-01-03") == "2024-01-03"
+        assert clamp_backtest_end("2024-01-04") == "2024-01-04"
+
+    @patch("app.services.data.eod_incremental._get_calendar", return_value=_CAL)
+    def test_score_df_clamp_tighter(self, mock_cal):
+        """因子数据倒数第二日比日历更早时，取因子侧。"""
+        score_df = self._make_score_df(days=2)  # 因子日期 01-02、01-03，倒数第二日 01-02
+        assert clamp_backtest_end("2024-12-31", score_df) == "2024-01-02"
+
+    @patch("app.services.data.eod_incremental._get_calendar", return_value=_CAL)
+    def test_score_df_inside_calendar_keeps_min(self, mock_cal):
+        """两上界都存在时取更早者；score_df 无影响时用日历上界。"""
+        score_df = self._make_score_df(days=3)  # 因子倒数第二日 01-03
+        assert clamp_backtest_end("2024-12-31", score_df) == "2024-01-03"  # min(01-04, 01-03)
+
+    def test_empty_end_returns_as_is(self):
+        """end 为空时原样返回（不收敛）。"""
+        assert clamp_backtest_end(None) is None
+        assert clamp_backtest_end("") == ""
+
+    @patch("app.services.data.eod_incremental._get_calendar", return_value=[])
+    def test_missing_calendar_keeps_end(self, mock_cal):
+        """日历缺失（返回空）时保持原值。"""
+        assert clamp_backtest_end("2024-12-31") == "2024-12-31"
+
+    @patch("app.services.data.eod_incremental._get_calendar", side_effect=OSError("no file"))
+    def test_calendar_read_error_keeps_end(self, mock_cal):
+        """日历读取异常时保持原值（防御性）。"""
+        assert clamp_backtest_end("2024-12-31") == "2024-12-31"
+
+
 class TestRunBacktest:
     """run_backtest 集成测试（mock qlib）。"""
 
@@ -220,6 +273,22 @@ class TestRunBacktest:
             topk=3, n_drop=1, rebalance_freq="month",
         )
         assert result["rebalance_freq"] == "month"
+
+    @patch("qlib.data.D")
+    @patch("app.services.quant.backtest_engine.init_qlib", return_value=True)
+    def test_run_backtest_etf_asset_class(self, mock_init, mock_D):
+        """ETF 标的类别走 qlib 后端不报错（无整手 trade_unit=1/涨跌停放宽分支）。"""
+        score_df, raw, bench_raw, dates, stocks = self._make_mock_data()
+        mock_D.features.side_effect = [raw, bench_raw]
+
+        result = run_backtest(
+            score_df, start="2024-01-01", end="2024-01-14",
+            topk=3, n_drop=1, rebalance_freq="day",
+            asset_class="etf",
+        )
+        assert isinstance(result, dict)
+        assert "returns" in result
+        assert "benchmark" in result
 
     @patch("qlib.data.D")
     @patch("app.services.quant.backtest_engine.init_qlib", return_value=True)

@@ -45,6 +45,8 @@ export function getWalkForwardResults(id) {
 // === AI 策略能力 ===
 
 // AI 生成策略：参考因子库评价自动推荐因子组合与参数
+// 该接口含多轮 LLM 调用（Provider failover + 重试），后端 route_budget 为 120s，
+// 远大于 axios 默认 30s，需单独放宽超时避免误报 "timeout of 30000ms exceeded"
 export function aiGenerateStrategy(params) {
-  return request.post('/strategies/ai/generate', null, { params })
+  return request.post('/strategies/ai/generate', null, { params, timeout: 130000 })
 }

@@ -238,13 +238,23 @@ const modes = [
 // 允许算子（静态展示）
 const operators = ['Ref', 'Mean', 'Std', 'Max', 'Min', 'Sum', 'Rank', 'Corr', 'Cov', 'Delta', 'Slope']
 
-// 股票池选项
-const universeOptions = [
+// 股票池选项（优先从后端拉取实际存在的 instruments/*.txt，含 ETF 池）
+const universeOptions = ref([
   { value: 'csi300', label: 'CSI300' },
   { value: 'csi500', label: 'CSI500' },
-  { value: 'csi1000', label: 'CSI1000' },
   { value: 'all', label: '全A股' },
-]
+])
+async function loadUniverses() {
+  try {
+    const { listUniverses } = await import('@/api/quant')
+    const items = await listUniverses()
+    if (Array.isArray(items) && items.length) {
+      universeOptions.value = items.map((u) => ({ value: u.name, label: `${u.name}（${u.count}）` }))
+    }
+  } catch (e) {
+    // 拉取失败保留默认股票池选项
+  }
+}
 
 // 默认表单值（重置用）
 const todayStr = () => new Date().toISOString().slice(0, 10)
@@ -438,9 +448,9 @@ async function startMining() {
   try {
     let data
     if (selectedMode.value === 'llm') {
-      data = await mineLlm({ n_candidates: form.candidates, n_rounds: form.nRounds })
+      data = await mineLlm({ n_candidates: form.candidates, n_rounds: form.nRounds, universe: form.universe })
     } else if (selectedMode.value === 'symbolic') {
-      data = await mineSymbolic({ population: 1000, generations: 20 })
+      data = await mineSymbolic({ population: 1000, generations: 20, universe: form.universe })
     } else if (selectedMode.value === 'text') {
       textDialog.visible = true
       return
@@ -530,6 +540,7 @@ async function submitAutoML() {
 
 onMounted(() => {
   loadTasks()
+  loadUniverses()
 })
 
 onBeforeUnmount(() => {

@@ -87,9 +87,18 @@ async def archive_strategy_api(strategy_id: int):
 
 
 async def _run_backtest_task(strategy_id: int, start: str, end: str, backend: str = "qlib",
-                             capital: float = None):
+                             capital: float = None, trade_unit: int = None,
+                             deal_price: str = None, slippage_bps: float = None,
+                             cost_buy: float = None, cost_sell: float = None,
+                             min_cost: float = None, universe: str = None,
+                             asset_class: str = "stock"):
     try:
-        await run_strategy_backtest(strategy_id, start, end, backend=backend, capital=capital)
+        await run_strategy_backtest(
+            strategy_id, start, end, backend=backend, capital=capital,
+            trade_unit=trade_unit, deal_price=deal_price, slippage_bps=slippage_bps,
+            cost_buy=cost_buy, cost_sell=cost_sell, min_cost=min_cost,
+            universe=universe, asset_class=asset_class,
+        )
         backtest_status.set_completed(strategy_id)
         # 成功回测后把策略状态重置为 active（之前失败写入的 backtest_failed 需清除，
         # 否则一次失败后即使后续回测成功，状态也永远显示失败）
@@ -125,6 +134,14 @@ async def run_backtest_api(
     end_date: str = Query(None),
     backend: str = Query("qlib", description="回测后端: qlib(默认,工业级A股约束) / vbt(矢量化,快速扫描)"),
     initial_capital: float = Query(None, description="初始资金（元，默认 1 亿，可经 config.quant.initial_capital 配置）"),
+    trade_unit: int = Query(None, ge=1, description="A股整手大小: 100=整手约束(默认qlib内置), 1=关闭整手允许小数股"),
+    deal_price: str = Query(None, description="成交价: close=T+1收盘(默认) / open=T+1开盘(更保守)"),
+    slippage_bps: float = Query(None, ge=0, description="滑点(基点)，默认 0"),
+    cost_buy: float = Query(None, ge=0, description="买入费率(小数)，默认 config 0.0013"),
+    cost_sell: float = Query(None, ge=0, description="卖出费率(小数)，默认 config 0.0023"),
+    min_cost: float = Query(None, ge=0, description="单笔最低佣金(元)，默认 5"),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
+    asset_class: str = Query("stock", description="标的类别: stock=A股(T+1/整手/涨跌停) / etf=ETF(T+0语义/无整手/涨跌停放宽)"),
 ):
     """触发策略回测（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
@@ -137,20 +154,32 @@ async def run_backtest_api(
             "message": f"不支持的回测后端: {backend}（可选: qlib / vbt）",
             "status": 400,
         })
-    # 数据同步（回填/补齐/指数/EOD）写 bin 期间，bin 与 day.txt 处于对齐过渡状态，
-    # 回测会读到错位数据导致越界/结果消失；fetch-only 任务（只写 PG）不拦截
-    from app.services.data.sync_progress import busy_message, writes_bins_active
-    if writes_bins_active():
+    # 标的类别白名单
+    if asset_class not in ("stock", "etf"):
+        return ApiResponse(ok=False, error={
+            "code": "VALIDATION_ERROR",
+            "message": f"不支持的标的类别: {asset_class}（可选: stock / etf）",
+            "status": 400,
+        })
+    # 数据同步与回测解耦：只有"会重塑日历对齐"的同步（回填历史扩展/补齐重建）
+    # 会读到错位 bin，需等待；EOD/ETF/指数等纯追加同步写 bin 是原子写，
+    # 回测可并发执行、互不打扰。
+    from app.services.data.sync_progress import busy_message, calendar_shifting_active
+    if calendar_shifting_active():
         return ApiResponse(ok=False, error={
             "code": "SYNC_IN_PROGRESS",
-            "message": busy_message() + "；回测读取 qlib bin，数据同步写 bin 期间结果不可靠，请稍后重试",
+            "message": busy_message() + "；回填/补齐会重塑日历，期间回测结果不可靠，请稍后重试",
             "status": 409,
         })
     strategy = await get_strategy(strategy_id)
     if strategy is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
     backtest_status.set_running(strategy_id)
-    background_tasks.add_task(_run_backtest_task, strategy_id, start_date, end_date, backend, initial_capital)
+    background_tasks.add_task(
+        _run_backtest_task, strategy_id, start_date, end_date, backend, initial_capital,
+        trade_unit, deal_price, slippage_bps, cost_buy, cost_sell, min_cost, universe,
+        asset_class,
+    )
     return ApiResponse(ok=True, data={
         "message": f"策略 {strategy_id} 回测已提交（后台执行）",
         "strategy_id": strategy_id,

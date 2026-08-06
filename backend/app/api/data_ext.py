@@ -514,6 +514,61 @@ async def sync_indices_api():
     return ApiResponse(ok=True, data={"message": "指数同步已提交，独立进程后台执行中"})
 
 
+@router.post("/sync-etf")
+async def sync_etf_api(years: int = Query(None, description="回看年数，默认 2 年"),
+                       days: int = Query(None, description="回看窗口（自然日），覆盖 years"),
+                       overwrite: bool = Query(False, description="是否覆盖已有日期")):
+    """同步全市场 ETF 日K 到 qlib bin（独立 worker 后台执行）。
+
+    按交易日一次拉全市场（baostock query_daily_history_k_ETF），写 qlib bin
+    （OHLCV+amount+change+tradable+factor），落 etf_daily 窄表，重建全量池
+    instruments/etf_all.txt，并注册到 stock_index（type='etf'）。
+    """
+    from app.services.quant.qlib_init import is_qlib_available
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+
+    if writes_bins_active():
+        return ApiResponse(ok=False, error={
+            "code": "SYNC_IN_PROGRESS",
+            "message": busy_message(),
+            "status": 409,
+        })
+
+    # years（如前端"同步 X 年"输入框）转自然日；days 显式传入时优先
+    if days is None:
+        days = years * 365 if years else 730
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("etf", "all", days=days, overwrite=overwrite)
+    return ApiResponse(ok=True, data={"message": f"ETF 同步已提交（约 {days / 365:.1f} 年历史），独立进程后台执行中"})
+
+
+@router.get("/universes")
+async def list_universes_api():
+    """列出可用标的池（instruments/*.txt：文件名 + 成分数）。
+
+    供前端动态渲染标的池下拉（股票池 csi300/csi500/all、ETF 池 etf_all）。
+    """
+    import os
+    from app.core.config import settings
+
+    instruments_dir = os.path.join(settings.qlib_provider_path, "instruments")
+    items = []
+    if os.path.isdir(instruments_dir):
+        for fname in sorted(os.listdir(instruments_dir)):
+            if not fname.endswith(".txt"):
+                continue
+            name = fname[:-4]
+            count = 0
+            try:
+                with open(os.path.join(instruments_dir, fname), encoding="utf-8") as f:
+                    count = sum(1 for line in f if line.strip())
+            except OSError:
+                pass
+            items.append({"name": name, "count": count})
+    return ApiResponse(ok=True, data=items)
+
+
 @router.get("/indices")
 async def indices_api(db=Depends(get_db)):
     """已注册指数清单（stock_index 主表）：代码/名称/数据源 + qlib bin 状态。
@@ -539,6 +594,7 @@ async def indices_api(db=Depends(get_db)):
             "code": r.code,
             "name": r.name,
             "source": r.source,
+            "type": r.type,  # index=指数 / etf=ETF
             "has_bin": os.path.isdir(code_dir),
             "bin_fields": fields,
         })
