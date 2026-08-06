@@ -47,4 +47,6 @@ class Factor(Base):
         Index("idx_factor_name", "name"),
         # 按挖掘任务反查因子：WHERE source_task_id=?（挖掘结果列表高频查询）
         Index("idx_factor_source_task", "source_task_id"),
+        # 同一表达式只允许入库一次（防挖掘/手动重复新增）
+        Index("uq_factor_expression", "expression", unique=True),
     )
