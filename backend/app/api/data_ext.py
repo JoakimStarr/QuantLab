@@ -517,7 +517,11 @@ async def sync_indices_api():
 @router.post("/sync-etf")
 async def sync_etf_api(years: int = Query(None, description="回看年数，默认 2 年"),
                        days: int = Query(None, description="回看窗口（自然日），覆盖 years"),
-                       overwrite: bool = Query(False, description="是否覆盖已有日期")):
+                       overwrite: bool = Query(False, description="是否覆盖已有日期"),
+                       source: str = Query(
+                           "baostock",
+                           description="数据源: baostock(按日全市场增量) / tencent(qfq对齐现有时间范围修正复权)",
+                       )):
     """同步全市场 ETF 日K 到 qlib bin（独立 worker 后台执行）。
 
     按交易日一次拉全市场（baostock query_daily_history_k_ETF），写 qlib bin
@@ -539,8 +543,10 @@ async def sync_etf_api(years: int = Query(None, description="回看年数，默�
     if days is None:
         days = years * 365 if years else 730
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("etf", "all", days=days, overwrite=overwrite)
-    return ApiResponse(ok=True, data={"message": f"ETF 同步已提交（约 {days / 365:.1f} 年历史），独立进程后台执行中"})
+    spawn_sync_worker("etf", "all", days=days, overwrite=overwrite, source=source)
+    msg = "ETF 同步已提交（腾讯 qfq 对齐现有时间范围）" if source == "tencent" \
+        else f"ETF 同步已提交（约 {days / 365:.1f} 年历史），独立进程后台执行中"
+    return ApiResponse(ok=True, data={"message": msg})
 
 
 @router.get("/universes")

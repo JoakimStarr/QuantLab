@@ -139,6 +139,10 @@
           >
             {{ etfSyncing ? 'ETF同步中...' : '同步ETF' }}
           </el-button>
+          <el-radio-group v-model="etfSource" size="small" style="margin-left: 4px">
+            <el-radio-button value="baostock">baostock 增量</el-radio-button>
+            <el-radio-button value="tencent">腾讯 qfq 对齐</el-radio-button>
+          </el-radio-group>
           <el-button
             type="success"
             plain
@@ -743,6 +747,7 @@ const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, over
 const syncYears = ref(5)
 const indexSyncing = ref(false)
 const etfSyncing = ref(false)
+const etfSource = ref('tencent')  // baostock=按日全市场增量 / tencent=qfq 对齐现有时间范围
 const fundamentalSyncing = ref(false)
 const externalMarket = ref({ synced_at: null, items: {} })
 const externalSyncing = ref(false)
@@ -1055,13 +1060,18 @@ async function doSyncIndices() {
   }
 }
 
-// 全市场 ETF 同步（baostock 按日拉全市场，重建精选流动池 etf_all）
+// 全市场 ETF 同步（baostock 按日拉全市场 / 腾讯 qfq 对齐现有时间范围）
 async function doSyncEtf() {
   etfSyncing.value = true
   try {
     const years = syncYears.value || 2
-    await syncEtfData(years)
-    ElMessage.success(`ETF 同步已提交（约 ${years} 年历史，后台执行中）`)
+    const src = etfSource.value || 'tencent'
+    await syncEtfData(years, src)
+    ElMessage.success(
+      src === 'tencent'
+        ? 'ETF 同步已提交（腾讯 qfq 对齐现有时间范围，后台执行中）'
+        : `ETF 同步已提交（baostock 约 ${years} 年历史，后台执行中）`
+    )
     syncing.value = true
     syncProgress.value = null
     startProgressPolling()

@@ -25,9 +25,9 @@ export function listUniverses() {
   return request.get('/quant/data/universes')
 }
 
-// ETF 全市场同步（baostock，独立进程；years 回看年数，默认 2 年）
-export function syncEtfData(years = 2) {
-  return request.post('/quant/data/sync-etf', null, { params: { years } })
+// ETF 全市场同步（独立进程；years 回看年数；source: baostock=按日全市场增量 / tencent=qfq对齐现有时间范围）
+export function syncEtfData(years = 2, source = 'baostock') {
+  return request.post('/quant/data/sync-etf', null, { params: { years, source } })
 }
 
 export function getQuantDataStatus() {

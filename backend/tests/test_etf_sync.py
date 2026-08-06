@@ -4,9 +4,11 @@
 覆盖：
 - _etf_out_df：change/tradable/factor 派生（tradable=非停牌，无涨跌停判定）
 - sync_etf_to_qlib：写 bin 对齐日历 + 返回 etf_daily pg_rows
-- rebuild_etf_curated_pool：按近 N 日均额筛选 + 最短历史过滤
+- rebuild_etf_pool：全量池写入（不过滤）
+- fetch_etf_history_tencent：腾讯 qfq 拉取（列序/量单位/成交额估算/涨跌幅自算）
+- sync_etf_tencent_aligned：对齐现有时间范围回填
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -188,3 +190,111 @@ async def test_rebuild_etf_pool_empty(tmp_path):
     assert top == []
     pool = (base / "instruments" / "etf_all.txt").read_text(encoding="utf-8").strip()
     assert pool == ""
+
+
+# ---------- 腾讯 qfq 拉取 ----------
+
+def test_fetch_etf_history_tencent():
+    """腾讯 fqkline/get：列序转换/量手→股/成交额估算/涨跌幅自算。"""
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"data": {"sh510300": {"qfqday": [
+        ["2026-01-05", "4.66", "4.721", "4.725", "4.657", "10171325.0"],
+        ["2026-01-06", "4.70", "4.75", "4.76", "4.68", "12000000.0"],
+    ]}}}
+    with patch("requests.get", return_value=fake_resp):
+        df = es.fetch_etf_history_tencent("sh510300", "2026-01-01", "2026-08-05")
+
+    assert len(df) == 2
+    assert df["date"].iloc[0] == "2026-01-05"
+    assert df["open"].iloc[0] == 4.66 and df["close"].iloc[0] == 4.721
+    assert df["high"].iloc[0] == 4.725 and df["low"].iloc[0] == 4.657
+    assert df["volume"].iloc[0] == pytest.approx(1017132500.0)  # 手 × 100 → 股
+    assert df["amount"].iloc[0] == pytest.approx(
+        1017132500.0 * (4.66 + 4.725 + 4.657 + 4.721) / 4.0)
+    assert df["tradestatus"].iloc[0] == 1
+    assert df["pctChg"].iloc[0] == 0.0                          # 首日无涨跌幅
+    assert df["pctChg"].iloc[1] == pytest.approx((4.75 / 4.721 - 1) * 100.0)
+
+
+def test_fetch_etf_history_tencent_out_of_window_filtered():
+    """窗口过滤：腾讯返回范围外的日期被剔除。"""
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"data": {"sh510300": {"qfqday": [
+        ["2025-12-30", "4.5", "4.6", "4.7", "4.4", "100.0"],   # 早于窗口
+        ["2026-01-05", "4.66", "4.721", "4.725", "4.657", "100.0"],
+    ]}}}
+    with patch("requests.get", return_value=fake_resp):
+        df = es.fetch_etf_history_tencent("sh510300", "2026-01-01", "2026-08-05")
+    assert len(df) == 1
+    assert df["date"].iloc[0] == "2026-01-05"
+
+
+# ---------- 腾讯对齐回填 ----------
+
+@pytest.mark.asyncio
+async def test_sync_etf_tencent_aligned(tmp_path):
+    """对齐现有时间范围：写 bin + upsert etf_daily，不扩展日历。"""
+    base = tmp_path / "qlib"
+    (base / "calendars").mkdir(parents=True)
+    (base / "features").mkdir(parents=True)
+    (base / "instruments").mkdir(parents=True)
+    calendar = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    with open(base / "calendars" / "day.txt", "w") as f:
+        f.write("\n".join(calendar) + "\n")
+
+    fake_df = pd.DataFrame({
+        "date": ["2026-01-05", "2026-01-06"],
+        "open": [4.66, 4.70], "high": [4.725, 4.76], "low": [4.657, 4.68],
+        "close": [4.721, 4.75], "volume": [1e9, 1.1e9],
+        "amount": [4.7e9, 5e9], "pctChg": [0.0, 0.61], "tradestatus": [1, 1],
+    })
+
+    with patch.object(es, "_load_etf_min_date", new=AsyncMock(return_value="2026-01-05")), \
+         patch.object(es, "_load_etf_codes_from_db", new=AsyncMock(return_value=["SH510300"])), \
+         patch.object(es, "fetch_etf_history_tencent", return_value=fake_df), \
+         patch.object(es, "_insert_etf_daily", new=AsyncMock()) as m_insert, \
+         patch.object(es, "rebuild_etf_pool", new=AsyncMock(return_value=["sh510300"])), \
+         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)):
+        r = await es.sync_etf_tencent_aligned(str(base))
+
+    assert r["ok"]
+    assert r["source"] == "tencent"
+    assert r["success"] == 1
+    assert r["window"] == ["2026-01-05", "2026-01-07"]
+    m_insert.assert_awaited()  # upsert 落库
+
+    # bin 对齐主日历：长度 = 日历长度，未对齐日期为 NaN
+    from app.services.data.eod_incremental import _read_bin
+    close, start = _read_bin(str(base / "features" / "sh510300" / "close.day.bin"))
+    assert start == 0
+    assert len(close) == len(calendar)
+    assert close[0] == pytest.approx(4.721, abs=1e-4)
+    assert np.isnan(close[2])  # 01-07 无数据
+
+
+@pytest.mark.asyncio
+async def test_sync_etf_tencent_aligned_no_existing_data(tmp_path):
+    """etf_daily 无数据时回退 days 窗口。"""
+    base = tmp_path / "qlib"
+    (base / "calendars").mkdir(parents=True)
+    (base / "features").mkdir(parents=True)
+    (base / "instruments").mkdir(parents=True)
+    calendar = ["2026-01-05", "2026-01-06"]
+    with open(base / "calendars" / "day.txt", "w") as f:
+        f.write("\n".join(calendar) + "\n")
+
+    fake_df = pd.DataFrame({
+        "date": ["2026-01-05"],
+        "open": [4.66], "high": [4.725], "low": [4.657],
+        "close": [4.721], "volume": [1e9], "amount": [4.7e9],
+        "pctChg": [0.0], "tradestatus": [1],
+    })
+    with patch.object(es, "_load_etf_min_date", new=AsyncMock(return_value=None)), \
+         patch.object(es, "_load_etf_codes_from_db", new=AsyncMock(return_value=["SH510300"])), \
+         patch.object(es, "fetch_etf_history_tencent", return_value=fake_df), \
+         patch.object(es, "_insert_etf_daily", new=AsyncMock()), \
+         patch.object(es, "rebuild_etf_pool", new=AsyncMock(return_value=["sh510300"])), \
+         patch.object(es, "_register_synced_etfs", new=AsyncMock(return_value=1)):
+        r = await es.sync_etf_tencent_aligned(str(base), days=30)
+    assert r["ok"]
+    assert r["window"][1] == "2026-01-06"  # 对齐主日历末日

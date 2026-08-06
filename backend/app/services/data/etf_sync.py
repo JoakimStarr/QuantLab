@@ -150,8 +150,12 @@ async def _load_etf_existing_dates() -> set:
         return {r[0].strftime("%Y-%m-%d") for r in result}
 
 
-async def _insert_etf_daily(rows: list) -> None:
-    """批量落库 etf_daily（幂等，分批防 asyncpg 参数上限）。"""
+async def _insert_etf_daily(rows: list, upsert: bool = False) -> None:
+    """批量落库 etf_daily（分批防 asyncpg 参数上限）。
+
+    upsert=True 时覆盖已有行（腾讯 qfq 对齐用：修正 baostock 口径）；
+    默认 ON CONFLICT DO NOTHING（幂等）。
+    """
     if not rows:
         return
     from datetime import date as _date
@@ -166,7 +170,14 @@ async def _insert_etf_daily(rows: list) -> None:
             for r in chunk:
                 r["trade_date"] = _date.fromisoformat(r["trade_date"])
             stmt = pg_insert(EtfDaily.__table__).values(chunk)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"])
+            if upsert:
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["code", "trade_date"],
+                    set_={k: getattr(stmt.excluded, k) for k in
+                          ("open", "high", "low", "close", "volume", "amount", "pct_chg")},
+                )
+            else:
+                stmt = stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"])
             await session.execute(stmt)
         await session.commit()
 
@@ -193,6 +204,158 @@ async def _register_synced_etfs(codes: list) -> int:
         if await register_etf(c, name_map.get(c.lower())):
             added += 1
     return added
+
+
+# ============ 腾讯源（qfq 对齐回填） ============
+
+_TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+
+
+def fetch_etf_history_tencent(qlib_code: str, start: str, end: str) -> pd.DataFrame | None:
+    """腾讯 fqkline/get 单次拉取（qfq 前复权）。
+
+    窗口 ≤800 交易日时一次拿全（腾讯单次上限 800 条），无需分页。
+    列序转换：[date, open, close, high, low, volume(手)] →
+    date/open/high/low/close/volume(股) + amount(估算) + pctChg(自算) + tradestatus。
+
+    Args:
+        qlib_code: qlib 小写代码（如 sh510300）
+        start/end: YYYY-MM-DD
+    Returns:
+        DataFrame（兼容 _etf_out_df 输入），失败返回 None
+    """
+    import requests
+    try:
+        r = requests.get(
+            _TENCENT_KLINE_URL,
+            params={"param": f"{qlib_code},day,{start},{end},800,qfq"},
+            timeout=15,
+        )
+        node = r.json().get("data", {}).get(qlib_code)
+        if not node:
+            return None
+        kline = node.get("qfqday") or node.get("day") or []
+        if not kline:
+            return None
+        rows = []
+        for k in kline:
+            d = str(k[0])
+            if d < start or d > end:
+                continue
+            rows.append({
+                "date": d,
+                "open": float(k[1]), "high": float(k[3]), "low": float(k[4]),
+                "close": float(k[2]),
+                # 腾讯成交量单位为手（1手=100份），转为股与 baostock 口径一致
+                "volume": float(k[5]) * 100.0,
+            })
+        df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        if df.empty:
+            return None
+        # 腾讯 kline 不含成交额：用成交量 × 均价估算
+        df["amount"] = df["volume"] * (df["open"] + df["high"] + df["low"] + df["close"]) / 4.0
+        # 涨跌幅自算（qfq 序列无除权跳变，pct_change 即真实涨跌幅）
+        df["pctChg"] = (df["close"].pct_change() * 100.0).fillna(0.0)
+        df["tradestatus"] = 1
+        return df
+    except Exception as e:  # noqa: BLE001
+        logger.warning("腾讯拉取 %s 失败: %s", qlib_code, e)
+        return None
+
+
+async def _load_etf_min_date() -> str | None:
+    """etf_daily 最早交易日（YYYY-MM-DD），无数据返回 None。"""
+    from sqlalchemy import func, select
+    from app.core.database import async_session
+    from app.models.baostock import EtfDaily
+
+    async with async_session() as session:
+        v = (await session.execute(select(func.min(EtfDaily.trade_date)))).scalar()
+        return v.strftime("%Y-%m-%d") if v else None
+
+
+async def _load_etf_codes_from_db() -> list:
+    """etf_daily 全部去重代码（大写）。"""
+    from sqlalchemy import select
+    from app.core.database import async_session
+    from app.models.baostock import EtfDaily
+
+    async with async_session() as session:
+        result = await session.execute(select(EtfDaily.code).distinct())
+        return sorted({r[0] for r in result.all()})
+
+
+async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
+                                   overwrite: bool = True) -> dict:
+    """腾讯 qfq 对齐回填：只拉"现有 etf_daily 时间范围"，不拉全历史。
+
+    每只 ETF 一次请求（窗口 ≤800 交易日），qfq 复权价修正 baostock 口径，
+    upsert 覆盖 etf_daily，重建全量池。日历以 A 股 day.txt 为准，不扩展。
+    """
+    from app.core.config import settings
+    from app.services.data.eod_incremental import _get_calendar, _sync_stock_bin
+
+    provider_uri = provider_uri or settings.qlib_provider_path
+    calendar = _get_calendar(provider_uri)
+    if len(calendar) < 2:
+        return {"ok": False, "error": "qlib 日历为空，请先同步 A 股数据"}
+
+    # 对齐窗口：现有 etf_daily 最早日期 → 主日历末日；无数据时回退 days 窗口
+    existing_min = await _load_etf_min_date()
+    end = calendar[-1]
+    if existing_min:
+        start = existing_min
+    else:
+        start = (datetime.now() - timedelta(days=days or 730)).strftime("%Y-%m-%d")
+    cal_set = set(calendar)
+
+    codes = await _load_etf_codes_from_db()
+    if not codes:
+        return {"ok": False, "error": "etf_daily 无数据，请先用 baostock 同步一次建立时间范围"}
+
+    total = len(codes)
+    success = fail = 0
+    pg_rows = []
+    for idx, code in enumerate(codes):
+        df = fetch_etf_history_tencent(code.lower(), start, end)
+        if df is None or df.empty:
+            fail += 1
+            continue
+        # 对齐主日历：只保留 day.txt 内的日期
+        df = df[df["date"].isin(cal_set)]
+        if df.empty:
+            fail += 1
+            continue
+        try:
+            out = _etf_out_df(df)
+            feat_dir = os.path.join(provider_uri, "features", code.lower())
+            _sync_stock_bin(feat_dir, out, calendar, ETF_BIN_FIELDS, overwrite=overwrite)
+            for _, r in df.iterrows():
+                pg_rows.append({
+                    "code": code, "trade_date": str(r["date"])[:10],
+                    "open": _f(r.get("open")), "high": _f(r.get("high")),
+                    "low": _f(r.get("low")), "close": _f(r.get("close")),
+                    "volume": _f(r.get("volume")), "amount": _f(r.get("amount")),
+                    "pct_chg": _f(r.get("pctChg")),
+                })
+            success += 1
+        except Exception as e:  # noqa: BLE001
+            logger.debug("腾讯写 %s 失败: %s", code, e)
+            fail += 1
+        if (idx + 1) % 200 == 0 or idx + 1 == total:
+            logger.info("腾讯 ETF 对齐进度: %d/%d (成功%d 失败%d)", idx + 1, total, success, fail)
+            await _insert_etf_daily(pg_rows, upsert=True)
+            pg_rows = []
+    if pg_rows:
+        await _insert_etf_daily(pg_rows, upsert=True)
+
+    pool = await rebuild_etf_pool(provider_uri)
+    registered = await _register_synced_etfs(codes)
+    return {
+        "ok": True, "source": "tencent", "success": success, "failed": fail,
+        "window": [start, end], "etf_count": total, "pool_count": len(pool),
+        "registered": registered,
+    }
 
 
 async def rebuild_etf_pool(provider_uri: str = None) -> list:

@@ -219,10 +219,16 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                     logger.error("指数同步返回错误: %s", result)
                 finish_progress(bool(result.get("ok")), result.get("error"))
             elif args.kind == "etf":
-                from app.services.data.etf_sync import sync_etf_task
+                from app.services.data.etf_sync import (
+                    sync_etf_task, sync_etf_tencent_aligned,
+                )
 
                 days = args.days or (args.years * 365 if args.years else 730)
-                result = await sync_etf_task(days=days, overwrite=args.overwrite)
+                if (args.source or "baostock") == "tencent":
+                    # 腾讯 qfq 对齐回填：只拉现有时间范围，不拉全历史
+                    result = await sync_etf_tencent_aligned(days=days, overwrite=args.overwrite)
+                else:
+                    result = await sync_etf_task(days=days, overwrite=args.overwrite)
                 logger.info("ETF 同步完成: %s", result)
                 finish_progress(bool(result.get("ok")), result.get("error"))
 
@@ -259,7 +265,7 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=None)
     parser.add_argument("--include-baostock", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--source", choices=["baostock", "akshare"], default=None)
+    parser.add_argument("--source", choices=["baostock", "akshare", "tencent"], default=None)
     parser.add_argument("--broadcast", action="store_true", help="fundamental: 拉取后同时 PIT 广播写 bin（校验/补齐阶段用）")
     args = parser.parse_args()
 
