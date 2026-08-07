@@ -460,6 +460,13 @@ def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
         except Exception as e:  # noqa: BLE001
             logger.warning("%s 动态成分重建失败: %s", name, e)
             continue
+        if not spans:
+            # 空成分集不覆盖原文件：baostock 指数接口异常时若照写，会把 csi300.txt/
+            # csi500.txt 清空，导致默认 universe 的挖掘/回测读到空股票池"无数据"。
+            logger.warning(
+                "%s 动态成分拉取为空，保留原有 instruments 文件（不覆盖）", name
+            )
+            continue
         entries = []
         for code, spans_list in spans.items():
             for s, e in spans_list:

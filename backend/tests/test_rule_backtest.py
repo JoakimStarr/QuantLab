@@ -37,7 +37,7 @@ def test_run_single_vbt_extracts_buy_sell_direction():
                                              index=pd.date_range("2024-11-12", periods=4))
 
     with patch("vectorbt.Portfolio.from_signals", return_value=fake_pf):
-        returns, trades = _run_single_vbt(close, None, None, 0.0013)
+        returns, trades = _run_single_vbt(close, None, None, 0.0013, "sh600000", 10000)
 
     actions = [t["action"] for t in trades]
     assert actions == ["BUY", "SELL", "BUY"]  # 方向正确配对
@@ -59,7 +59,7 @@ def test_run_single_vbt_fallback_size_sign_when_no_side():
                                              index=pd.date_range("2024-11-12", periods=2))
 
     with patch("vectorbt.Portfolio.from_signals", return_value=fake_pf):
-        _, trades = _run_single_vbt(close, None, None, 0.0013)
+        _, trades = _run_single_vbt(close, None, None, 0.0013, "sh600000", 10000)
 
     # 3 行：第 3 行 Size 仍为正 → BUY
     assert [t["action"] for t in trades] == ["BUY", "SELL", "BUY"]

@@ -8,6 +8,50 @@ from app.services.ai.llm_client import LLMClient
 logger = logging.getLogger(__name__)
 
 
+class ProviderCircuitBreaker:
+    """Provider 熔断器：连续失败 N 次后熔断该 provider 一段时间，避免每次任务
+    都从头撞同一个死 provider、把路由预算吃光后 fallback 没机会执行。
+
+    状态机：closed（正常）→ open（熔断，跳过）→ half-open（探活）→ closed（恢复）。
+    429 限流/401 鉴权/超时都算失败；连续成功一次即复位计数。
+    """
+
+    def __init__(self, name: str, failure_threshold: int = 3, cooldown_seconds: int = 120):
+        self.name = name
+        self.failure_threshold = max(1, failure_threshold)
+        self.cooldown_seconds = max(1, cooldown_seconds)
+        self._consecutive_failures = 0
+        self._opened_at: float | None = None  # 熔断开始时间（monotonic）
+
+    def allow_request(self) -> bool:
+        """当前是否允许向该 provider 发请求。"""
+        if self._opened_at is None:
+            return True
+        # half-open：冷却期后放行一次探活
+        if time.monotonic() - self._opened_at >= self.cooldown_seconds:
+            return True
+        return False
+
+    def record_success(self) -> None:
+        self._consecutive_failures = 0
+        if self._opened_at is not None:
+            logger.info("AI Provider %s 熔断恢复（探活成功）", self.name)
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.failure_threshold and self._opened_at is None:
+            self._opened_at = time.monotonic()
+            logger.warning(
+                "AI Provider %s 连续失败 %d 次，熔断 %.0fs",
+                self.name, self._consecutive_failures, self.cooldown_seconds,
+            )
+
+    @property
+    def is_open(self) -> bool:
+        return self._opened_at is not None and not self.allow_request()
+
+
 class ProviderRouter:
     _singleton_instance = None
 
@@ -117,6 +161,16 @@ class ProviderRouter:
 
         self.force_json = settings.ai_provider.get("force_json_output", True)
 
+        # 每个 provider 一个熔断器（配置可调，默认连续 3 次失败熔断 120s）
+        br_cfg = settings.ai_provider.get("circuit_breaker", {}) or {}
+        br_threshold = int(br_cfg.get("failure_threshold", 3))
+        br_cooldown = int(br_cfg.get("cooldown_seconds", 120))
+        self._breakers: dict[str, ProviderCircuitBreaker] = {
+            "opencodezen": ProviderCircuitBreaker("opencodezen", br_threshold, br_cooldown),
+            "glm": ProviderCircuitBreaker("glm", br_threshold, br_cooldown),
+            "siliconflow": ProviderCircuitBreaker("siliconflow", br_threshold, br_cooldown),
+        }
+
     async def route_request(self, messages: list, force_json: bool = None) -> dict:
         providers = []
         if self.primary:
@@ -142,12 +196,21 @@ class ProviderRouter:
             if elapsed > budget:
                 logger.warning("AI Provider 路由预算耗尽 (%.1fs/%ss)，跳过 %s", elapsed, budget, name)
                 break
+            breaker = self._breakers.get(name)
+            if breaker is not None and breaker.is_open:
+                logger.info("AI Provider %s 处于熔断期，跳过", name)
+                last_error = last_error or RuntimeError(f"{name} 熔断中")
+                continue
             try:
                 result = await fn(messages, use_json)
                 if result and result.get("content"):
+                    if breaker is not None:
+                        breaker.record_success()
                     return result
             except Exception as e:
                 logger.warning("AI Provider %s 调用失败: %s", name, e)
+                if breaker is not None:
+                    breaker.record_failure()
                 last_error = e
                 continue
 

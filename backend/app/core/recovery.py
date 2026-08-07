@@ -99,29 +99,38 @@ async def recover_stale_sync():
 async def recover_stale_mining():
     """启动时恢复卡死的因子挖掘任务。
 
-    BackgroundTasks 是进程内任务，服务重启会丢失，但数据库中 status 仍为
-    running/pending。将这些僵尸记录标记为 failed，避免前端永久显示"运行中"。
+    挖掘任务现跑在独立子进程（mining_worker，start_new_session），web 重启不会杀它。
+    因此这里**只把 running 标为 failed**，且标记前先确认 worker 已死（读 PID 标记文件）
+    ——若 worker 仍在跑却把 DB 标成 failed，前端会看到"失败"而子进程还在继续写库，
+    状态永久错位。pending 保留给 rerun_pending_mining 重跑（若在此也标 failed，
+    rerun 会查不到 pending 任务，自动重跑机制被抵消）。
     """
     from app.core.database import async_session
     from app.models.mining_task import MiningTask
+    from app.services.mining.mining_worker import is_mining_worker_alive
 
     now = datetime.now()
     recovered = []
     async with async_session() as session:
         result = await session.execute(
-            select(MiningTask).where(MiningTask.status.in_(["running", "pending"]))
+            select(MiningTask).where(MiningTask.status == "running")
         )
         for rec in result.scalars().all():
+            if is_mining_worker_alive(rec.id):
+                logger.info(
+                    "recover mining: task_id=%s 的 worker 仍存活，跳过恢复（保留 running）",
+                    rec.id,
+                )
+                continue
             prev_started = rec.started_at
             stale_seconds = (now - prev_started).total_seconds() if prev_started else None
             rec.status = "failed"
             rec.error = "container restart interrupted mining (zombie recovered)"
             rec.finished_at = now
             logger.warning(
-                "recover mining: task_id=%s type=%s %s->failed (started=%s, stale=%.0fs)",
+                "recover mining: task_id=%s type=%s running->failed (started=%s, stale=%.0fs)",
                 rec.id,
                 rec.type,
-                rec.status,
                 prev_started.isoformat() if prev_started else "unknown",
                 stale_seconds if stale_seconds is not None else -1,
             )
@@ -209,11 +218,13 @@ async def rerun_pending_mining() -> None:
 
     策略：running 视为崩溃残留，重置为 pending 后重新提交；
     pending 直接重新提交。仅重试近 N 天的任务避免无限堆积。
+    跳过仍有存活 worker 的任务（web 重启但 worker 在跑，不重复 spawn）。
     """
     from datetime import datetime, timedelta
     from sqlalchemy import select
     from app.core.database import async_session
     from app.models.mining_task import MiningTask
+    from app.services.mining.mining_worker import is_mining_worker_alive
     try:
         async with async_session() as session:
             cutoff = datetime.now() - timedelta(days=3)
@@ -227,6 +238,9 @@ async def rerun_pending_mining() -> None:
                 return
             logger.info("恢复 %d 个未完成挖掘任务", len(tasks))
             for t in tasks:
+                if is_mining_worker_alive(t.id):
+                    logger.info("rerun mining: task_id=%s 的 worker 仍存活，跳过重跑", t.id)
+                    continue
                 # 重置 running -> pending，清理错误信息
                 t.status = "pending"
                 t.error = None
@@ -234,49 +248,27 @@ async def rerun_pending_mining() -> None:
             await session.commit()
             # 重新提交（延迟导入避免循环依赖）
             for t in tasks:
+                if is_mining_worker_alive(t.id):
+                    continue
                 await _resubmit_mining(t.id, t.type, t.params)
     except Exception:
         logger.exception("重跑未完成任务失败")
 
 
 async def _resubmit_mining(task_id: int, task_type: str, params_json: str) -> None:
-    """重新提交挖掘任务到 BackgroundTasks 等价通道。
+    """重新提交挖掘任务到独立 worker 子进程。
 
-    复用 mining API 的执行逻辑：通过 asyncio.create_task 在后台跑。
+    复用 mining API 的入口：spawn_mining_worker 启动子进程执行。
     """
     import json
-    import asyncio
-    from app.services.mining.task_utils import update_task_status
+    from app.services.mining.mining_worker import spawn_mining_worker
     try:
         params = json.loads(params_json) if params_json else {}
     except Exception:
         params = {}
-    # 根据类型派发（与 api/mining.py 保持一致的入口）
-
-    async def _run():
-        try:
-            if task_type == "llm":
-                from app.services.mining.llm_factor import mine_with_llm_iterative
-                n_rounds = params.get("n_rounds", 1)
-                n_candidates = params.get("n_candidates")
-                await mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n_candidates)
-            elif task_type == "symbolic":
-                from app.services.mining.symbolic import mine_with_symbolic
-                mine_params = {
-                    k: v for k, v in params.items() if k in ("n_candidates", "ic_threshold")
-                }
-                await mine_with_symbolic(task_id, **mine_params)
-            elif task_type == "automl":
-                from app.services.mining.automl import mine_with_automl
-                kwargs = {k: v for k, v in params.items() if k in ("factor_ids", "method")}
-                kwargs["walk_forward"] = bool(params.get("walk_forward", False))
-                await mine_with_automl(task_id, **kwargs)
-            elif task_type == "text":
-                from app.services.mining.text_factor import mine_with_text
-                await mine_with_text(task_id, **{k: v for k, v in params.items() if k in ("max_news_per_day",)})
-            else:
-                logger.warning("未知任务类型 %s，跳过 task_id=%s", task_type, task_id)
-        except Exception as e:
-            logger.exception("重跑任务失败 task_id=%s", task_id)
-            await update_task_status(task_id, status="failed", error=str(e)[:500])
-    asyncio.create_task(_run())
+    try:
+        spawn_mining_worker(task_id, task_type, params)
+    except Exception as e:
+        logger.exception("重跑任务 spawn 失败 task_id=%s", task_id)
+        from app.services.mining.task_utils import update_task_status
+        await update_task_status(task_id, status="failed", error=str(e)[:500])

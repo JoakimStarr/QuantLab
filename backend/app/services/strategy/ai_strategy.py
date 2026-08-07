@@ -20,8 +20,8 @@ async def _load_qualified_factors(limit: int = 30) -> list[dict]:
     """加载因子库中已达标（|IC|>=阈值 且 icir 不为空）的因子，按 ICIR 降序。
 
     阈值用 AI 策略独立的 strategy_ic_threshold（默认 0.02），
-    区别于挖掘的 ic_threshold（0.03）——A 股截面 IC 0.02-0.03 已属可用，
-    用挖掘阈值会导致达标池过小、AI 无从选因子。
+    与挖掘的 ic_threshold（0.02）口径一致——A 股截面 IC 0.02-0.03 已属可用，
+    挖掘产出的因子可直接进入策略选因池。
     """
     from sqlalchemy import select, func
     from app.core.config import settings

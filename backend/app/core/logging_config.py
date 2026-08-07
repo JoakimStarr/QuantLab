@@ -292,6 +292,7 @@ _CLEANUP_PATTERNS = {
     "quantlab.log.[0-9]*": "retention_days",
     "error.log.[0-9]*": "error_retention_days",
     "sync.log.[0-9]*": "retention_days",
+    "mining.log.[0-9]*": "retention_days",
 }
 
 

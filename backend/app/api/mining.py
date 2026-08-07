@@ -1,10 +1,14 @@
-"""AI 因子挖掘 API：LLM/符号回归挖掘任务管理。"""
-import asyncio
+"""AI 因子挖掘 API：LLM/符号回归挖掘任务管理。
+
+挖掘任务通过独立子进程执行（app.services.mining.mining_worker）：
+- 长任务不占 web 事件循环，uvicorn --reload 重启不会卡死/丢任务
+- 并发上限由 DB 中 running+pending 任务数控制（max_concurrent），
+  进程内信号量在子进程模型下无法跨进程限流，改为提交前 DB 计数检查。
+"""
 import json
 import logging
-from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 
 from app.core.config import settings
@@ -13,25 +17,10 @@ from app.core.errors import AppError
 from app.core.ratelimit import limiter
 from app.models.mining_task import MiningTask
 from app.schemas.common import ApiResponse
-from app.services.data.sync_progress import busy_message
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mining", tags=["mining"])
-
-# 全局并发信号量（懒初始化，读取 task.max_concurrent）
-_mining_sem: asyncio.Semaphore | None = None
-
-
-def _get_mining_sem() -> asyncio.Semaphore:
-    """获取（或首次创建）挖掘任务并发信号量。"""
-    global _mining_sem
-    if _mining_sem is None:
-        max_concurrent = int((settings.task or {}).get("max_concurrent", 2))
-        _mining_sem = asyncio.Semaphore(max_concurrent)
-        # 这是配置上限而非当前运行数；DEBUG 级避免每次 reload 重复刷屏
-        logger.debug("挖掘任务并发上限配置: %d（同时运行的任务不会超过此值）", max_concurrent)
-    return _mining_sem
 
 
 def _task_timeout(task_type: str = None) -> int:
@@ -47,23 +36,23 @@ def _task_timeout(task_type: str = None) -> int:
     return int(task_cfg.get("task_timeout_seconds", 300))
 
 
-def _llm_timeout(n_candidates: int, n_rounds: int = 1):
-    """LLM 挖掘超时策略。
+async def _ensure_mining_capacity() -> str | None:
+    """检查挖掘并发上限（子进程模型下用 DB 计数替代进程内信号量）。
 
-    LLM 耗时不可控（推理模型、provider 排队、网络抖动），固定/动态超时都容易误杀。
-    改为依赖内部原子超时 + 极大硬上限兜底：
-    - _call_llm: provider httpx timeout（config.ai_provider.*.timeout_seconds）
-    - _evaluate_safe: eval_timeout_seconds
-    - 硬上限: llm_hard_limit_seconds（默认 7200=2h，设 0 表示完全无限）
-
-    Returns:
-        超时秒数，或 None（完全不限时）
+    running + pending 任务数 >= max_concurrent 时拒绝新提交，返回提示信息。
+    pending 也计入是因为 worker 子进程启动存在窗口期（先创建任务、后置 running）。
     """
-    timeouts = (settings.task or {}).get("timeouts", {}) or {}
-    hard = int(timeouts.get("llm_hard_limit_seconds", 7200))
-    if hard <= 0:
-        return None  # 完全不限时，依赖内部原子超时
-    return hard
+    max_concurrent = int((settings.task or {}).get("max_concurrent", 2))
+    async with async_session() as session:
+        result = await session.execute(
+            select(func.count())
+            .select_from(MiningTask)
+            .where(MiningTask.status.in_(["running", "pending"]))
+        )
+        active = result.scalar() or 0
+    if active >= max_concurrent:
+        return f"已有 {active} 个挖掘任务在运行（上限 {max_concurrent}），请等待完成后重试"
+    return None
 
 
 async def _ensure_sync_idle() -> str | None:
@@ -77,48 +66,10 @@ async def _ensure_sync_idle() -> str | None:
     return busy_message() + "；挖掘需要读取 qlib bin 数据，回填/补齐会重塑日历，期间数据不稳定，请稍后重试"
 
 
-async def _safe_run_task(task_id: int, coro_factory, label: str, task_type: str = None, timeout: int = None) -> None:
-    """统一的挖掘任务执行包装器。
-
-    - 用 asyncio.wait_for 强制超时，超时即标记 failed
-    - 兜底捕获所有异常并更新状态为 failed（防止 BackgroundTasks 静默吞异常）
-    - 保证 task 状态不会卡在 running
-    - task_type 指定任务类型，用于按类型分级超时
-    - timeout 显式指定超时秒数，优先于 task_type（供动态超时场景使用）
-    """
-    if timeout is None:
-        timeout = _task_timeout(task_type)
-    sem = _get_mining_sem()
-    try:
-        # 信号量限流：超出 max_concurrent 的任务在此排队，超时只计实际执行时间
-        async with sem:
-            # 兜底：任务真正开始时若恰逢会重塑日历的回填/补齐正在写 bin，
-            # 直接中止避免读到错位数据产生虚假 IC；EOD/ETF 等纯追加同步
-            # 是原子写，不拦截（数据同步与挖掘解耦）
-            from app.services.data.sync_progress import calendar_shifting_active
-            if calendar_shifting_active():
-                await _mark_failed(
-                    task_id,
-                    "数据回填/补齐正在重塑日历，挖掘任务已中止，请稍后重试",
-                )
-                return
-            await asyncio.wait_for(coro_factory(), timeout=timeout)
-    except TimeoutError:
-        logger.error("%s 任务超时 task_id=%s (timeout=%ss)", label, task_id, timeout)
-        await _mark_failed(task_id, f"任务超时 (timeout={timeout}s)")
-    except Exception as e:
-        logger.exception("%s 任务失败 task_id=%s", label, task_id)
-        await _mark_failed(task_id, str(e)[:500])
-
-
-async def _mark_failed(task_id: int, error: str) -> None:
-    """将挖掘任务标记为 failed（兜底，避免状态卡 running）。"""
-    try:
-        from app.services.mining.task_utils import update_task_status
-        await update_task_status(task_id, status="failed", error=error,
-                                 finished_at=datetime.now())
-    except Exception:
-        logger.exception("标记挖掘任务 failed 失败 task_id=%s", task_id)
+def _spawn(task_id: int, task_type: str, params: dict) -> None:
+    """启动独立挖掘子进程（不阻塞事件循环）。"""
+    from app.services.mining.mining_worker import spawn_mining_worker
+    spawn_mining_worker(task_id, task_type, params)
 
 
 def _task_dict(r: MiningTask) -> dict:
@@ -190,34 +141,19 @@ async def get_task_api(task_id: int, db=Depends(get_db)):
 
 
 async def _run_llm_task(task_id: int, n: int, universe: str = None):
-    """LLM 挖掘任务执行器。不限时，依赖内部原子超时 + 硬上限兜底。"""
-    from app.services.mining.llm_factor import mine_with_llm
-    timeout = _llm_timeout(n, n_rounds=1)
-    await _safe_run_task(task_id, lambda: mine_with_llm(task_id, n, universe=universe),
-                         "LLM 挖掘", timeout=timeout)
+    """LLM 挖掘任务执行器（独立子进程）。"""
+    _spawn(task_id, "llm", {"n_candidates": n, "n_rounds": 1, "universe": universe})
 
 
 async def _run_llm_iterative_task(task_id: int, n_rounds: int, n: int, universe: str = None):
-    """LLM 迭代挖掘任务执行器（n_rounds > 1 时使用）。
-
-    动态超时：基础 + 每轮增量，避免多轮挖掘共用单轮超时。
-    """
-    from app.services.mining.llm_factor import mine_with_llm_iterative
-    # 迭代挖掘不限时，依赖内部原子超时 + 硬上限兜底
-    timeout = _llm_timeout(n, n_rounds=n_rounds)
-    await _safe_run_task(
-        task_id,
-        lambda: mine_with_llm_iterative(task_id, n_rounds=n_rounds, n_candidates=n,
-                                        universe=universe),
-        "LLM 迭代挖掘", timeout=timeout,
-    )
+    """LLM 迭代挖掘任务执行器（n_rounds > 1 时使用，独立子进程）。"""
+    _spawn(task_id, "llm", {"n_rounds": n_rounds, "n_candidates": n, "universe": universe})
 
 
 @router.post("/llm")
 @limiter.limit("3/minute")
 async def mine_llm_api(
     request: Request,
-    background_tasks: BackgroundTasks,
     n_candidates: int = Query(None),
     n_rounds: int = Query(1, ge=1, le=5, description="迭代轮数（>1 启用迭代挖掘）"),
     universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
@@ -232,29 +168,30 @@ async def mine_llm_api(
     busy = await _ensure_sync_idle()
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
+    capacity = await _ensure_mining_capacity()
+    if capacity:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": capacity, "status": 409})
     n = n_candidates or settings.mining.get("llm", {}).get("candidates_per_run", 10)
     task_id = await _create_task("llm", {"n_candidates": n, "n_rounds": n_rounds,
                                          "universe": universe})
     if n_rounds and n_rounds > 1:
-        background_tasks.add_task(_run_llm_iterative_task, task_id, n_rounds, n, universe)
+        await _run_llm_iterative_task(task_id, n_rounds, n, universe)
         return ApiResponse(ok=True, data={
             "task_id": task_id, "type": "llm", "status": "pending", "n_rounds": n_rounds,
             "message": f"LLM 迭代因子挖掘已提交（{n_rounds} 轮，后台执行）",
         })
-    background_tasks.add_task(_run_llm_task, task_id, n, universe)
+    await _run_llm_task(task_id, n, universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "llm", "status": "pending",
                                       "message": "LLM 因子挖掘已提交（后台执行）"})
 
 
 async def _run_symbolic_task(task_id: int, universe: str = None):
-    from app.services.mining.symbolic import mine_with_symbolic
-    await _safe_run_task(task_id, lambda: mine_with_symbolic(task_id, universe=universe),
-                         "符号回归挖掘", "symbolic")
+    _spawn(task_id, "symbolic", {"universe": universe})
 
 
 @router.post("/symbolic")
 @limiter.limit("3/minute")
-async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks,
+async def mine_symbolic_api(request: Request,
                             universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all")):
     """启动符号回归因子挖掘（后台执行）。"""
     from app.services.quant.qlib_init import is_qlib_available
@@ -263,30 +200,27 @@ async def mine_symbolic_api(request: Request, background_tasks: BackgroundTasks,
     busy = await _ensure_sync_idle()
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
+    capacity = await _ensure_mining_capacity()
+    if capacity:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": capacity, "status": 409})
     params = dict(settings.mining.get("symbolic", {}))
     params["universe"] = universe
     task_id = await _create_task("symbolic", params)
-    background_tasks.add_task(_run_symbolic_task, task_id, universe)
+    await _run_symbolic_task(task_id, universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "symbolic", "status": "pending",
                                       "message": "符号回归因子挖掘已提交（后台执行）"})
 
 
 async def _run_automl_task(task_id: int, factor_ids: list[int], method: str,
                            walk_forward: bool = False, universe: str = None):
-    from app.services.mining.automl import mine_with_automl
-    await _safe_run_task(
-        task_id,
-        lambda: mine_with_automl(task_id, factor_ids, method, walk_forward=walk_forward,
-                                 universe=universe),
-        "AutoML 组合", "automl",
-    )
+    _spawn(task_id, "automl", {"factor_ids": factor_ids, "method": method,
+                               "walk_forward": walk_forward, "universe": universe})
 
 
 @router.post("/automl")
 @limiter.limit("3/minute")
 async def mine_automl_api(
     request: Request,
-    background_tasks: BackgroundTasks,
     factor_ids: list[int] = Query(..., description="参与组合的因子 id 列表"),
     method: str = Query(None, description="lightgbm/linear"),
     walk_forward: int = Query(0, description="是否使用 Walk-Forward 滚动重训 0/1"),
@@ -301,25 +235,25 @@ async def mine_automl_api(
     busy = await _ensure_sync_idle()
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
+    capacity = await _ensure_mining_capacity()
+    if capacity:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": capacity, "status": 409})
     task_id = await _create_task("automl", {"factor_ids": factor_ids, "method": method,
                                             "walk_forward": bool(walk_forward),
                                             "universe": universe})
-    background_tasks.add_task(_run_automl_task, task_id, factor_ids, method,
-                              bool(walk_forward), universe)
+    await _run_automl_task(task_id, factor_ids, method, bool(walk_forward), universe)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "automl", "status": "pending",
                                       "message": f"AutoML 因子组合已提交（{('Walk-Forward ' if walk_forward else '')}后台执行）"})
 
 
 async def _run_text_task(task_id: int, codes: list[str]):
-    from app.services.mining.text_factor import mine_with_text
-    await _safe_run_task(task_id, lambda: mine_with_text(task_id, codes), "文本因子挖掘", "text")
+    _spawn(task_id, "text", {"codes": codes})
 
 
 @router.post("/text")
 @limiter.limit("3/minute")
 async def mine_text_api(
     request: Request,
-    background_tasks: BackgroundTasks,
     codes: list[str] = Query(None, description="指定股票代码，默认用 universe 前30"),
 ):
     """启动文本因子挖掘（后台执行）。"""
@@ -329,7 +263,10 @@ async def mine_text_api(
     busy = await _ensure_sync_idle()
     if busy:
         return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": busy, "status": 409})
+    capacity = await _ensure_mining_capacity()
+    if capacity:
+        return ApiResponse(ok=False, error={"code": "SYNC_IN_PROGRESS", "message": capacity, "status": 409})
     task_id = await _create_task("text", {"codes": codes})
-    background_tasks.add_task(_run_text_task, task_id, codes)
+    await _run_text_task(task_id, codes)
     return ApiResponse(ok=True, data={"task_id": task_id, "type": "text", "status": "pending",
                                       "message": "文本因子挖掘已提交（后台执行）"})

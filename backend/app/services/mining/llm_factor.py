@@ -30,6 +30,11 @@ _HAS_GPU = is_gpu_available()
 # 本地 IC 缓存（LRU，上限保护）
 _IC_CACHE: LRUCache = LRUCache(maxsize=1024)
 
+# 已有因子 IC 序列缓存（web 进程侧，key=表达式集合签名 md5，因子库变化自动失效）。
+# 注意：factor_validator 里的 _EXISTING_IC_CACHE 跑在进程池 worker 内无法跨调用共享，
+# 统一在这里缓存才真正生效，避免每次挖掘重复计算已有因子的全量 IC 序列。
+_EXISTING_IC_WEB_CACHE: LRUCache = LRUCache(maxsize=16)
+
 # 评价并发信号量（懒初始化）：限制同时进入进程池的候选数 = cpu_workers，
 # 避免大量候选一次性涌入小进程池排队，把单候选超时（eval_timeout_seconds）耗尽。
 # 信号量在 wait_for 之外获取，排队等待不计入超时。
@@ -147,8 +152,16 @@ async def _load_existing_ic_series() -> list:
         logger.info("无已达标因子，本次跳过多样性检测")
         return []
 
+    # 按表达式集合签名缓存（web 进程侧）：因子库新增/删除达标因子后自动 miss
+    import hashlib
+    sig = hashlib.md5("|".join(sorted(exprs)).encode()).hexdigest()
+    cached = _EXISTING_IC_WEB_CACHE.get(sig)
+    if cached is not None:
+        return cached
+
     series_list = await run_cpu(compute_existing_ic_series, exprs, start, end, horizon=horizon)
     logger.info("多样性检测: 加载 %d 个已有因子 IC 序列", len(series_list))
+    _EXISTING_IC_WEB_CACHE[sig] = series_list
     return series_list
 
 
@@ -209,7 +222,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
         existing_ic_series = await _load_existing_ic_series()
         eval_results = await asyncio.gather(
             *[_evaluate_bounded(v["expression"], existing_ic_series=existing_ic_series,
-                                universe=universe)
+                                universe=universe, cached=True)
               for v in valid],
             return_exceptions=True,
         )
@@ -256,6 +269,21 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
                             v["name"], valid_ic, "; ".join(reasons[:3]))
                 # 不做全样本 IC 兜底：多维验证未通过说明因子不稳健（稳定性/显著性/
                 # 衰减/多样性不过关），全样本 IC 达标反而是过拟合信号，放行会污染因子库
+
+        # Phase 3.5: 批内候选互查（同一批高度相关的因子只留 |IC| 最高者）
+        if len(passed) > 1:
+            diversity_threshold = settings.mining.get("llm", {}).get("diversity_threshold", 0.8)
+            deduped = _dedupe_intra_batch(
+                [{"name": v["name"], "valid_ic": r.get("valid_ic"),
+                  "valid_ic_series": r.get("valid_ic_series")}
+                 for v, r in passed],
+                diversity_threshold=diversity_threshold,
+            )
+            deduped_names = {d["name"] for d in deduped}
+            dropped = [(v["name"]) for v, _ in passed if v["name"] not in deduped_names]
+            if dropped:
+                logger.info("批内去重剔除 %d 个冗余候选: %s", len(dropped), dropped[:5])
+            passed = [(v, r) for v, r in passed if v["name"] in deduped_names]
 
         # Phase 4: 批量入库 + 逐个保存指标（指标更新轻量，逐个可接受）
         passed_ids = []
@@ -388,6 +416,51 @@ def _is_duplicate(expr: str, existing_exprs: list, threshold: float = 0.9):
         if ratio > threshold:
             return f"与已有表达式相似度 {ratio:.2f}（阈值 {threshold}）"
     return None
+
+
+def _dedupe_intra_batch(candidates: list, diversity_threshold: float = 0.8):
+    """批内候选互查（IC 序列相关性去重）。
+
+    DiversityChecker 只对比因子库里的"已有因子"，同一批候选之间不会互查——
+    LLM 一轮可能生成两个高度相关的因子同时入库。这里对通过筛选的候选两两比对
+    valid_ic_series 相关性，|corr|>threshold 时保留 |IC| 更高者。
+
+    Args:
+        candidates: 已通过其余筛选的候选列表，元素 dict，须含
+            "valid_ic_series"（list/Series）、"valid_ic"（float，用于择优）
+        diversity_threshold: 相关阈值，超过即视为冗余
+
+    Returns:
+        去重后的候选列表（保留每个冗余组中 |valid_ic| 最高者）
+    """
+    import pandas as pd
+    if len(candidates) < 2:
+        return candidates
+    keep = []
+    for cand in candidates:
+        series = cand.get("valid_ic_series")
+        s_new = pd.Series(series if series is not None else []).dropna()
+        if len(s_new) < 10:
+            keep.append(cand)
+            continue
+        redundant = False
+        for kept in keep:
+            series_old = kept.get("valid_ic_series")
+            s_old = pd.Series(series_old if series_old is not None else []).dropna()
+            aligned = pd.concat([s_new, s_old], axis=1).dropna()
+            if len(aligned) < 10:
+                continue
+            corr = aligned.iloc[:, 0].corr(aligned.iloc[:, 1])
+            if not pd.isna(corr) and abs(corr) > diversity_threshold:
+                # 保留 |IC| 更高的
+                if abs(cand.get("valid_ic") or 0) > abs(kept.get("valid_ic") or 0):
+                    keep.remove(kept)
+                    keep.append(cand)
+                redundant = True
+                break
+        if not redundant:
+            keep.append(cand)
+    return keep
 
 
 async def iterative_mine_factors(
@@ -532,10 +605,22 @@ async def iterative_mine_factors(
                         "rank_ic": ic_result.get("rank_ic") or 0.0,
                         "icir": ic_result.get("icir") or 0.0,
                         "valid_ic": ic_result.get("valid_ic"),
+                        "valid_ic_series": ic_result.get("valid_ic_series"),
                         "passed": ic_result.get("passed", False),
                     })
                     if abs(valid_ic) > abs(best_ic):
                         best_ic = valid_ic
+
+            # 批内候选互查：同一轮生成的高度相关因子只保留 |IC| 最高者
+            if len(round_results) > 1:
+                diversity_threshold = mining_cfg.get("diversity_threshold", 0.8)
+                deduped = _dedupe_intra_batch(round_results, diversity_threshold=diversity_threshold)
+                deduped_names = {d["name"] for d in deduped}
+                dropped = [r["name"] for r in round_results if r["name"] not in deduped_names]
+                if dropped:
+                    logger.info("迭代第 %d 轮批内去重剔除 %d 个冗余候选: %s",
+                                round_idx + 1, len(dropped), dropped[:5])
+                round_results = [r for r in round_results if r["name"] in deduped_names]
 
             # 按 IC 排序，保留 top
             round_results.sort(key=lambda x: abs(x.get("ic", 0)), reverse=True)
@@ -661,13 +746,29 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
     )
 
 
-def _ic_cache_key(expr: str, diversity: bool = False, universe: str = None) -> str:
-    """生成 IC 缓存 key：表达式 + 评价区间 + horizon + 多样性状态 + 标的池。"""
+def _existing_ic_signature(existing_ic_series: list) -> str:
+    """对已有因子 IC 序列集合做轻量签名，纳入缓存 key。
+
+    evaluate_factor_with_validation 的多样性判断依赖 existing_ic_series 的内容，
+    因子库变化（新因子入库）后，相同的 expr+universe 会得到不同结果——
+    若缓存 key 不含该签名，会命中陈旧的"不重复"判断，放行真实重复的因子。
+    """
+    if not existing_ic_series:
+        return ""
+    h = hashlib.md5()
+    for s in existing_ic_series:
+        h.update(np.asarray(s, dtype=np.float32).tobytes())
+    return h.hexdigest()[:16]
+
+
+def _ic_cache_key(expr: str, diversity: bool = False, universe: str = None,
+                  existing_sig: str = "") -> str:
+    """生成 IC 缓存 key：表达式 + 评价区间 + horizon + 多样性状态 + 标的池 + 已有因子签名。"""
     period = settings.quant.get("default_backtest_period", {})
     start = period.get("start", "2020-01-01")
     end = period.get("end", "2024-12-31")
     horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
-    raw = f"{expr}|{start}|{end}|{horizon}|{universe or ''}|{'div' if diversity else 'nodiv'}"
+    raw = f"{expr}|{start}|{end}|{horizon}|{universe or ''}|{'div' if diversity else 'nodiv'}|{existing_sig}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -680,11 +781,14 @@ async def _evaluate_safe_cached(expr: str, existing_ic_series: list = None,
                                 universe: str = None) -> dict:
     """带内存缓存的因子评价（使用 evaluate_factor_with_validation）。
 
-    缓存 key 包含多样性状态与标的池：不同 universe/多样性开关的结果分开缓存，
-    避免复用旧缓存导致多样性约束失效或跨池污染。
+    缓存 key 包含多样性状态、标的池与已有因子签名：不同 universe/多样性开关/因子库
+    变化的结果分开缓存，避免复用旧缓存导致多样性约束失效或跨池污染。
+    注意：缓存是 web 进程侧模块级 LRU，进程池 worker 里的 _IC_CACHE 无法跨调用共享，
+    统一走这里才真正生效。
     """
     diversity = bool(existing_ic_series)
-    key = _ic_cache_key(expr, diversity=diversity, universe=universe)
+    existing_sig = _existing_ic_signature(existing_ic_series)
+    key = _ic_cache_key(expr, diversity=diversity, universe=universe, existing_sig=existing_sig)
     if key in _IC_CACHE:
         logger.debug("IC 缓存命中: %s", expr[:40])
         return _IC_CACHE[key]

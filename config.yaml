@@ -116,15 +116,19 @@ mining:
     - $quick_ratio
     - $equity_multiplier
     candidates_per_run: 10
-    diversity_max_factors: 20
+    # 多样性对比的已有因子上限：过小会漏检（达标因子超过上限后不再对比）。
+    # 200 覆盖常见因子库规模；IC 序列计算带 web 进程缓存，不会显著拖慢挖掘。
+    diversity_max_factors: 200
     # 单候选多维验证超时：评价含 5 年数据加载/分段IC/滚动重验，60s 过紧（大候选集
     # 排队时更会被耗光）。配合 llm_factor 的信号量限并发，超时只计实际执行时间。
     eval_timeout_seconds: 300
-    ic_threshold: 0.03
+    # 挖掘达标阈值与策略选因阈值（strategy_ic_threshold=0.02）统一：A股截面 IC 0.02
+    # 已可用，0.03 门槛过高导致挖掘产出几乎无法入库、也过不了策略选因口径。
+    ic_threshold: 0.02
     significance_alpha: 0.05
   symbolic:
     generations: 30
-    ic_threshold: 0.03
+    ic_threshold: 0.02
     parsimony_coefficient: 0.001
     population: 1000
     tournament_size: 20
