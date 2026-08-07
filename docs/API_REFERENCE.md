@@ -524,7 +524,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 80+ 端点 / 15 个模块
 ## 7. 日志（`logs.py`，2 端点）
 
 ### 7.1 `GET /logs/files`
-- **说明**：列出允许查询的日志文件（白名单：`app.log`、`error.log`、`api.jsonl`、`perf.jsonl`、`audit.jsonl`）。
+- **说明**：列出允许查询的日志文件（白名单：`quantlab.log`、`error.log`、`sync.log`，均 JSON 行格式）。
 - **响应**：
 ```json
 {
@@ -567,6 +567,16 @@ summary: 后端 API 接口完整参考 —— 涵盖 80+ 端点 / 15 个模块
 }
 ```
 - **错误**：`400 INVALID_FILE`
+
+### 7.3 `GET /logs/level`
+- **说明**：获取当前 root 日志级别。
+- **响应**：`{"ok": true, "data": {"level": "INFO"}}`
+
+### 7.4 `PUT /logs/level`
+- **说明**：运行时动态调整日志级别（重启后恢复为 config 默认）。排查问题：切 DEBUG → 复现 → 查看 quantlab.log → 切回 INFO。
+- **请求体**：`{"level": "DEBUG|INFO|WARNING|ERROR|CRITICAL"}`
+- **响应**：`{"ok": true, "data": {"level": "DEBUG"}}`
+- **错误**：`400 VALIDATION_ERROR`（非法级别）
 
 ---
 
@@ -945,7 +955,7 @@ summary: 后端 API 接口完整参考 —— 涵盖 80+ 端点 / 15 个模块
 | `task_results` | `TaskResult` | `id, strategy_id, task_type("param-sweep"/"walk-forward"), status, payload(JSON), error` |
 | `stock_data_status` | `StockDataStatus` | `universe, latest_date, row_count, stock_count, status, last_updated, last_error` |
 | `sync_history` | `SyncHistory` | `universe, data_source, status, duration_seconds, version, latest_date` |
-| `logs/*` | 文件 | `app.log` / `error.log` / `api.jsonl` / `perf.jsonl` / `audit.jsonl` |
+| `logs/*` | 文件 | `quantlab.log` / `error.log` / `sync.log`（JSON，前端日志页可视化查看） |
 
 ### 11.5 OpenAPI 元信息
 

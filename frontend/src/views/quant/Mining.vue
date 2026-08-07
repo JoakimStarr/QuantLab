@@ -2,18 +2,14 @@
   <PageContainer>
     <div class="mining-page">
       <!-- 页面头 -->
-      <header class="page-header">
-        <div class="page-header__lead">
-          <h1 class="page-header__title">AI 因子挖掘</h1>
-          <p class="page-header__subtitle">大模型与遗传编程驱动的因子发现</p>
-        </div>
-        <div class="page-header__actions">
+      <PageHeader title="AI 因子挖掘" subtitle="大模型与遗传编程驱动的因子发现">
+        <template #actions>
           <span class="model-badge" v-if="aiProviders.length">
             <span class="model-badge__dot"></span>
             {{ aiBadgeText }}
           </span>
-        </div>
-      </header>
+        </template>
+      </PageHeader>
 
       <!-- 两栏布局 -->
       <div class="mining-layout">
@@ -223,6 +219,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { MagicStick, Operation, ChatLineSquare, Connection, VideoPlay, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import { usePolling } from '@/composables/usePolling'
 import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask } from '@/api/mining'
 import { getAiStatus } from '@/api/auth'
 import { listFactors } from '@/api/factor'
@@ -307,8 +305,6 @@ const automlDialog = reactive({
 const factorList = ref([])
 
 // 轮询与实时耗时
-let pollTimer = null
-let tickTimer = null
 const now = ref(Date.now())
 
 const hasRunning = computed(() => tasks.value.some((t) => t.status === 'running' || t.status === 'pending'))
@@ -411,48 +407,45 @@ async function loadTasks() {
   }
 }
 
-// 轮询运行中任务，每 5s 拉取单个任务状态
+// 轮询运行中任务，每 5s 拉取单个任务状态；无运行中任务时自动停止
+const runningPolling = usePolling(async () => {
+  const running = tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
+  if (!running.length) {
+    runningPolling.stop()
+    return
+  }
+  await Promise.all(
+    running.map(async (t) => {
+      try {
+        const data = await getMiningTask(t.id)
+        const idx = tasks.value.findIndex((x) => x.id === t.id)
+        if (idx > -1) tasks.value[idx] = { ...tasks.value[idx], ...data }
+      } catch (e) {
+        // 单个任务查询失败忽略，下轮继续
+      }
+    })
+  )
+}, 5000, { immediate: false })
+
 function startPolling() {
-  if (pollTimer) return
-  pollTimer = setInterval(async () => {
-    const running = tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
-    if (!running.length) {
-      stopPolling()
-      return
-    }
-    await Promise.all(
-      running.map(async (t) => {
-        try {
-          const data = await getMiningTask(t.id)
-          const idx = tasks.value.findIndex((x) => x.id === t.id)
-          if (idx > -1) tasks.value[idx] = { ...tasks.value[idx], ...data }
-        } catch (e) {
-          // 单个任务查询失败忽略，下轮继续
-        }
-      })
-    )
-  }, 5000)
+  if (runningPolling.isPolling.value) return
+  runningPolling.start()
 }
 
 function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
+  runningPolling.stop()
 }
 
 // 秒级 ticker：仅在有运行中任务时刷新耗时显示
+const tickTicker = usePolling(() => {
+  now.value = Date.now()
+}, 1000, { immediate: false })
+
 watch(
   hasRunning,
   (v) => {
-    if (v && !tickTimer) {
-      tickTimer = setInterval(() => {
-        now.value = Date.now()
-      }, 1000)
-    } else if (!v && tickTimer) {
-      clearInterval(tickTimer)
-      tickTimer = null
-    }
+    if (v) tickTicker.start()
+    else tickTicker.stop()
   },
   { immediate: true }
 )
@@ -561,7 +554,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopPolling()
-  if (tickTimer) clearInterval(tickTimer)
 })
 </script>
 
@@ -570,36 +562,6 @@ onBeforeUnmount(() => {
   animation: fadeInUp 0.5s var(--ease-out-expo) both;
 }
 
-/* 页面头 */
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  flex-wrap: wrap;
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-    line-height: var(--line-height-tight);
-  }
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-}
 .model-badge {
   display: inline-flex;
   align-items: center;

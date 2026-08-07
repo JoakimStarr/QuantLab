@@ -37,18 +37,19 @@ def spawn_sync_worker(
     overwrite: bool = False,
     source: str = None,
     broadcast: bool = False,
+    refresh_misc: bool = False,
 ) -> subprocess.Popen:
     """启动一个独立的同步 worker 子进程并立即返回。
 
     start_new_session=True 使 worker 脱离 web 进程的进程组：
     - uvicorn --reload 重启时不会等待/杀掉它
     - web 进程崩溃也不影响它继续跑
-    日志由 worker 自身写入 logs/sync_worker_<kind>.log（RotatingFileHandler 轮转）。
+    日志由 worker 自身写入 logs/sync.log（structlog JSON，worker_kind 字段区分类型）。
     """
     from app.core.config import settings
 
     backend_dir = str(settings.PROJECT_ROOT / "backend")
-    log_path = str(settings.PROJECT_ROOT / "logs" / f"sync_worker_{kind}.log")
+    log_path = str(settings.PROJECT_ROOT / "logs" / "sync.log")
 
     cmd = [sys.executable, "-m", "app.services.data.sync_worker",
            "--kind", kind, "--universe", universe]
@@ -64,6 +65,8 @@ def spawn_sync_worker(
         cmd += ["--source", source]
     if broadcast:
         cmd += ["--broadcast"]
+    if refresh_misc:
+        cmd += ["--refresh-misc"]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
@@ -96,6 +99,11 @@ def spawn_sync_worker(
 
 
 async def _run(args: argparse.Namespace) -> None:
+    # 注入 worker_kind 上下文，日志 JSON 行内携带该字段，前端可按类型过滤
+    from app.core.logging_config import set_worker_kind
+
+    set_worker_kind(args.kind)
+
     if args.kind == "fundamental":
         # akshare 财报不连 baostock，不需要爬取锁，可与回填并行。
         # run_financial_sync 自管进度：fetch-only 不写全局进度（避免覆盖回填），
@@ -118,10 +126,13 @@ async def _run(args: argparse.Namespace) -> None:
         logger.info("宏观同步完成: %s", result)
         return
 
-    from app.services.data.sync_progress import (
-        clear_progress, finish_progress, init_progress, set_worker_pid,
-    )
     from app.services.data.sync_lock import SyncLock
+    from app.services.data.sync_progress import (
+        clear_progress,
+        finish_progress,
+        init_progress,
+        set_worker_pid,
+    )
 
     # 关键：先抢单实例爬取锁。抢不到说明已有爬取进程在跑 → 直接退出，什么都不碰
     # （不写进度/不写 DB，避免覆盖活跃 worker 的状态）。flock 由内核持有，
@@ -166,7 +177,6 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
     )
 
     from contextlib import nullcontext
-    from app.services.data.baostock_client import baostock_session
 
     session = baostock_session() if need_bst else nullcontext()
     try:
@@ -175,12 +185,14 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                 from app.schemas.quant import SyncDataRequest
                 from app.services.data.baostock_backfill import run_baostock_backfill_task
 
-                req = SyncDataRequest(universe=args.universe, years=args.years)
+                req = SyncDataRequest(universe=args.universe, years=args.years,
+                                      refresh_misc=args.refresh_misc)
                 await run_baostock_backfill_task(req)
             elif args.kind == "eod":
+                import json
+
                 from app.core.config import settings
                 from app.services.data.eod_incremental import incremental_sync_eod
-                import json
 
                 result_path = os.path.join(
                     str(settings.PROJECT_ROOT / "data"), "eod_last_result.json",
@@ -206,7 +218,8 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
             elif args.kind == "full":
                 from app.services.data.full_sync import run_full_sync
 
-                await run_full_sync(years=args.years or 5, universe=args.universe)
+                await run_full_sync(years=args.years or 5, universe=args.universe,
+                                    refresh_misc=args.refresh_misc)
             elif args.kind == "indices":
                 from app.core.config import settings
                 from app.services.data.index_registry import sync_and_register_indices
@@ -215,7 +228,8 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                 finish_progress(bool(result.get("ok")), result.get("error"))
             elif args.kind == "etf":
                 from app.services.data.etf_sync import (
-                    sync_etf_task, sync_etf_tencent_aligned,
+                    sync_etf_task,
+                    sync_etf_tencent_aligned,
                 )
 
                 days = args.days or (args.years * 365 if args.years else 730)
@@ -263,24 +277,25 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=None)
     parser.add_argument("--include-baostock", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--refresh-misc", action="store_true",
+                        help="backfill: 强制重拉 stock_basic/stock_industry（默认已入库则跳过）")
     parser.add_argument("--source", choices=["baostock", "akshare", "tencent"], default=None)
     parser.add_argument("--broadcast", action="store_true", help="fundamental: 拉取后同时 PIT 广播写 bin（校验/补齐阶段用）")
     args = parser.parse_args()
 
-    # 轮转文件日志：100MB × 5，与 quantlab.log 规则一致，过期备份由
-    # logging_config.cleanup_old_logs 定期清理（模式 sync_worker_*.log.*）
-    from logging.handlers import RotatingFileHandler
+    # 统一日志：与 web 进程共用 setup_logging（structlog JSON 管道）。
+    # 全部 worker 写同一个 sync.log，行内 worker_kind 字段区分任务类型；
+    # 跨进程写入/轮转由 LockedRotatingFileHandler(fcntl) 保证安全。
+    # 过期备份由 logging_config.cleanup_old_logs 定期清理（模式 sync.log.[0-9]*）。
+    from app.core.logging_config import setup_logging
 
-    log_dir = settings.PROJECT_ROOT / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        str(log_dir / f"sync_worker_{args.kind}.log"),
-        maxBytes=100 * 1024 * 1024,
-        backupCount=5,
-        encoding="utf-8",
+    setup_logging(
+        log_dir=settings.PROJECT_ROOT / settings.logging.dir,
+        level=settings.logging.level,
+        console=False,
+        log_file="sync.log",
+        error_file=None,
     )
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
 
     try:
         asyncio.run(_run(args))

@@ -1,19 +1,15 @@
 <template>
   <PageContainer>
     <!-- 页面头 -->
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">因子库</h1>
-        <p class="page-header__subtitle">因子的评价、管理与组合</p>
-      </div>
-      <div class="page-header__actions">
+    <PageHeader title="因子库" subtitle="因子的评价、管理与组合">
+      <template #actions>
         <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
         <el-button :icon="Download" :loading="seedingEtf" @click="onSeedEtfFactors">导入 ETF 因子</el-button>
         <el-button type="primary" :icon="Plus" @click="openAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <!-- 指标概览条 -->
     <section class="factor-overview">
@@ -345,6 +341,7 @@ import { ElButton } from 'element-plus/es/components/button/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import { Plus, Refresh, Download, Warning, MagicStick, Search } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import { fmt, numClass } from '@/utils/format'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import VChart from 'vue-echarts'
@@ -1210,37 +1207,6 @@ onMounted(() => {
 </script>
 
 <style scoped lang="scss">
-// 页面头
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  flex-wrap: wrap;
-}
-.page-header__lead {
-  flex: 1;
-  min-width: 0;
-}
-.page-header__title {
-  margin: 0 0 var(--space-xs);
-  font-size: var(--font-size-2xl);
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: var(--line-height-tight);
-}
-.page-header__subtitle {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-}
-.page-header__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
 // 指标概览条
 .factor-overview {
   display: flex;
@@ -1388,16 +1354,6 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
   color: var(--text-primary);
-
-  &.is-positive {
-    color: var(--success);
-  }
-  &.is-negative {
-    color: var(--danger);
-  }
-  &.is-warning {
-    color: var(--warning);
-  }
 }
 
 // 完整表达式查看弹窗

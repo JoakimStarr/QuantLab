@@ -1,14 +1,10 @@
 <template>
   <PageContainer>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">因子深度分析 — {{ factorName }}</h1>
-        <p class="page-header__subtitle">IC 时序 · 分层收益 · 换手率 · IC 衰减多维度评估</p>
-      </div>
-      <div class="page-header__actions">
+    <PageHeader :title="'因子深度分析 — ' + factorName" subtitle="IC 时序 · 分层收益 · 换手率 · IC 衰减多维度评估">
+      <template #actions>
         <el-button @click="goBack">返回因子库</el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <!-- 参数栏 -->
     <SectionCard title="分析参数" subtitle="选择日期范围、预测周期与分组数">
@@ -109,6 +105,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { deepAnalysis } from '@/api/quant'
 import { fmt as fmtNum, numClass } from '@/utils/format'
@@ -238,6 +235,8 @@ const statCards = computed(() => {
   const tSig = hasT ? Math.abs(tStat) >= 2 : null
   const hasP = s.p_value != null && s.p_value !== '' && !Number.isNaN(Number(s.p_value))
   const pValue = hasP ? Number(s.p_value) : null
+  const hasPermP = s.perm_pvalue != null && s.perm_pvalue !== '' && !Number.isNaN(Number(s.perm_pvalue))
+  const permP = hasPermP ? Number(s.perm_pvalue) : null
   return [
     { key: 'ic_mean', label: 'IC 均值', value: fmtNum(s.ic_mean, 4), cls: numClass(s.ic_mean) },
     { key: 'icir', label: 'ICIR', value: fmtNum(s.icir, 3), cls: numClass(s.icir) },
@@ -253,6 +252,13 @@ const statCards = computed(() => {
       label: 'p-value',
       value: fmtNum(s.p_value, 4) + (hasP && pValue < 0.05 ? ' ★' : ''),
       cls: hasP && pValue < 0.05 ? 'is-positive' : '',
+    },
+    {
+      key: 'perm_pvalue',
+      label: '置换 p-value',
+      value: hasPermP ? fmtNum(s.perm_pvalue, 4) + (permP < 0.05 ? ' ★' : '') : '--',
+      cls: hasPermP && permP < 0.05 ? 'is-positive' : '',
+      note: s.perm_n ? `${s.perm_n} 次截面置换` : '',
     },
     { key: 'annual_turnover', label: '年化换手', value: fmtNum(s.annual_turnover, 2, '%'), cls: '' },
     {
@@ -533,38 +539,6 @@ onMounted(() => {
 })
 </script>
 <style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  flex-wrap: wrap;
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-  }
-
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
-
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-}
-
 .param-bar {
   display: flex;
   align-items: center;
@@ -613,14 +587,6 @@ onMounted(() => {
     margin-top: 4px;
     color: var(--text-tertiary);
   }
-}
-
-.is-positive {
-  color: var(--success);
-}
-
-.is-negative {
-  color: var(--danger);
 }
 
 .chart-area {

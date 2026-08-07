@@ -71,6 +71,45 @@ def test_load_feature_ranges_missing_calendar_returns_empty(tmp_path):
     assert _load_feature_ranges(str(tmp_path), []) == {}
 
 
+async def test_pull_misc_data_default_skips():
+    """默认（refresh_misc=False）不拉 stock_basic/stock_industry（用户要求关掉该步骤）。"""
+    from unittest.mock import patch
+
+    from app.services.data.baostock_backfill import _pull_misc_data
+
+    with patch("app.services.data.baostock_backfill._fetch_all_sync",
+               side_effect=AssertionError("默认不应拉取")) as m_fetch:
+        df_basic, df_industry = await _pull_misc_data(False)
+
+    assert df_basic is None and df_industry is None
+    m_fetch.assert_not_called()
+
+
+async def test_pull_misc_data_explicit_pulls():
+    """refresh_misc=True 时才拉取基础资料/行业。"""
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    from app.services.data.baostock_backfill import _pull_misc_data
+
+    basic_df = pd.DataFrame({"code": ["sh.600000"], "code_name": ["浦发银行"], "type": ["1"]})
+    ind_df = pd.DataFrame({"code": ["sh.600000"], "code_name": ["浦发银行"],
+                           "industry": ["银行"], "industryClassification": ["申万一级"]})
+
+    def _fake_fetch(api_name, date_str):
+        return {"query_stock_basic": basic_df.to_dict("records"),
+                "query_stock_industry": ind_df.to_dict("records")}[api_name]
+
+    with patch("app.services.data.baostock_backfill._fetch_all_sync",
+               side_effect=_fake_fetch) as m_fetch:
+        df_basic, df_industry = await _pull_misc_data(True)
+
+    assert df_basic is not None and not df_basic.empty
+    assert df_industry is not None and not df_industry.empty
+    assert m_fetch.call_count == 2
+
+
 async def test_run_backfill_downloads_pipeline():
     """流水线：串行拉取→后台写盘，所有日期都被消费并落库。"""
     from unittest.mock import AsyncMock, patch

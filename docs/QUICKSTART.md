@@ -176,7 +176,7 @@ npm install --registry=https://registry.npmmirror.com
 ### Q4: 前端能打开但接口 422/500
 
 - 确认后端已启动（`http://localhost:8000/docs` 能访问）
-- 查看后端日志：`tail -f logs/backend.log`
+- 查看后端日志：`tail -f logs/quantlab.log`（同步问题看 `logs/sync.log`，错误看 `logs/error.log`）
 - 数据未同步时部分接口会返回 503（qlib 不可用），先同步数据
 
 ### Q5: Windows 用户如何使用

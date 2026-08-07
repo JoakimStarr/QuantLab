@@ -257,7 +257,8 @@ async def test_baostock_empty_falls_back_to_akshare(tmp_qlib):
     with patch("app.services.data.baostock_client.fetch_daily_all_a_stock_sync",
                return_value=pd.DataFrame(columns=["date", "code"])), \
          patch.object(eod, "_incremental_sync_eod_akshare",
-                      new=AsyncMock(return_value=sentinel)) as mock_ak:
+                      new=AsyncMock(return_value=sentinel)) as mock_ak, \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base),
             overwrite=False, source="baostock",
@@ -279,7 +280,8 @@ async def test_baostock_import_error_falls_back_to_akshare(tmp_qlib):
 
     with patch("builtins.__import__", side_effect=fake_import), \
          patch.object(eod, "_incremental_sync_eod_akshare",
-                      new=AsyncMock(return_value=sentinel)) as mock_ak:
+                      new=AsyncMock(return_value=sentinel)) as mock_ak, \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base), source="baostock",
         )
@@ -293,7 +295,8 @@ async def test_source_akshare_skips_baostock(tmp_qlib):
     sentinel = {"ok": True, "source": "akshare"}
     with patch.object(eod, "incremental_sync_eod_baostock") as mock_bs, \
          patch.object(eod, "_incremental_sync_eod_akshare",
-                      new=AsyncMock(return_value=sentinel)):
+                      new=AsyncMock(return_value=sentinel)), \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base), source="akshare",
         )
@@ -308,7 +311,8 @@ async def test_baostock_partial_success_no_fallback(tmp_qlib):
                side_effect=_mock_baostock_full), \
          patch.object(eod, "_incremental_sync_eod_akshare",
                       new=AsyncMock()) as mock_ak, \
-         patch.object(eod, "_insert_pg_rows", new=AsyncMock()):
+         patch.object(eod, "_insert_pg_rows", new=AsyncMock()), \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base),
             overwrite=True, source="baostock",
@@ -324,7 +328,8 @@ async def test_baostock_success_writes_pg_rows(tmp_qlib):
     base, _ = tmp_qlib
     with patch("app.services.data.baostock_client.fetch_daily_all_a_stock_sync",
                side_effect=_mock_baostock_full), \
-         patch.object(eod, "_insert_pg_rows", new=AsyncMock()) as mock_insert:
+         patch.object(eod, "_insert_pg_rows", new=AsyncMock()) as mock_insert, \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base),
             overwrite=True, source="baostock",
@@ -374,7 +379,8 @@ async def test_baostock_no_candidate_dates_skips_akshare(tmp_qlib):
     base, _ = tmp_qlib
     with patch.object(eod, "_gen_candidate_dates", return_value=[]), \
          patch.object(eod, "_incremental_sync_eod_akshare",
-                      new=AsyncMock()) as mock_ak:
+                      new=AsyncMock()) as mock_ak, \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
         r = await eod.incremental_sync_eod(
             universe="all", days=1, provider_uri=str(base),
             overwrite=False, source="baostock",

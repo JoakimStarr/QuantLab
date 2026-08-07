@@ -10,22 +10,22 @@
       </el-table-column>
       <el-table-column label="夏普" width="80" align="right">
         <template #default="{ row }">
-          <span class="num" :class="numClass(row.sharpe)">{{ formatNum(row.sharpe) }}</span>
+          <span class="num" :class="numClass(row.sharpe)">{{ fmtNum(row.sharpe) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="年化" width="80" align="right">
         <template #default="{ row }">
-          <span class="num" :class="numClass(row.annual_return)">{{ formatPercent(row.annual_return) }}</span>
+          <span class="num" :class="numClass(row.annual_return)">{{ fmtPct(row.annual_return) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="回撤" width="80" align="right">
         <template #default="{ row }">
-          <span class="num num--danger">{{ formatPercent(row.max_drawdown) }}</span>
+          <span class="num is-negative">{{ fmtPct(row.max_drawdown) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="卡玛" width="70" align="right">
         <template #default="{ row }"
-          ><span class="num">{{ formatNum(row.calmar) }}</span></template
+          ><span class="num">{{ fmtNum(row.calmar) }}</span></template
         >
       </el-table-column>
       <el-table-column label="区间" min-width="160">
@@ -37,7 +37,7 @@
 
 <script setup>
 import SectionCard from '@/components/common/SectionCard.vue'
-import { formatNum, formatPercent, numClass } from './utils'
+import { fmtNum, fmtPct, numClass } from '@/utils/format'
 
 defineProps({
   backtests: { type: Array, default: () => [] },
@@ -57,12 +57,6 @@ defineProps({
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  &.num--success {
-    color: var(--success);
-  }
-  &.num--danger {
-    color: var(--danger);
-  }
 }
 .dashboard-table :deep(.el-table) {
   --el-table-bg-color: transparent;

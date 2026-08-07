@@ -1,47 +1,13 @@
-"""结构化审计日志：记录关键操作（登录/登出/挖掘/回测/导出等）。
+"""结构化审计日志：记录关键操作（登录/登出/挖掘/回测提交）。
 
-写入 logs/audit.jsonl，每行一条 JSON，便于 ELK/Loki 采集与合规审计。
+审计事件通过统一的 structlog 管道写入主日志（logs/quantlab.log），
+logger 名为 "audit"，携带 action/user/resource/detail 等结构化字段。
+前端日志页可按 logger=audit 过滤查看；不单独建文件（个人/自托管项目
+无独立审计留档要求，减少日志文件数量与格式分叉）。
 """
 import logging
-from datetime import datetime
-from logging.handlers import RotatingFileHandler
-
-from pythonjsonlogger import jsonlogger
-
-from app.core import logging_config
 
 logger = logging.getLogger("audit")
-
-
-def _ensure_audit_handler() -> None:
-    """确保 audit logger 有 file handler（懒加载，避免 import 时创建文件）。
-
-    用 RotatingFileHandler 轮转（10MB × 5），避免单文件无限增长；
-    过期备份由 logging_config.cleanup_old_logs 定期清理。
-
-    目录复用 logging_config.log_dir（setup_logging 设置），保证与 logs API
-    扫描的目录一致（此前写 settings.PROJECT_ROOT/logs 与 API 的 backend/logs 错位，
-    导致 audit.jsonl 永远无法在前端日志页看到）。
-    """
-    if logger.handlers:
-        return
-    log_dir = logging_config.log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        str(log_dir / "audit.jsonl"),
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
-        encoding="utf-8",
-    )
-    handler.setFormatter(
-        jsonlogger.JsonFormatter(
-            "%(asctime)s %(levelname)s %(message)s",
-            datefmt="%Y-%m-%dT%H:%M:%S",
-        )
-    )
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False  # 不传播到 root logger，避免重复输出
 
 
 def audit(
@@ -54,19 +20,19 @@ def audit(
     """记录一条审计日志。
 
     Args:
-        action: 操作类型（login, logout, mining_submit, backtest_submit, export 等）
-        user: 操作者（admin / token subject）
-        resource: 操作对象（因子名、策略 ID 等）
-        detail: 人类可读的描述
+        action: 操作类型（login, logout, mining_submit, backtest_submit 等）
+        user: 操作者（admin / 登录用户名 / token subject）
+        resource: 操作对象（策略 ID、任务 ID 等）
+        detail: 人类可读的描述（同时作为日志 message）
         **extra: 额外结构化字段
     """
-    _ensure_audit_handler()
-    entry = {
-        "timestamp": datetime.now().isoformat(),
+    fields = {
         "action": action,
         "user": user,
         "resource": resource,
         "detail": detail,
         **extra,
     }
-    logger.info("audit", extra=entry)
+    # extra_fields 由 logging_config._extra_fields_processor 展平进 JSON 行；
+    # 消息取 detail（更可读），前端 _entry_from_json 会合并 detail/action
+    logger.info(detail or action, extra={"extra_fields": fields})

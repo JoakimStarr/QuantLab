@@ -201,9 +201,9 @@ QuantLab/
 ### 4.6 可观测性
 
 **四件套**：
-- **JSON 结构化日志**：每个请求带 `request_id`，跨服务追踪
+- **JSON 结构化日志**：统一 `quantlab.log`（web）/ `error.log`（WARNING+，15 天保留）/ `sync.log`（同步 worker），每个请求带 `request_id`，同步任务带 `worker_kind`
 - **Prometheus 指标**：`/metrics` 端点暴露，监控因子评价耗时、LLM 调用、缓存命中率、DB 连接池
-- **结构化审计日志**：管理员操作单独记录到 `audit.jsonl`
+- **结构化审计日志**：关键操作（登录/登出/挖掘/回测提交）随主日志输出（`logger=audit`，前端可按 logger 过滤）
 - **健康检查**：`/api/v1/health` 检查 DB / 调度器 / 磁盘空间
 
 ---

@@ -39,13 +39,29 @@ const sourceMeta = [
   { key: 'symbolic', label: '符号', badge: 'warning' },
   { key: 'text', label: '文本', badge: 'info' },
   { key: 'automl', label: 'AutoML', badge: 'danger' },
+  { key: 'alpha158', label: 'Alpha158', badge: 'primary' },
+  { key: 'etf', label: 'ETF', badge: 'success' },
+]
+const badgePalette = [
+  { badge: 'primary' },
+  { badge: 'success' },
+  { badge: 'warning' },
+  { badge: 'info' },
+  { badge: 'danger' },
 ]
 
 const sourceBars = computed(() => {
   const total = props.total || 1
-  return sourceMeta.map((m) => {
+  const known = sourceMeta.map((m) => m.key)
+  // 已定义的类别 + 数据中未收录的其它类别，确保分布图与总数一致
+  const entries = Object.entries(props.bySource ?? {})
+    .filter(([k]) => !known.includes(k))
+    .map(([k], i) => {
+      return { key: k, label: k, badge: badgePalette[i % badgePalette.length].badge }
+    })
+  return [...sourceMeta, ...entries].map((m) => {
     const count = props.bySource?.[m.key] ?? 0
-    return { ...m, count, percent: Math.round((count / total) * 100) }
+    return { ...m, count, percent: total ? Math.round((count / total) * 100) : 0 }
   })
 })
 </script>

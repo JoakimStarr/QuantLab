@@ -96,6 +96,67 @@ def test_exclude_pending_today():
     assert _exclude_pending_today([], now=datetime(2026, 8, 5, 10, 20)) == []
 
 
+@pytest.mark.asyncio
+async def test_check_calendar_excludes_pending_today_from_stock_daily(tmp_path, monkeypatch):
+    """回归：day.txt 含今天但 stock_daily 未到 → 不计入 missing_in_stock_daily。
+
+    baostock 回填会把"今天"写进 day.txt（日历对齐），但当日数据要收盘后发布。
+    此前该日期在 missing_in_stock_daily 里被当 error，现在发布时间点前豁免。
+    """
+    import app.services.data.validation as val
+    from datetime import datetime
+
+    today = "2026-08-05"
+    qlib_dir = tmp_path / "qlib"
+    (qlib_dir / "calendars").mkdir(parents=True)
+    with open(qlib_dir / "calendars" / "day.txt", "w") as f:
+        f.write("2026-08-04\n" + today + "\n")
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    class _Row:
+        def __init__(self, v):
+            self._v = v
+
+        def __getitem__(self, i):
+            return self  # r[0] 即该行自身
+
+        def strftime(self, fmt):
+            from datetime import date
+            return date.fromisoformat(self._v).strftime(fmt)
+
+    results = [
+        [_Row("2026-08-04")],                # stock_daily distinct trade_date
+        [_Row("2026-08-04"), _Row(today)],   # trade_calendar 交易日
+    ]
+
+    async def _fake_execute(stmt):
+        r = MagicMock()
+        r.__iter__ = lambda self: iter(results.pop(0))
+        return r
+
+    fake_session = AsyncMock()
+    fake_session.execute = _fake_execute
+    fake_session.__aenter__.return_value = fake_session
+    fake_session.__aexit__.return_value = False
+
+    monkeypatch.setattr(val, "async_session", lambda: fake_session)
+    monkeypatch.setattr(val.settings.scheduler, "quant_data_update_time", "18:00")
+    # 固定"当前时间"为 08-05 10:20（早于发布点）：_exclude_pending_today 默认取
+    # 真实 now，这里包一层强制注入测试时间，验证 check_calendar 对 missing_in_stock_daily 也豁免
+    real_exclude = val._exclude_pending_today
+    monkeypatch.setattr(
+        val, "_exclude_pending_today",
+        lambda dates, now=None: real_exclude(dates, now=datetime(2026, 8, 5, 10, 20)),
+    )
+
+    result = await val.check_calendar(str(qlib_dir))
+    counts = result["counts"]
+    assert counts["missing_in_stock_daily"] == 0  # 今天被豁免
+    assert result["status"] in ("ok", "warn")
+    assert result["missing_in_stock_daily_samples"] == []
+
+
 # ------------------------------------------------------------------- fields
 def test_check_fields_ok(tmp_path):
     base = _make_qlib_dir(tmp_path)

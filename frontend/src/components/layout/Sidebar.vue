@@ -1,12 +1,12 @@
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
     <!-- Logo 区 -->
     <div class="sidebar-logo">
       <router-link to="/" class="logo-link">
         <el-icon :size="20" class="logo-icon"><DataAnalysis /></el-icon>
-        <span class="logo-text">{{ appName }}</span>
+        <span v-if="!sidebarCollapsed" class="logo-text">{{ appName }}</span>
       </router-link>
-      <span class="logo-version">v{{ appVersion }}</span>
+      <span v-if="!sidebarCollapsed" class="logo-version">v{{ appVersion }}</span>
     </div>
 
     <!-- 导航菜单 -->
@@ -19,18 +19,12 @@
         :class="{ 'nav-item--active': isActive(item) }"
       >
         <el-icon :size="18" class="nav-icon"><component :is="resolveIcon(item.icon)" /></el-icon>
-        <span class="nav-label">{{ item.title }}</span>
+        <span v-if="!sidebarCollapsed" class="nav-label">{{ item.title }}</span>
       </router-link>
     </nav>
 
-    <!-- 底部：主题切换 + 版本号 -->
+    <!-- 底部：版本号 -->
     <div class="sidebar-footer">
-      <button class="theme-toggle" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'" @click="toggleTheme">
-        <el-icon :size="16">
-          <Sunny v-if="isDark" />
-          <Moon v-else />
-        </el-icon>
-      </button>
       <span class="footer-version">v{{ appVersion }}</span>
     </div>
   </aside>
@@ -39,53 +33,68 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { DataAnalysis, Sunny, Moon } from '@element-plus/icons-vue'
+import { DataAnalysis } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { getVersion, getAppName } from '@/config/app'
 import { resolveIcon } from '@/utils/icons'
+import { navItems } from '@/config/nav'
 
 const appStore = useAppStore()
 const route = useRoute()
 
-const isDark = computed(() => appStore.theme === 'dark')
+const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 
 // 从全局配置读取版本与名称（initAppConfig 挂载后异步加载，ref 响应式自动更新）
 const appVersion = computed(() => getVersion())
 const appName = computed(() => getAppName())
 
-// 导航菜单项（与路由配置保持一致）
-const menuItems = [
-  { path: '/', title: '研究首页', icon: 'DataAnalysis' },
-  { path: '/quant/factors', title: '因子库', icon: 'Coin' },
-  { path: '/quant/strategy', title: '策略回测', icon: 'TrendCharts' },
-  { path: '/quant/strategy-library', title: '策略库', icon: 'Collection' },
-  { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
-  { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
-  { path: '/quant/macro', title: '宏观指标', icon: 'Odometer' },
-  { path: '/docs', title: '技术文档', icon: 'Reading' },
-  { path: '/system/logs', title: '日志管理', icon: 'Document' },
-]
+// 导航菜单项（来自单一数据源 src/config/nav.js）
+const menuItems = navItems
 
 // /docs 用前缀匹配，使 /docs/data-layer 也高亮"文档"项
 function isActive(item) {
   if (item.path === '/docs') return route.path.startsWith('/docs')
   return route.path === item.path
 }
-
-function toggleTheme() {
-  appStore.toggleTheme()
-}
 </script>
 
 <style scoped lang="scss">
 .sidebar {
-  width: 220px;
+  width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   background: var(--bg-primary);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  transition: width 160ms var(--ease-in-out);
+  will-change: width;
+}
+
+// 折叠态：收窄为纯图标栏
+.sidebar--collapsed {
+  width: var(--sidebar-collapsed-width);
+
+  .sidebar-logo {
+    justify-content: center;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+    border-left: none;
+  }
+
+  .sidebar-footer {
+    justify-content: center;
+  }
+}
+
+// 移动端隐藏侧栏，交由 MobileTabBar 承接导航
+@media (max-width: 767px) {
+  .sidebar {
+    display: none;
+  }
 }
 
 // Logo 区
@@ -187,25 +196,6 @@ function toggleTheme() {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-}
-
-.theme-toggle {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: var(--bg-hover);
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 150ms var(--ease-in-out);
-
-  &:hover {
-    background: var(--bg-active);
-    color: var(--primary);
-  }
 }
 
 .footer-version {

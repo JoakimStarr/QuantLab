@@ -16,64 +16,165 @@ green()  { echo -e "\033[32m$*\033[0m"; }
 yellow() { echo -e "\033[33m$*\033[0m"; }
 blue()   { echo -e "\033[34m$*\033[0m"; }
 
+# 交互确认：./setup.sh -y 或 SETUP_YES=1 时自动确认（非交互/CI 用）
+AUTO_YES=0
+if [ "$#" -gt 0 ] && { [ "$1" = "-y" ] || [ "$1" = "--yes" ]; }; then
+    AUTO_YES=1
+fi
+[ -n "${SETUP_YES:-}" ] && AUTO_YES=1
+
+confirm() {
+    [ "$AUTO_YES" = "1" ] && return 0
+    local msg="$1" ans
+    read -r -p "$msg (y/N) " ans || ans="n"
+    case "$ans" in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ============ Python 版本检测 ============
-PYTHON_MIN_VERSION="3.11"
+# pyqlib 在 PyPI 上的所有版本均要求 Python < 3.13（最新约束 >=3.9,<3.13），
+# 因此这里只接受 3.11/3.12，优先 3.11（项目钉定版本）；3.13/3.14 会装不上 pyqlib。
 PYTHON_BIN=""
+PYTHON_VERSION_STR=""
 
-blue "[1/8] 检测 Python 解释器 (>= $PYTHON_MIN_VERSION)..."
+blue "[1/8] 检测 Python 解释器 (3.11/3.12，pyqlib 不支持 3.13+)..."
 
-if command -v python3 >/dev/null 2>&1; then
-    PY_VERSION="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 0.0)"
-    PY_OK="$(python3 -c "import sys; print(1 if sys.version_info >= (3, 11) else 0)" 2>/dev/null || echo 0)"
-    if [ "$PY_OK" = "1" ]; then
-        PYTHON_BIN="$(command -v python3)"
-        green "  ✓ python3 $PY_VERSION ($PYTHON_BIN)"
+for cand in python3.11 python3.12 python3; do
+    if ! command -v "$cand" >/dev/null 2>&1; then
+        continue
+    fi
+    PY_VER="$("$cand" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 0.0)"
+    if [ "$PY_VER" = "0.0" ]; then
+        continue
+    fi
+    PY_MAJ="${PY_VER%%.*}"
+    PY_MIN="${PY_VER#*.}"
+    if [ "$PY_MAJ" -lt 3 ] || { [ "$PY_MAJ" -eq 3 ] && [ "$PY_MIN" -lt 11 ]; }; then
+        red "  ✗ $cand 版本 $PY_VER 过低（需 >= 3.11）"
+        continue
+    fi
+    if [ "$PY_MAJ" -gt 3 ] || { [ "$PY_MAJ" -eq 3 ] && [ "$PY_MIN" -gt 12 ]; }; then
+        red "  ✗ $cand 版本 $PY_VER 过新（pyqlib 最高支持 3.12）"
+        continue
+    fi
+    PYTHON_BIN="$(command -v "$cand")"
+    PYTHON_VERSION_STR="$PY_VER"
+    green "  ✓ $cand $PY_VER ($PYTHON_BIN)"
+    break
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    if command -v uv >/dev/null 2>&1; then
+        yellow "  · 未找到系统 Python 3.11/3.12，将使用 uv 托管 Python 3.11（uv venv 会自动下载/复用缓存）"
     else
-        red "  ✗ python3 版本 $PY_VERSION 低于 $PYTHON_MIN_VERSION"
+        red "未找到兼容的 Python（pyqlib 仅支持 3.11/3.12，不支持 3.13+）:"
+        echo "  系统 python3 当前版本: $(python3 --version 2>/dev/null || echo '未知')"
+        echo "  建议安装:"
+        echo "    Ubuntu/WSL: sudo apt install python3.11 python3.11-venv"
+        echo "    或 uv:      uv python install 3.11"
+        exit 1
     fi
 fi
 
-if [ -z "$PYTHON_BIN" ]; then
-    red "未找到 Python >= $PYTHON_MIN_VERSION，请先安装:"
-    echo "  Ubuntu/WSL: sudo apt update && sudo apt install python3 python3-venv python3-dev"
-    echo "  macOS:      brew install python@3.12"
-    echo "  或使用 pyenv: pyenv install 3.11 && pyenv local 3.11"
-    exit 1
+# ============ 创建 venv（缺失/损坏时询问重建） ============
+blue "[2/8] 创建虚拟环境 .venv..."
+
+NEED_VENV_CREATE=0
+if [ ! -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    yellow "  · 未检测到 .venv 虚拟环境"
+    if confirm "是否现在创建 .venv 并安装依赖？"; then
+        NEED_VENV_CREATE=1
+    else
+        red "  ✗ 用户取消，无法继续"
+        exit 1
+    fi
+else
+    VENV_VER="$("$SCRIPT_DIR/.venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 0.0)"
+    VENV_MAJ="${VENV_VER%%.*}"
+    VENV_MIN="${VENV_VER#*.}"
+    VENV_BAD=0
+    if [ "$VENV_VER" = "0.0" ] || [ "$VENV_MAJ" -lt 3 ] \
+       || { [ "$VENV_MAJ" -eq 3 ] && [ "$VENV_MIN" -gt 12 ]; }; then
+        VENV_BAD=1
+        red "  ✗ .venv Python $VENV_VER 不兼容（pyqlib 仅支持 3.11/3.12）"
+    fi
+    if [ "$VENV_BAD" = "0" ] && ! "$SCRIPT_DIR/.venv/bin/python" -c "import pyqlib" >/dev/null 2>&1; then
+        VENV_BAD=1
+        yellow "  · .venv 已存在但 pyqlib 未安装（环境不完整或从未装过依赖）"
+    fi
+    if [ "$VENV_BAD" = "0" ]; then
+        green "  ✓ .venv Python $VENV_VER 可用"
+    elif confirm "检测到 .venv 不可用，是否重建（rm -rf .venv + 重装依赖）？"; then
+        NEED_VENV_CREATE=1
+    else
+        yellow "  · 跳过重建，继续使用现有 .venv（后续安装/启动可能失败）"
+    fi
 fi
 
-# ============ 创建 venv ============
-blue "[2/8] 创建虚拟环境 .venv..."
-if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    yellow "  · .venv 已存在，跳过创建"
-else
-    "$PYTHON_BIN" -m venv .venv || {
-        red "  ✗ venv 创建失败，可能缺少 python3-venv 包"
-        echo "  Ubuntu/WSL: sudo apt install python3-venv"
-        exit 1
-    }
+if [ "$NEED_VENV_CREATE" = "1" ]; then
+    if [ -e "$SCRIPT_DIR/.venv" ]; then
+        yellow "  · 删除旧 .venv..."
+        rm -rf "$SCRIPT_DIR/.venv"
+    fi
+    if command -v uv >/dev/null 2>&1; then
+        yellow "  · 用 uv 创建 Python 3.11 venv（自动复用/下载缓存）..."
+        if ! uv venv --python 3.11 "$SCRIPT_DIR/.venv"; then
+            red "  ✗ uv venv 创建失败"
+            exit 1
+        fi
+    else
+        if [ -z "$PYTHON_BIN" ]; then
+            red "  ✗ 无 uv 且无系统 Python 3.11/3.12，无法创建 venv"
+            exit 1
+        fi
+        yellow "  · 用 $PYTHON_BIN 创建 venv..."
+        "$PYTHON_BIN" -m venv "$SCRIPT_DIR/.venv" || {
+            red "  ✗ venv 创建失败，可能缺少 python3-venv 包"
+            echo "  Ubuntu/WSL: sudo apt install python3.11-venv"
+            exit 1
+        }
+    fi
     green "  ✓ .venv 已创建"
 fi
+
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 
 # ============ 升级 pip ============
 blue "[3/8] 升级 pip / setuptools / wheel..."
-if "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1; then
-    green "  ✓ pip 就绪"
+if command -v uv >/dev/null 2>&1; then
+    green "  ✓ 使用 uv 安装（跳过 pip 升级）"
 else
-    yellow "  · pip 升级失败（网络问题？），继续使用内置版本"
+    if "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1; then
+        green "  ✓ pip 就绪"
+    else
+        yellow "  · pip 升级失败（网络问题？），继续使用内置版本"
+    fi
 fi
 
 # ============ 安装 Python 依赖 ============
-blue "[4/8] 安装 Python 依赖 (requirements.txt)..."
+blue "[4/8] 安装 Python 依赖 (requirements.txt + requirements-dev.txt)..."
 echo "  · 这一步可能耗时 5-15 分钟（pyqlib/lightgbm 等需编译）"
-if "$PYTHON_BIN" -m pip install -r requirements.txt; then
-    green "  ✓ Python 依赖安装完成"
+if command -v uv >/dev/null 2>&1; then
+    if uv pip install --python "$PYTHON_BIN" -r requirements.txt -r requirements-dev.txt; then
+        green "  ✓ Python 依赖安装完成 (uv)"
+    else
+        red "  ✗ uv pip install 失败，常见原因:"
+        echo "  1) 缺少编译工具: sudo apt install build-essential"
+        echo "  2) 网络问题: uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt"
+        exit 1
+    fi
 else
-    red "  ✗ pip install 失败，常见原因:"
-    echo "  1) 缺少编译工具: sudo apt install build-essential"
-    echo "  2) 网络问题: 换源 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt"
-    echo "  3) lightgbm 编译失败: sudo apt install cmake"
-    exit 1
+    if "$PYTHON_BIN" -m pip install -r requirements.txt -r requirements-dev.txt; then
+        green "  ✓ Python 依赖安装完成"
+    else
+        red "  ✗ pip install 失败，常见原因:"
+        echo "  1) 缺少编译工具: sudo apt install build-essential"
+        echo "  2) 网络问题: pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt"
+        echo "  3) lightgbm 编译失败: sudo apt install cmake"
+        exit 1
+    fi
 fi
 
 # ============ 校验关键依赖 ============

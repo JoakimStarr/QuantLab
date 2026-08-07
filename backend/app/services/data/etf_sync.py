@@ -52,11 +52,16 @@ def _etf_out_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list,
-                     overwrite: bool = False) -> dict:
+def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict:
     """按日拉全市场 ETF 写 bin，返回结果（含待落库 pg_rows）。
 
     运行在线程池（同步阻塞 baostock）；调用方负责把 pg_rows 落 etf_daily。
+
+    注意：写 bin 时一律以 ``overwrite=True`` 交给 ``_sync_stock_bin``——
+    ETF 候选日期全部来自 A 股主日历 day.txt，若传 overwrite=False，该函数只写
+    "不在日历的新日期"，而这里所有日期都在日历中 → bin 一行都不写（数据只落
+    etf_daily 窄表，bin 全 NaN）。腾讯源对齐路径已在 sync_worker 显式强制
+    overwrite=True，baostock 路径这里同样必须强制。
     """
     from app.services.data.baostock_client import (
         BaostockQuotaError, fetch_etf_daily_sync, from_baostock_code,
@@ -105,7 +110,8 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list,
             df = pd.concat(grps, ignore_index=True)
             out = _etf_out_df(df)
             feat_dir = os.path.join(provider_uri, "features", code_lower)
-            _sync_stock_bin(feat_dir, out, old_calendar, ETF_BIN_FIELDS, overwrite)
+            # 必须 overwrite=True：日期已在 day.txt 中，False 会导致 bin 一行不写
+            _sync_stock_bin(feat_dir, out, old_calendar, ETF_BIN_FIELDS, overwrite=True)
             success += 1
             # etf_daily 窄表记录（ON CONFLICT DO NOTHING 幂等）
             for _, r in df.iterrows():
@@ -465,7 +471,7 @@ async def sync_etf_task(provider_uri: str = None, days: int = 730,
         chunk = candidate[i:i + _CHUNK_DAYS]
         result = await asyncio.wait_for(
             loop.run_in_executor(
-                None, sync_etf_to_qlib, provider_uri, chunk, old_calendar, overwrite,
+                None, sync_etf_to_qlib, provider_uri, chunk, old_calendar,
             ),
             timeout=3600,
         )

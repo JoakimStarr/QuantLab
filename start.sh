@@ -1,6 +1,9 @@
 #!/bin/bash
 # QuantLab 启动脚本：同时启动前后端
-# Usage: ./start.sh [dev]   默认 dev
+# Usage:
+#   ./start.sh          静默启动（默认）：后台分离运行，脚本执行完自动退出，可关闭终端；停止用 ./start.sh stop
+#   ./start.sh dev      开发模式：前台运行，Ctrl+C 停止（终端不可关闭）
+#   ./start.sh stop     停止静默模式启动的服务
 #
 # Python 环境优先级：
 #   1. conda env `quant`  （推荐，pyqlib/gplearn/LightGBM 等原生依赖齐备）
@@ -13,7 +16,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-MODE="${1:-dev}"
+MODE="${1:-silent}"
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
 
@@ -144,12 +147,23 @@ wait_for_port() {
 # ============ 进程清理 ============
 BACKEND_PID=""
 FRONTEND_PID=""
+# 静默模式正常完成标记：置 1 后 cleanup 不再杀已分离的服务
+SILENT_OK=0
 
 cleanup() {
     local exit_code=$?
     # 避免 cleanup 被嵌套调用（cleanup 本身也会触发 EXIT trap）
     if [ "${CLEANUP_RUNNING:-0}" = "1" ]; then return; fi
     CLEANUP_RUNNING=1
+
+    if [ "${SILENT_OK:-0}" = "1" ]; then
+        # 静默模式正常完成：服务已分离运行，交由 ./start.sh stop 管理
+        exit 0
+    fi
+    # 本脚本未启动任何服务（silent 启动失败 / stop 命令等）→ 静默退出，不打扰
+    if [ -z "$BACKEND_PID" ] && [ -z "$FRONTEND_PID" ]; then
+        exit "$exit_code"
+    fi
 
     echo ""
     yellow "正在停止所有服务..."
@@ -165,8 +179,143 @@ cleanup() {
 }
 trap 'cleanup' SIGINT SIGTERM SIGHUP EXIT
 
+# ============ 静默启动（默认模式） ============
+# 分离运行：setsid 新会话 + stdin 断开 + 输出重定向，脚本执行完即退出，终端可关闭。
+# PID 写 logs/backend.pid / frontend.pid，用 ./start.sh stop 停止。
+start_silent() {
+    echo "========================================="
+    echo "  QuantLab - 静默启动"
+    echo "========================================="
+    blue "Python: $PYTHON_BIN"
+    echo ""
+
+    # 端口检查（非交互，不询问；若为旧实例请先 stop）
+    if [ -n "$(port_pid "$BACKEND_PORT")" ]; then
+        red "端口 $BACKEND_PORT (后端) 已被占用。若为旧实例，请先运行 ./start.sh stop。"
+        exit 1
+    fi
+    if [ -n "$(port_pid "$FRONTEND_PORT")" ]; then
+        red "端口 $FRONTEND_PORT (前端) 已被占用。若为旧实例，请先运行 ./start.sh stop。"
+        exit 1
+    fi
+
+    # 依赖检查（与 dev 模式一致）
+    if ! "$PYTHON_BIN" -c "import uvicorn, fastapi" >/dev/null 2>&1; then
+        red "未找到 uvicorn/fastapi，请先运行 ./setup.sh 安装依赖。"
+        exit 1
+    fi
+    if [ ! -d "$SCRIPT_DIR/frontend/node_modules" ]; then
+        yellow "前端依赖未安装，正在安装..."
+        (cd "$SCRIPT_DIR/frontend" && npm install) || { red "npm install 失败"; exit 1; }
+    fi
+
+    mkdir -p "$SCRIPT_DIR/logs"
+
+    # 启动后端：结构化日志由应用写 quantlab.log/error.log，stdout 丢弃避免重复，
+    # stderr 收 backend.out 便于排查启动失败（import 错误等）。
+    # 注意：不用 set -m（否则子 shell 是组长，setsid 会 fork 导致 $! 失效）；
+    # 无组长 + exec setsid → 原地新会话，PID 即 $!，kill_tree 可精确停整个进程组。
+    blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
+    (
+        cd "$SCRIPT_DIR/backend"
+        if command -v setsid >/dev/null 2>&1; then
+            exec setsid "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" \
+                </dev/null 2>>"$SCRIPT_DIR/logs/backend.out" >/dev/null
+        else
+            exec nohup "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" \
+                </dev/null 2>>"$SCRIPT_DIR/logs/backend.out" >/dev/null
+        fi
+    ) &
+    BACKEND_PID=$!
+    echo "$BACKEND_PID" > "$SCRIPT_DIR/logs/backend.pid"
+
+    echo ""
+    wait_for_port "$BACKEND_PORT" "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
+        red "后端启动失败，查看日志: tail -f logs/quantlab.log logs/backend.out"
+        exit 1
+    }
+    echo ""
+
+    # 启动前端（Vite 输出收 frontend.out）
+    blue "[2/2] 启动前端 (port $FRONTEND_PORT)..."
+    (
+        cd "$SCRIPT_DIR/frontend"
+        if command -v setsid >/dev/null 2>&1; then
+            exec setsid npm run dev -- --port "$FRONTEND_PORT" \
+                </dev/null >>"$SCRIPT_DIR/logs/frontend.out" 2>&1
+        else
+            exec nohup npm run dev -- --port "$FRONTEND_PORT" \
+                </dev/null >>"$SCRIPT_DIR/logs/frontend.out" 2>&1
+        fi
+    ) &
+    FRONTEND_PID=$!
+    echo "$FRONTEND_PID" > "$SCRIPT_DIR/logs/frontend.pid"
+
+    wait_for_port "$FRONTEND_PORT" "前端" 30 || {
+        red "前端启动失败，查看日志: tail -f logs/frontend.out"
+        exit 1
+    }
+
+    SILENT_OK=1
+
+    echo ""
+    green "========================================="
+    green "  服务已静默启动（可关闭本终端）"
+    green "========================================="
+    echo "  Backend:  http://localhost:$BACKEND_PORT"
+    echo "  API Docs: http://localhost:$BACKEND_PORT/docs"
+    echo "  Frontend: http://localhost:$FRONTEND_PORT"
+    echo "  PID:      后端 $BACKEND_PID / 前端 $FRONTEND_PID (logs/*.pid)"
+    echo "  停止:     ./start.sh stop"
+    echo "  Logs:     logs/quantlab.log logs/error.log logs/sync.log"
+    echo "            logs/backend.out(启动 stderr) logs/frontend.out(前端)"
+    green "========================================="
+    exit 0
+}
+
+# ============ 停止静默服务 ============
+stop_services() {
+    echo "正在停止 QuantLab 服务..."
+    local found=0
+    for pf in "$SCRIPT_DIR/logs/backend.pid" "$SCRIPT_DIR/logs/frontend.pid"; do
+        [ -f "$pf" ] || continue
+        local pid
+        pid="$(cat "$pf" 2>/dev/null || true)"
+        rm -f "$pf"
+        [ -n "$pid" ] || continue
+        if ps -p "$pid" >/dev/null 2>&1; then
+            found=1
+            kill_tree "$pid"
+            yellow "  已停止 PID $pid ($(basename "$pf"))"
+        else
+            yellow "  PID $pid 已不存在 ($(basename "$pf"))，清理记录"
+        fi
+    done
+
+    local leftovers=""
+    for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+        if [ -n "$(port_pid "$port")" ]; then
+            leftovers="$leftovers $port"
+        fi
+    done
+    if [ -n "$leftovers" ]; then
+        red "端口$leftovers 仍有进程占用（PID 文件可能丢失），可手动:"
+        echo "  lsof -ti :$BACKEND_PORT -ti :$FRONTEND_PORT | xargs kill"
+    fi
+
+    if [ "$found" = "1" ]; then
+        green "QuantLab 已停止"
+    else
+        yellow "未找到运行中的 QuantLab 服务（无有效 PID 文件）"
+    fi
+}
+
 # ============ 模式分发 ============
-if [ "$MODE" = "dev" ]; then
+case "$MODE" in
+    silent)
+        start_silent
+        ;;
+    dev)
     echo "========================================="
     echo "  QuantLab - 量化策略回测研究平台"
     echo "========================================="
@@ -212,6 +361,7 @@ if [ "$MODE" = "dev" ]; then
     # 注：长同步任务（baostock 全量回填/EOD/repair）已迁移到独立 worker 子进程
     # （.venv/bin/python -m app.services.data.sync_worker，start_new_session 脱离本进程组），
     # 因此 --reload 触发重启时会立即退出，不会像以前那样"等待后台任务完成"而卡死。
+    # 所有 worker 统一写 logs/sync.log（JSON，worker_kind 字段区分任务类型）。
     blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
     mkdir -p "$SCRIPT_DIR/logs"
     set -m
@@ -225,24 +375,24 @@ if [ "$MODE" = "dev" ]; then
     # 等后端健康检查通过后，再启动前端（避免前端启动时后端尚未就绪）
     echo ""
     wait_for_port "$BACKEND_PORT"  "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
-        red "后端启动失败，查看日志: tail -f logs/backend.log"
+        red "后端启动失败，查看日志: tail -f logs/quantlab.log"
         exit 1
     }
     echo ""
 
-    # 启动前端
+    # 启动前端（Vite 输出直接到终端；前端页面错误可在浏览器 DevTools 查看）
     blue "[2/2] 启动前端 (port $FRONTEND_PORT)..."
     set -m
     (
         cd "$SCRIPT_DIR/frontend"
-        npm run dev -- --port "$FRONTEND_PORT" 2>&1 | tee "$SCRIPT_DIR/logs/frontend.log"
+        npm run dev -- --port "$FRONTEND_PORT"
     ) &
     FRONTEND_PID=$!
     set +m
 
     # 前端只检查端口
     wait_for_port "$FRONTEND_PORT" "前端" 30 || {
-        red "前端启动失败，查看日志: tail -f logs/frontend.log"
+        red "前端启动失败，查看上方终端输出"
         exit 1
     }
     echo ""
@@ -253,15 +403,21 @@ if [ "$MODE" = "dev" ]; then
     echo "  Backend:  http://localhost:$BACKEND_PORT"
     echo "  API Docs: http://localhost:$BACKEND_PORT/docs"
     echo "  Frontend: http://localhost:$FRONTEND_PORT"
-    echo "  Logs:     logs/quantlab.log  logs/error.log  (前端日志页可视化查看)"
+    echo "  Logs:     logs/quantlab.log  logs/error.log  logs/sync.log  (前端日志页可视化查看)"
     green "========================================="
     yellow "按 Ctrl+C 停止所有服务"
     echo ""
 
     wait
-
-else
-    echo "Usage: ./start.sh [dev]"
-    echo "  dev    - 本地开发模式（默认）"
-    exit 1
-fi
+        ;;
+    stop)
+        stop_services
+        ;;
+    *)
+        echo "Usage: ./start.sh [silent|dev|stop]"
+        echo "  silent - 静默启动（默认）：后台分离运行，脚本退出后终端可关闭；停止用 ./start.sh stop"
+        echo "  dev    - 本地开发模式：前台运行，Ctrl+C 停止（终端不可关闭）"
+        echo "  stop   - 停止静默模式启动的服务"
+        exit 1
+        ;;
+esac

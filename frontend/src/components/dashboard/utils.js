@@ -26,18 +26,3 @@ export function formatIc(v) {
   if (v == null || v === '') return '--'
   return Number(v).toFixed(4)
 }
-
-export function formatNum(v) {
-  if (v == null || v === '') return '--'
-  return Number(v).toFixed(2)
-}
-
-export function formatPercent(v) {
-  if (v == null || v === '') return '--'
-  return (Number(v) * 100).toFixed(1) + '%'
-}
-
-export function numClass(v) {
-  if (v == null || v === '') return ''
-  return Number(v) >= 0 ? 'num--success' : 'num--danger'
-}

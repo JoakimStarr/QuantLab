@@ -11,8 +11,9 @@ const blobRequest = axios.create({
 // === 量化数据同步与状态 ===
 
 // 一键全同步（A股回填 → 指数 → 宏观 → 财报 → 外盘，独立进程顺序执行）
-export function syncFullData(years, universe = 'all') {
-  return request.post('/quant/data/sync-full', null, { params: { years, universe } })
+// refreshMisc: 是否顺带刷新 stock_basic/stock_industry（默认 false，日常不需要）
+export function syncFullData(years, universe = 'all', refreshMisc = false) {
+  return request.post('/quant/data/sync-full', null, { params: { years, universe, refresh_misc: refreshMisc } })
 }
 
 // 列出可用标的池（instruments/*.txt：文件名 + 成分数）

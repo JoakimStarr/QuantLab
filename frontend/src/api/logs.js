@@ -12,3 +12,11 @@ export function getLogs(params) {
 export function clearLogs(file) {
   return request.post('/logs/clear', null, { params: { file } })
 }
+
+export function getLogLevel() {
+  return request.get('/logs/level')
+}
+
+export function setLogLevel(level) {
+  return request.put('/logs/level', { level })
+}

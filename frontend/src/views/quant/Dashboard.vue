@@ -1,15 +1,11 @@
 <template>
   <PageContainer>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">量化研究看板</h1>
-        <p class="page-header__subtitle">量化研究全景概览</p>
-      </div>
-      <div class="page-header__actions">
+    <PageHeader title="量化研究看板" subtitle="量化研究全景概览">
+      <template #actions>
         <span v-if="lastTradeDate" class="page-header__count">最近行情 {{ lastTradeDate }}</span>
         <el-button @click="refreshAll" :loading="loading" size="small">刷新</el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <!-- 加载失败的非阻塞提示条 -->
     <el-alert
@@ -106,6 +102,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import KpiCards from '@/components/dashboard/KpiCards.vue'
 import MarketOverview from '@/components/dashboard/MarketOverview.vue'
@@ -306,10 +303,11 @@ function applyStats(s) {
 }
 
 function computeFactorBySource(items) {
-  const bySource = { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0 }
+  const bySource = { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0, alpha158: 0, etf: 0 }
   items.forEach((f) => {
     const k = (f.source || f.category || f.type || '').toLowerCase()
-    if (bySource[k] != null) bySource[k]++
+    if (bySource[k] == null) bySource[k] = 0
+    bySource[k]++
   })
   return bySource
 }
@@ -465,40 +463,6 @@ onMounted(async () => {
 }
 .dashboard-col > .section-card {
   flex: 1;
-}
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-  }
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-  &__count {
-    font-size: var(--font-size-sm);
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
 }
 .dashboard-alert {
   margin-bottom: 16px;

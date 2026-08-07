@@ -6,8 +6,9 @@
 """
 import logging
 from datetime import datetime
+
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/quant/data", tags=["quant-data"])
 @router.get("/qlib-status")
 async def qlib_status_api():
     """检测 qlib 是否可用（不抛异常）。"""
-    from app.services.quant.qlib_init import is_qlib_available, QlibNotAvailableError
+    from app.services.quant.qlib_init import QlibNotAvailableError, is_qlib_available
     try:
         available = await is_qlib_available()
         message = "qlib 已就绪" if available else "qlib 未安装或初始化失败"
@@ -35,8 +36,9 @@ async def qlib_status_api():
     provider_uri = settings.qlib_provider_path
     disk_usage = None
     if available:
-        from pathlib import Path
         import shutil
+        from pathlib import Path
+
         from starlette.concurrency import run_in_threadpool
         day_txt = Path(provider_uri) / "calendars" / "day.txt"
         if day_txt.exists():
@@ -106,6 +108,7 @@ async def _detect_stale_sync(db) -> int:
         被标记为 failed 的记录数。
     """
     from datetime import timedelta
+
     from app.services.data.sync_progress import get_progress
     threshold = datetime.now() - timedelta(minutes=30)
     result = await db.execute(
@@ -141,12 +144,12 @@ async def _detect_stale_sync(db) -> int:
                 if real_error:
                     rec.last_error = (
                         f"[worker 退出] {real_error}\n"
-                        "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
+                        "建议: 检查 logs/sync.log 后重试同步。"
                     )
                 else:
                     rec.last_error = (
                         "[worker 退出] 同步进程已退出（可能被杀/崩溃），已标记失败\n"
-                        "建议: 检查 logs/sync_worker_backfill.log 后重试同步。"
+                        "建议: 检查 logs/sync.log 后重试同步。"
                     )
                 rec.last_updated = datetime.now()
                 logger.warning("sync 超时: universe=%s 的 worker 进程已死，标记 failed", rec.universe)

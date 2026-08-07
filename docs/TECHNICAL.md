@@ -470,7 +470,7 @@ CORS_ORIGINS=https://app.your-domain.com,https://your-domain.com
 | **CPU 任务隔离** | `config.task.cpu_workers=cpu_count//2`，避免与 Web 争抢 |
 | **任务持久化** | 进程崩溃后会自动重跑近 3 天的挖掘任务，无需手动干预 |
 | **数据库迁移** | 新增字段时写 Alembic revision，启动自动 upgrade |
-| **日志** | `logs/` 下 `app.log`（轮转 100MB×5）、`api.jsonl`、`audit.jsonl`、`perf.jsonl` |
+| **日志** | `logs/` 下 `quantlab.log`（web 全量，轮转 100MB×5）、`error.log`（web WARNING+，备份保留 15 天）、`sync.log`（同步 worker，行内 `worker_kind` 字段区分任务）。统一 structlog JSON 格式；`PUT /logs/level` 可运行时调级 |
 | **数据库备份** | PostgreSQL 用 `pg_dump` |
 | **监控** | Prometheus 抓 `/metrics`，Grafana 可视化 |
 | **告警** | 关注 `factor_eval_duration_seconds`（评价耗时）、`db_pool_available`（连接池） |

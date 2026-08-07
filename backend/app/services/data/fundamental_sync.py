@@ -79,6 +79,41 @@ def _compute_available_date(stat: date) -> date:
     return stat
 
 
+def expected_latest_report_date(today: date | None = None) -> date | None:
+    """按 A 股财报披露周期，判断"今天应已披露的最新报告期"。
+
+    财报是季频数据（4 个报告期/年），不需要每天拉。以法定披露截止日为准：
+    - 一季报(3/31) 截止 4/30
+    - 中报(6/30)   截止 8/31
+    - 三季报(9/30) 截止 10/31
+    - 年报(12/31)  截止次年 4/30
+
+    返回"披露截止日已过"的最新报告期截止日（按截止日从晚到早遍历）。
+    已披露到该报告期的股票视为最新，无需重拉；未到该报告期的才需要拉取。
+    这使财报同步只在新的披露窗口到来时重跑，而不是每次全同步都全市场拉一遍。
+
+    例：2026-06-15 → 一季报(2026-03-31) 已截止，返回 2026-03-31（年报也截止，
+    但一季报更新，取一季报）。2026-01-10 → 去年三季报(2025-09-30) 已截止，
+    返回 2025-09-30（去年年报尚未截止，不要求）。
+    """
+    today = today or date.today()
+    y = today.year
+    candidates = [
+        # (报告期, 披露截止日)，截止日从晚到早
+        (date(y, 9, 30), date(y, 10, 31)),        # 今年三季报
+        (date(y, 6, 30), date(y, 8, 31)),         # 今年中报
+        (date(y, 3, 31), date(y, 4, 30)),         # 今年一季报
+        (date(y - 1, 12, 31), date(y, 4, 30)),    # 去年年报（次年 4/30 截止）
+        (date(y - 1, 9, 30), date(y - 1, 10, 31)),   # 去年三季报
+        (date(y - 1, 6, 30), date(y - 1, 8, 31)),    # 去年中报
+        (date(y - 1, 3, 31), date(y - 1, 4, 30)),    # 去年一季报
+    ]
+    for report, deadline in candidates:
+        if today >= deadline:
+            return report
+    return None  # 理论上不会发生（candidates 覆盖最近两年）
+
+
 def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
     """拉取单只股票的财务摘要（akshare），宽表转长表归一化为窄表行。
 
@@ -221,21 +256,28 @@ async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None) -> in
 
 
 # ------------------------------------------------------------ 主流程
-async def _load_fetched_codes() -> set:
-    """已完整入库的股票代码集合（增量跳过：重跑只补缺失，减少请求量）。
+async def _load_fetched_codes(today: date | None = None) -> set:
+    """已覆盖"当前应披露最新报告期"的股票代码集合（增量跳过）。
 
-    只把"字段基本齐全"的股票视为已入库：部分拉取（如网络中断只写入了
-    netprofit 一个字段）的股票不在此列，下次重跑会重新拉取补齐，避免
-    字段永久缺失（"部分拉取中毒"）。阈值取一半字段数：银行等少数股票
-    缺流动/速动比率等个别字段仍算完整，不会被反复重拉。
+    财报是季频数据，不需要每次同步全市场重拉。判断口径（二选一，同时满足）：
+      1. 字段基本齐全（≥ 一半 FIN_FIELD_NAMES）——防止"部分拉取中毒"
+      2. 该股最新报告期 >= 今天应披露的最新报告期——新季度披露窗口到来前，
+         即使字段齐全也视为"待更新"，重拉一次即可拿到新季度数据
+
+    银行等少数股票缺流动/速动比率个别字段仍算完整，不会被反复重拉。
     """
     threshold = math.ceil(len(FIN_FIELD_NAMES) / 2)
+    expected = expected_latest_report_date(today)
     async with async_session() as session:
-        result = await session.execute(
+        stmt = (
             select(FinancialIndicator.code)
             .group_by(FinancialIndicator.code)
             .having(func.count(func.distinct(FinancialIndicator.field_name)) >= threshold)
         )
+        if expected is not None:
+            # 最新报告期 >= 应披露的最新报告期才视为已更新（季频：披露窗口外不重拉）
+            stmt = stmt.having(func.max(FinancialIndicator.report_date) >= expected)
+        result = await session.execute(stmt)
         return {r[0] for r in result.all()}
 
 
@@ -268,8 +310,14 @@ async def fetch_all_financial(codes: list[str], progress_cb=None) -> tuple[int, 
     existing = await _load_fetched_codes()
     todo = [c for c in codes if c not in existing]
     skipped = len(codes) - len(todo)
+    expected = expected_latest_report_date()
     if skipped:
-        logger.info("财报增量跳过 %d 只已入库股票，待拉取 %d 只", skipped, len(todo))
+        logger.info(
+            "财报增量跳过 %d 只已覆盖最新报告期（应披露至 %s）的股票，待拉取 %d 只",
+            skipped, expected, len(todo),
+        )
+    if not todo and expected:
+        logger.info("财报数据已是最新（覆盖报告期 %s），无需拉取", expected)
 
     total = len(todo)
     all_rows: list[dict] = []
@@ -324,12 +372,16 @@ async def fetch_all_financial(codes: list[str], progress_cb=None) -> tuple[int, 
 
 
 async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
-                             provider_uri: str = None) -> dict:
+                             provider_uri: str = None, progress_cb=None) -> dict:
     """财报同步主入口：拉取 → 入库 →（可选）PIT 广播写 bin。
 
     - broadcast=False（fetch-only）：只拉数据入库。若当前无其他同步任务在跑
       则写全局进度（前端可见）；若有（如回填），静默运行避免覆盖其进度。
     - broadcast=True：拉取 + 广播（数据校验/补齐阶段调用，日历已对齐），带进度。
+
+    progress_cb: 传入时由调用方统一管理全局进度（如一键全同步并行阶段），
+        本函数不再 init/finish/clear 共享进度文件，只通过 ``progress_cb(i, n, msg)``
+        上报进度——避免多个并行阶段互相覆盖进度文件造成竞态。
     """
     from app.services.data.sync_progress import (
         clear_progress, finish_progress, init_progress, set_worker_pid,
@@ -337,14 +389,21 @@ async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
     )
 
     qlib_dir = provider_uri or settings.qlib_provider_path
-    # fetch-only 在无其他活跃同步时才写进度；broadcast 总是写
-    use_progress = broadcast or not sync_is_active()
+    # 有外部进度回调（并行阶段）时不操作共享进度文件，避免并行阶段互相覆盖
+    owns_progress = progress_cb is None
+    use_progress = owns_progress and (broadcast or not sync_is_active())
     if use_progress:
         # broadcast 会写 bin（writes_bins=True），fetch-only 只写 PG（False）
         init_progress("fundamental", "fundamental", writes_bins=broadcast, kind="fundamental")
         # 登记 worker PID：进程被 kill -9 后 web 端 sync_is_active 才能识别
         # "worker 已死"而非永久 409 阻塞（此前无 pid 时残留进度文件恒视为活跃）
         set_worker_pid(os.getpid())
+
+    report = progress_cb or (
+        lambda i, n, msg: update_progress(
+            pct=5 + int(90 * i / max(n, 1)), status="running", message=msg,
+        )
+    )
 
     try:
         if use_progress:
@@ -353,23 +412,22 @@ async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
                     pct=5 + int(35 * i / max(n, 1)), status="running", message=msg,
                 ))
                 if broadcast else
-                (lambda i, n, msg: update_progress(
-                    pct=5 + int(90 * i / max(n, 1)), status="running", message=msg,
-                ))
+                report
             )
         else:
-            fetch_cb = None
+            fetch_cb = report if progress_cb else None
 
         fetched, inserted = await fetch_all_financial(codes or [], progress_cb=fetch_cb)
 
         fields_written = 0
         if broadcast:
-            update_progress(pct=45, status="running", message="广播财报字段到 bin（PIT 对齐）...")
+            if owns_progress:
+                update_progress(pct=45, status="running", message="广播财报字段到 bin（PIT 对齐）...")
             fields_written = await broadcast_financial_to_bins(
                 qlib_dir,
                 progress_cb=lambda i, n, msg: update_progress(
                     pct=45 + int(55 * i / max(n, 1)), status="running", message=msg,
-                ),
+                ) if owns_progress else report(i, n, msg),
             )
 
         if use_progress:

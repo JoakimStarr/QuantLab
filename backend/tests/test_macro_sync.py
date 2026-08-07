@@ -134,3 +134,36 @@ def test_broadcast_empty_values_no_write(tmp_qlib):
     n = ms.broadcast_to_all_stocks(str(tmp_qlib), "pmi", np.array([], dtype=np.float32))
     assert n == 0
     assert not os.path.exists(os.path.join(str(tmp_qlib), "features", "sh600000", "pmi.day.bin"))
+
+
+# ---------- 并行模式（progress_cb） ----------
+
+@pytest.mark.asyncio
+async def test_sync_macro_indicators_progress_cb_does_not_touch_global_progress(tmp_qlib):
+    """并行模式（progress_cb 传入）不 init/finish/clear 全局进度，只走回调。
+
+    一键全同步并行执行宏观/财报/外盘时，若各阶段各自操作共享进度文件，
+    会互相覆盖造成竞态——必须统一由 full_sync 管理。
+    """
+    from unittest.mock import AsyncMock, patch
+
+    reports = []
+
+    def _cb(pct, msg):
+        reports.append((pct, msg))
+
+    with patch("app.services.data.sync_progress.init_progress") as mock_init, \
+         patch("app.services.data.sync_progress.update_progress") as mock_update, \
+         patch("app.services.data.sync_progress.finish_progress") as mock_finish, \
+         patch("app.services.data.sync_progress.clear_progress") as mock_clear, \
+         patch.object(ms, "_fetch_all_macro_rows", new=AsyncMock(return_value=([], {}))), \
+         patch.object(ms, "upsert_macro", new=AsyncMock(return_value=0)), \
+         patch.object(ms, "broadcast_macro_to_bins", new=AsyncMock(return_value=0)):
+        result = await ms.sync_macro_indicators(broadcast=True, progress_cb=_cb)
+
+    assert result["ok"] is True
+    assert reports  # 走回调上报了进度
+    mock_init.assert_not_called()
+    mock_update.assert_not_called()
+    mock_finish.assert_not_called()
+    mock_clear.assert_not_called()

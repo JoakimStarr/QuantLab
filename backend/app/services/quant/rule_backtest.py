@@ -146,12 +146,16 @@ def _normalize_symbol(s: str) -> str:
     raise ValueError(f"无法识别的标的代码: {s}")
 
 
-def _cross_above(a: pd.Series, b: pd.Series) -> pd.Series:
-    return (a > b) & (a.shift(1) <= b.shift(1))
+def _cross_above(a: pd.Series, b) -> pd.Series:
+    """a 上穿 b（b 可为 Series 或标量阈值；标量阈值的前一日值即其本身）。"""
+    b_prev = b.shift(1) if hasattr(b, "shift") else b
+    return (a > b) & (a.shift(1) <= b_prev)
 
 
-def _cross_below(a: pd.Series, b: pd.Series) -> pd.Series:
-    return (a < b) & (a.shift(1) >= b.shift(1))
+def _cross_below(a: pd.Series, b) -> pd.Series:
+    """a 下穿 b（b 可为 Series 或标量阈值）。"""
+    b_prev = b.shift(1) if hasattr(b, "shift") else b
+    return (a < b) & (a.shift(1) >= b_prev)
 
 
 def _fill_false(s: pd.Series) -> pd.Series:
@@ -220,6 +224,75 @@ def _pairs_signals(a: pd.Series, b: pd.Series, p):
     return entries, exits, spread
 
 
+# ---------------------------------------------------------------- 指标线（K线图叠加）
+def _build_indicator(template_key: str, close: pd.Series, p: dict) -> dict | None:
+    """返回策略所用技术指标的曲线（供前端 K 线图叠加）。
+
+    grid=main 为价格域线（叠加在主图），grid=sub 为振荡域线（叠加在副图）。
+    dates 与 values 一一对应（与回测 close 交易日对齐），供前端按日期匹配 K 线。
+    配对策略为双标的价差驱动，K 线主图叠加无意义，返回 None。
+    """
+    def _lines(items: list[tuple[str, str, str, pd.Series]], dates: list[str]) -> dict:
+        return {
+            "template": template_key,
+            "name": TEMPLATES[template_key]["name"],
+            "dates": dates,
+            "lines": [
+                {
+                    "key": key, "name": name, "grid": grid,
+                    "values": [round(float(v), 4) if v == v else None for v in vals],
+                }
+                for key, name, grid, vals in items
+            ],
+        }
+
+    dates = [str(d.date()) for d in close.index]
+
+    if template_key == "bollinger":
+        mid = close.rolling(int(p["window"])).mean()
+        std = close.rolling(int(p["window"])).std()
+        return _lines([
+            ("mid", "中轨", "main", mid),
+            ("upper", "上轨", "main", mid + float(p["k"]) * std),
+            ("lower", "下轨", "main", mid - float(p["k"]) * std),
+        ], dates)
+    if template_key == "ma_cross":
+        fa = close.rolling(int(p["fast"])).mean()
+        sa = close.rolling(int(p["slow"])).mean()
+        return _lines([
+            ("fast", f"快线MA{p['fast']}", "main", fa),
+            ("slow", f"慢线MA{p['slow']}", "main", sa),
+        ], dates)
+    if template_key == "rsi":
+        import vectorbt as vbt
+        rsi = vbt.RSI.run(close, window=int(p["period"])).rsi
+        return _lines([("rsi", f"RSI{p['period']}", "sub", rsi)], dates)
+    if template_key == "ma_alignment":
+        s = close.rolling(int(p["short"])).mean()
+        m = close.rolling(int(p["mid"])).mean()
+        ln = close.rolling(int(p["long"])).mean()
+        return _lines([
+            ("short", f"短期MA{p['short']}", "main", s),
+            ("mid", f"中期MA{p['mid']}", "main", m),
+            ("long", f"长期MA{p['long']}", "main", ln),
+        ], dates)
+    if template_key == "macd":
+        import vectorbt as vbt
+        macd = vbt.MACD.run(close, fast_window=int(p["fast"]), slow_window=int(p["slow"]),
+                            signal_window=int(p["signal"]))
+        return _lines([
+            ("dif", "DIF", "sub", macd.macd),
+            ("dea", "DEA", "sub", macd.signal),
+        ], dates)
+    if template_key == "momentum":
+        w = int(p["window"])
+        return _lines([
+            ("upper", f"{w}日新高", "main", close.rolling(w).max().shift(1)),
+            ("lower", f"{w}日新低", "main", close.rolling(w).min().shift(1)),
+        ], dates)
+    return None
+
+
 # ---------------------------------------------------------------- 回测执行
 def _load_close(D, codes: list[str], start: str, end: str) -> dict[str, pd.Series]:
     """按 qlib 代码列表加载日频收盘价（宽表 unstack 后逐列取）。"""
@@ -251,7 +324,8 @@ def _load_benchmark(D, benchmark: str, start: str, end: str) -> pd.Series | None
         return None
 
 
-def _run_single_vbt(close: pd.Series, entries: pd.Series, exits: pd.Series, fees: float) -> tuple:
+def _run_single_vbt(close: pd.Series, entries: pd.Series, exits: pd.Series, fees: float,
+                    code: str, init_cash: float) -> tuple:
     import vectorbt as vbt
 
     pf = vbt.Portfolio.from_signals(
@@ -259,11 +333,12 @@ def _run_single_vbt(close: pd.Series, entries: pd.Series, exits: pd.Series, fees
         entries=entries,
         exits=exits,
         size=1.0,
-        size_type="Value",
+        size_type="Percent",
         direction="longonly",
         cash_sharing=True,
         fees=fees,
         freq="d",
+        init_cash=init_cash,
     )
     returns = pf.returns().dropna()
     returns.name = "return"
@@ -279,10 +354,14 @@ def _run_single_vbt(close: pd.Series, entries: pd.Series, exits: pd.Series, fees
                 dt = str(row.get("Timestamp", ""))
                 if np.isnan(price) or size == 0:
                     continue
+                # vbt orders 的方向在 Side 列（Buy/Sell），Size 恒为正；
+                # 兼容旧版本（无 Side 列时回退用 Size 正负判断）
+                side = str(row.get("Side", "")).strip().lower()
+                action = "BUY" if side == "buy" else ("SELL" if side == "sell" else ("BUY" if size > 0 else "SELL"))
                 trades.append({
-                    "date": dt, "action": "BUY" if size > 0 else "SELL",
+                    "date": dt, "action": action, "code": code,
                     "price": round(price, 4), "quantity": round(abs(size), 4),
-                    "total": round(abs(size) * price, 2), "cost": round(abs(fee), 2),
+                    "total": round(abs(size) * price, 2), "cost": round(abs(fee), 4),
                 })
     except Exception as e:  # noqa: BLE001
         logger.warning("提取成交明细失败: %s", e)
@@ -291,7 +370,7 @@ def _run_single_vbt(close: pd.Series, entries: pd.Series, exits: pd.Series, fees
 
 
 def _run_pairs_manual(a: pd.Series, b: pd.Series, entries: pd.Series, exits: pd.Series, fees: float,
-                      spread: pd.Series) -> tuple:
+                      spread: pd.Series, code: str) -> tuple:
     """配对：滚动 β 对冲的日收益 × 持仓（0/1），进出场日按费率扣成本。"""
     ret_a = a.pct_change()
     ret_b = b.pct_change()
@@ -309,17 +388,23 @@ def _run_pairs_manual(a: pd.Series, b: pd.Series, entries: pd.Series, exits: pd.
     trades = []
     for d in spread.index:
         if bool(entries.loc[d]):
-            trades.append({"date": str(d.date()), "action": "BUY", "price": round(float(a.loc[d]), 4),
+            trades.append({"date": str(d.date()), "action": "BUY", "code": code,
+                           "price": round(float(a.loc[d]), 4),
                            "quantity": 1.0, "total": round(float(a.loc[d]), 2), "cost": round(fees, 4)})
         elif bool(exits.loc[d]):
-            trades.append({"date": str(d.date()), "action": "SELL", "price": round(float(a.loc[d]), 4),
+            trades.append({"date": str(d.date()), "action": "SELL", "code": code,
+                           "price": round(float(a.loc[d]), 4),
                            "quantity": 1.0, "total": round(float(a.loc[d]), 2), "cost": round(fees, 4)})
     return strategy, trades[:2000]
 
 
 def run_rule_backtest(template_key: str, params: dict | None, symbols: list[str],
-                      start: str, end: str, benchmark: str = "SH000300") -> dict:
-    """运行规则策略回测，返回指标/净值/交易记录（与因子回测同构）。"""
+                      start: str, end: str, benchmark: str = "SH000300",
+                      initial_capital: float = 10_000_000) -> dict:
+    """运行规则策略回测，返回指标/净值/交易记录（与因子回测同构）。
+
+    initial_capital 为初始资金（元），默认 1000 万，非正数回退默认。
+    """
     if template_key not in TEMPLATES:
         raise ValueError(f"未知策略模板: {template_key}")
     tpl = TEMPLATES[template_key]
@@ -340,19 +425,24 @@ def run_rule_backtest(template_key: str, params: dict | None, symbols: list[str]
 
     prices = _load_close(D, codes, start, end)
     fees = float(settings.quant.get("cost_buy", 0.0013))
+    capital = float(initial_capital or 0)
+    if capital <= 0:
+        capital = 10_000_000
 
     if tpl["kind"] == "pairs":
         a, b = prices[codes[0]], prices[codes[1]]
         entries, exits, spread = _pairs_signals(a, b, p)
-        returns, trades = _run_pairs_manual(a, b, entries, exits, fees, spread)
+        returns, trades = _run_pairs_manual(a, b, entries, exits, fees, spread, codes[0])
         symbols_shown = codes
+        indicator = None
     else:
         close = prices[codes[0]]
         gen_name = _GENERATORS[template_key]
         generator = globals().get(gen_name)
         entries, exits = generator(close, p)
-        returns, trades = _run_single_vbt(close, entries, exits, fees)
+        returns, trades = _run_single_vbt(close, entries, exits, fees, codes[0], capital)
         symbols_shown = [codes[0]]
+        indicator = _build_indicator(template_key, close, p)
 
     bench_ret = _load_benchmark(D, benchmark, start, end)
     if returns.empty:
@@ -360,17 +450,32 @@ def run_rule_backtest(template_key: str, params: dict | None, symbols: list[str]
 
     from app.services.quant.portfolio import analyze_portfolio, build_nav_curve
     metrics = analyze_portfolio(returns, bench_ret)
+    metrics["initial_capital"] = capital
+    metrics["indicator"] = indicator
     nav_curve = build_nav_curve(returns, bench_ret)
 
-    return {
+    # 与因子回测结果同构：指标展开到顶层（组件/列表页通用字段），同时保留 metrics 嵌套。
+    # 规则策略 v1 不持久化，无 id/初始资金/调仓频率等持久化字段，统一置空由前端降级展示。
+    result = {
         "ok": True,
         "template": template_key,
         "name": tpl["name"],
+        "category": tpl.get("category"),
+        "kind": tpl.get("kind"),
         "symbols": symbols_shown,
         "benchmark": benchmark,
+        "start_date": start,
+        "end_date": end,
+        "initial_capital": capital,
+        "indicator": indicator,
         "metrics": metrics,
         "nav_curve": nav_curve,
         "trades": trades,
         "n_trades": len(trades),
         "params": {k: v for k, v in p.items() if k in {pc["key"] for pc in tpl["params"]}},
     }
+    result.update({k: metrics.get(k) for k in (
+        "annual_return", "annual_volatility", "sharpe", "sortino",
+        "max_drawdown", "calmar", "win_rate", "benchmark_return", "excess_return",
+    )})
+    return result

@@ -17,7 +17,7 @@
       >
         <div class="macro-label">{{ it.label }}</div>
         <div class="macro-value" :class="trendClass(it.change)">
-          {{ it.value != null ? it.value : '--' }}
+          {{ displayValue(it.value) }}
           <span v-if="it.unit" class="macro-unit">{{ it.unit }}</span>
         </div>
         <div v-if="hasChange(it.change)" class="macro-trend" :class="trendClass(it.change)">
@@ -41,7 +41,16 @@ defineProps({
 })
 
 function hasChange(v) {
-  return v !== null && v !== undefined && Number(v) !== 0
+  return v !== null && v !== undefined && Number(v) !== 0 && !Number.isNaN(Number(v))
+}
+
+// 值显示：null/undefined/NaN → '--'（后端 NaN 日历日或缺失值不应展示为 NaN）
+// 数值默认保留两位小数并去除多余尾零，避免长小数撑爆卡片
+function displayValue(v) {
+  if (v === null || v === undefined || v === '') return '--'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '--'
+  return String(Number(n.toFixed(2)))
 }
 
 function trendClass(v) {
@@ -60,11 +69,12 @@ function fmtChange(v) {
 <style scoped lang="scss">
 .macro-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 10px;
 }
 .macro-cell {
   padding: 12px 14px;
+  min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -77,11 +87,14 @@ function fmtChange(v) {
   text-overflow: ellipsis;
 }
 .macro-value {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .macro-unit {
   font-size: 11px;

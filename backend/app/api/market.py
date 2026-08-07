@@ -6,11 +6,12 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Query
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
-from app.services.quant.qlib_init import is_qlib_available, init_qlib
+from app.services.quant.qlib_init import init_qlib, is_qlib_available
 
 router = APIRouter(prefix="/market", tags=["market"])
 logger = logging.getLogger(__name__)
@@ -45,8 +46,13 @@ async def get_index_kline(
     period: str = Query("1d", description="K线周期: 1d/1w/1M"),
     start_date: str = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
-    limit: int = Query(120, description="返回数据条数上限", ge=1, le=500),
+    limit: int = Query(120, description="返回数据条数上限（仅未指定日期区间时生效）", ge=1, le=10000),
 ):
+    """获取指数/个股K线数据。
+
+    当调用方显式指定 start_date+end_date 时返回区间内全部数据（用于回测买卖点
+    全量叠加，防止多年区间被 limit 截断）；仅用 limit 兜底限制超大区间。
+    """
     """获取指数/个股K线数据"""
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -56,10 +62,15 @@ async def get_index_kline(
         qlib_code = idx["code"]
         name = idx["name"]
     else:
-        # 个股：qlib 代码形如 SH600000 / SZ000001
+        # 个股：支持 SH600000 / SZ000001 / BJ430047 前缀，或 6 位无前缀代码（如 001337）
         low = index_code.lower()
-        if re.fullmatch(r"(sh|sz)\d{6}", low):
+        if re.fullmatch(r"(sh|sz|bj)\d{6}", low):
             qlib_code = low
+            name = index_code.upper()
+        elif re.fullmatch(r"\d{6}", low):
+            from app.services.data.code_utils import to_qlib_code
+
+            qlib_code = to_qlib_code(low)
             name = index_code.upper()
         else:
             return ApiResponse(ok=False, error={
@@ -69,6 +80,9 @@ async def get_index_kline(
             })
 
     # 计算日期范围
+    # 显式指定日期区间时返回区间内全部数据（供回测叠加买卖点），
+    # 否则按 limit 兜底截断（默认模式只取最近 N 条）。
+    has_explicit_range = bool(start_date) or bool(end_date)
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
     if not start_date:
@@ -101,14 +115,21 @@ async def get_index_kline(
             d + "volume": "volume",
         })
 
+        # 过滤无实际数据的日历日（如"今天"数据未发布时 qlib 返回 NaN 行）：
+        # D.features 对 day.txt 内每个日历日都会返回一行，即使 bin 是 NaN。
+        # 直接按 close 非 NaN 过滤，避免前端把 NaN 当成最新行情/指标算成 NaN。
+        import numpy as np
+        df = df[df["close"].notna() & np.isfinite(df["close"].astype(float))]
+
         # 按周期聚合
         if period == "1w":
             df = _resample_kline(df, "W")
         elif period == "1M":
             df = _resample_kline(df, "ME")
 
-        # 限制返回条数
-        df = df.tail(limit)
+        # 限制返回条数（仅默认模式未显式指定区间时生效）
+        if not has_explicit_range:
+            df = df.tail(limit)
 
         # 计算涨跌幅
         df["pct_change"] = df["close"].pct_change() * 100
@@ -188,6 +209,10 @@ async def market_overview():
                 if df is not None and not df.empty:
                     df = df.reset_index()
                     closes = df[close_field].values
+                    # 过滤 NaN（如"今天"数据未发布时 qlib 返回 NaN 日历日）：
+                    # 只用真实收盘价，避免 price/pct 变成 null 或 NaN
+                    import numpy as np
+                    closes = closes[~np.isnan(closes.astype(float))]
                     if len(closes) >= 2:
                         latest = float(closes[-1])
                         prev = float(closes[-2])

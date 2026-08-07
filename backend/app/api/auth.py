@@ -1,4 +1,8 @@
-"""认证 API：注册/登录/登出/状态。使用 fastapi-users 路由。"""
+"""认证 API：注册/登录/登出/状态。使用 fastapi-users 路由。
+
+登录/登出审计事件由 app.core.middleware.AuditAuthMiddleware 统一打点
+（fastapi-users 内置路由不便在端点内插入逻辑）。
+"""
 from fastapi import APIRouter, Depends
 
 from app.core.auth import (

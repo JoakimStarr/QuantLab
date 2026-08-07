@@ -217,7 +217,9 @@ sudo systemctl status quantlab
 
 ### 5.2 日志轮转
 
-创建 `/etc/logrotate.d/quantlab`：
+应用自身用 `RotatingFileHandler` 管理日志（`quantlab.log`/`error.log`/`sync.log`，各 100MB×5，每日 03:30 按天数清理过期备份）。systemd 的 `StandardOutput` 仅捕获 uvicorn 启动瞬间的 stdout，会与文件日志少量重复，可去掉 `StandardOutput`/`StandardError` 两行。
+
+如仍需保留外部 logrotate（仅兜底），创建 `/etc/logrotate.d/quantlab`：
 
 ```conf
 /opt/quantlab/logs/*.log {
@@ -234,6 +236,7 @@ sudo systemctl status quantlab
     endscript
 }
 ```
+> ⚠️ 应用内 `RotatingFileHandler` 轮转时会把当前文件 rename 成 `.1` 并新建，与外部 logrotate 的 rename 方式不同但互不冲突；两者都做时保留期以更短者为准。
 
 ---
 

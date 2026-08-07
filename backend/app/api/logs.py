@@ -1,12 +1,15 @@
-"""日志管理 API：查询日志文件、按级别/关键词/request_id/时间过滤、清除日志。"""
+"""日志管理 API：查询日志文件、按级别/关键词/request_id/时间过滤、动态调级、清除日志。"""
 import json
 import logging
 import os
 import re
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
+
 import app.core.logging_config as logging_config
 from app.schemas.common import ApiResponse
 
@@ -14,13 +17,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
-# 允许查询的静态日志文件（与 logging_config.setup_logging / audit_log 实际产物一致）
-_ALLOWED_STATIC = {"error.log", "quantlab.log", "audit.jsonl"}
-# sync_worker 日志：sync_worker_<kind>.log（kind 与 sync_worker CLI 保持一致）
-_SYNC_WORKER_KINDS = {"backfill", "eod", "repair", "indices", "fundamental"}
+# 允许查询的日志文件（与 logging_config.setup_logging 实际产物一一对应）：
+# - quantlab.log: web 进程全量日志（INFO+）
+# - error.log:    web 进程 WARNING+（备份保留更久，供回溯历史错误）
+# - sync.log:     全部 sync worker 子进程日志（JSON 行内 worker_kind 区分任务类型）
+_ALLOWED_STATIC = {"quantlab.log", "error.log", "sync.log"}
 
 # 文本日志行正则: "2026-07-28 15:34:23,123 [INFO] app.module: message [req=xxx]"
-# 或 sync_worker 格式 "2026-07-28 15:34:23,123 INFO app.module: message"（无方括号）
+# 或旧 sync_worker 格式 "2026-07-28 15:34:23,123 INFO app.module: message"（无方括号）
+# 当前 3 个受管文件均为 JSON；文本回退仅用于兼容历史文件/第三方输出
 _TEXT_LOG_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) \[?(\w+)\]? ([^:]+): (.*)$"
 )
@@ -32,20 +37,13 @@ _LEVEL_ORDER = {"debug": 10, "info": 20, "warning": 30, "error": 40, "critical":
 
 
 def _allowed_file(name: str) -> bool:
-    """日志文件白名单校验（含动态 sync_worker 日志）。"""
-    if name in _ALLOWED_STATIC:
-        return True
-    kind = name[len("sync_worker_"):-len(".log")]
-    return name.startswith("sync_worker_") and name.endswith(".log") and kind in _SYNC_WORKER_KINDS
+    """日志文件白名单校验。"""
+    return name in _ALLOWED_STATIC
 
 
 def _log_files():
-    """日志文件列表：静态 3 个 + 实际存在的 sync_worker_*.log。"""
-    for name in sorted(_ALLOWED_STATIC):
-        yield name
-    for fp in sorted(logging_config.log_dir.glob("sync_worker_*.log")):
-        if fp.name not in _ALLOWED_STATIC:
-            yield fp.name
+    """日志文件列表：固定的 3 个文件。"""
+    return sorted(_ALLOWED_STATIC)
 
 
 @router.get("/files")
@@ -124,7 +122,8 @@ async def clear_logs(file: str = Query("error.log")):
         # 截断后继续写入会从头追加，不会损坏后续日志
         with open(fp, "w", encoding="utf-8"):
             pass
-        for backup in sorted(logging_config.log_dir.glob(f"{file}.*")):
+        for backup in sorted(logging_config.log_dir.glob(f"{file}.[0-9]*")):
+            # 只匹配轮转备份（数字后缀），避免误删 LockedRotatingFileHandler 的 .lock 锁文件
             try:
                 freed += backup.stat().st_size
                 backup.unlink()
@@ -142,13 +141,40 @@ async def clear_logs(file: str = Query("error.log")):
     })
 
 
+class LogLevelRequest(BaseModel):
+    level: str
+
+
+@router.get("/level")
+async def get_log_level():
+    """获取当前 root 日志级别。"""
+    return ApiResponse(ok=True, data={
+        "level": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+    })
+
+
+@router.put("/level")
+async def update_log_level(payload: LogLevelRequest):
+    """运行时动态调整日志级别（重启后恢复为 config 默认）。
+
+    排查问题时的标准流程：切到 DEBUG → 复现问题 → 查看 quantlab.log → 切回 INFO。
+    """
+    try:
+        logging_config.set_log_level(payload.level)
+    except ValueError as e:
+        return ApiResponse(ok=False, error={
+            "code": "VALIDATION_ERROR", "message": str(e), "status": 400,
+        })
+    return ApiResponse(ok=True, data={"level": payload.level.upper()})
+
+
 def _detect_json(fp: Path) -> bool:
     """探测日志文件是否为 JSON 行格式（.jsonl 直接判定，其余看首行）。"""
     if fp.name.endswith(".jsonl"):
         return True
     if fp.stat().st_size == 0:
         return False
-    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+    with open(fp, encoding="utf-8", errors="replace") as f:
         first = f.readline().strip()
     return first.startswith("{") and first.endswith("}")
 
@@ -175,7 +201,7 @@ def _normalize_bound(value) -> str | None:
         return None
     s = str(value).strip()
     if _NUMBER_RE.match(s):
-        return datetime.fromtimestamp(float(s), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+        return datetime.fromtimestamp(float(s), tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")
     return _ts_key(s)
 
 
@@ -196,10 +222,13 @@ def _entry_from_json(obj: dict) -> dict:
         "timestamp": obj.get("timestamp", ""),
         "level": obj.get("level") or obj.get("levelname", ""),
         "logger": obj.get("logger", ""),
-        # structlog 默认用 "event" 作为消息键；audit.jsonl 用 "action"
-        "message": obj.get("message") or obj.get("event") or obj.get("action", ""),
+        # structlog 默认用 "event" 作为消息键；audit 事件优先展示 detail（更可读）
+        "message": obj.get("message") or obj.get("detail")
+        or obj.get("event") or obj.get("action", ""),
         "request_id": obj.get("request_id", ""),
         "traceback": obj.get("exception", ""),
+        "detail": obj.get("detail", ""),
+        "worker_kind": obj.get("worker_kind", ""),
     }
 
 
@@ -260,7 +289,7 @@ def _scan_log(
 
     current = None  # 文本日志当前条目（用于合并多行 traceback）
     traceback_lines = []
-    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+    with open(fp, encoding="utf-8", errors="replace") as f:
         for raw in f:
             line = raw.rstrip("\n")
             if not line:

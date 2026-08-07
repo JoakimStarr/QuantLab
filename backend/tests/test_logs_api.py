@@ -1,8 +1,6 @@
 """日志管理 API 单测（无需 DB）：验证 since/before 时间过滤、尾部反向扫描、白名单、清除日志。"""
 import json
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from app.api.logs import _allowed_file, _normalize_bound, _scan_log, _ts_key
 
@@ -78,19 +76,45 @@ def test_scan_text_traceback_merge(tmp_path):
 def test_allowed_file_whitelist():
     assert _allowed_file("error.log")
     assert _allowed_file("quantlab.log")
-    assert _allowed_file("audit.jsonl")
-    assert _allowed_file("sync_worker_repair.log")
-    assert _allowed_file("sync_worker_backfill.log")
-    assert not _allowed_file("sync_worker_evil.log")
+    assert _allowed_file("sync.log")
+    assert not _allowed_file("audit.jsonl")
+    assert not _allowed_file("sync_worker_backfill.log")
+    assert not _allowed_file("sync_worker_full.log")
     assert not _allowed_file("passwd.log")
     assert not _allowed_file("quantlab.log.1")
+
+
+def test_entry_from_json_detail_and_worker_kind():
+    """audit 事件（detail/action）与 worker 日志（worker_kind）字段提取。"""
+    from app.api.logs import _entry_from_json
+
+    audit_entry = _entry_from_json({
+        "event": "提交策略回测",
+        "level": "info",
+        "logger": "audit",
+        "action": "backtest_submit",
+        "user": "admin",
+        "resource": "strategy:3",
+        "detail": "提交策略回测（qlib 后端）",
+    })
+    assert audit_entry["message"] == "提交策略回测（qlib 后端）"
+    assert audit_entry["detail"] == "提交策略回测（qlib 后端）"
+
+    worker_entry = _entry_from_json({
+        "event": "sync_worker 开始",
+        "level": "info",
+        "logger": "app.services.data.sync_worker",
+        "worker_kind": "backfill",
+        "pid": 12345,
+    })
+    assert worker_entry["worker_kind"] == "backfill"
 
 
 def test_ts_key_and_normalize_bound():
     assert _ts_key("2026-08-05T09:00:00.123Z") == "2026-08-05T09:00:00.123"
     assert _ts_key("2026-07-28 15:34:23,123") == "2026-07-28T15:34:23.123"
     # unix 秒归一化为 ISO key
-    ts = datetime(2026, 8, 5, 9, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 8, 5, 9, 0, tzinfo=UTC)
     assert _normalize_bound(str(int(ts.timestamp()))) == "2026-08-05T09:00:00.000000"
 
 
@@ -116,3 +140,46 @@ async def test_clear_logs_invalid_file(tmp_path, monkeypatch):
     res = await clear_logs("passwd.log")
     assert res.ok is False
     assert res.error["code"] == "INVALID_FILE"
+
+
+async def test_log_level_roundtrip():
+    """PUT/GET /logs/level：动态调级并复位，受管 logger 同步调整。"""
+    import logging
+
+    from app.api.logs import LogLevelRequest, get_log_level, update_log_level
+    from app.core.logging_config import _MANAGED_LOGGERS
+
+    # 复位，避免其它测试污染
+    for name in ("", *_MANAGED_LOGGERS):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+    res = await update_log_level(LogLevelRequest(level="DEBUG"))
+    assert res.ok is True
+    assert res.data["level"] == "DEBUG"
+    assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+    # DEBUG 排查时受管 logger 也要放行，否则 uvicorn/apscheduler 仍挡在各自级别
+    assert logging.getLogger("asgi_correlation_id").level == logging.DEBUG
+
+    res = await get_log_level()
+    assert res.data["level"] == "DEBUG"
+
+    # 复位
+    for name in ("", *_MANAGED_LOGGERS):
+        logging.getLogger(name).setLevel(logging.INFO)
+    res = await get_log_level()
+    assert res.data["level"] == "INFO"
+
+
+async def test_log_level_invalid():
+    import logging
+
+    from app.api.logs import LogLevelRequest, update_log_level
+    from app.core.logging_config import _MANAGED_LOGGERS
+
+    res = await update_log_level(LogLevelRequest(level="VERBOSE"))
+    assert res.ok is False
+    assert res.error["code"] == "VALIDATION_ERROR"
+    # 非法级别不改动当前级别
+    assert logging.getLogger().getEffectiveLevel() == logging.INFO
+    for name in _MANAGED_LOGGERS:
+        logging.getLogger(name).setLevel(logging.INFO)

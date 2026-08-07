@@ -29,17 +29,19 @@ def test_cleanup_deletes_old_keeps_current_and_error(tmp_path):
         "error.log": None,             # 当前文件，永不删除
         "error.log.1": 20,             # 超 15 天 → 删除
         "error.log.2": 10,             # 15 天内 → 保留
-        "audit.jsonl.1": 40,           # 超 7 天 → 删除
+        "sync.log.1": 40,              # 超 7 天 → 删除
+        "quantlab.log.lock": 40,       # 锁文件（非轮转备份）→ 永不删除
     })
 
     result = cleanup_old_logs(d, retention_days=7, error_retention_days=15)
 
     assert result["deleted_count"] == 3
-    assert set(result["deleted"]) == {"quantlab.log.1", "error.log.1", "audit.jsonl.1"}
+    assert set(result["deleted"]) == {"quantlab.log.1", "error.log.1", "sync.log.1"}
     assert result["freed_bytes"] > 0
-    # 当前文件 + 未过期备份保留
+    # 当前文件 + 未过期备份保留（锁文件也不被误删）
     remaining = {p.name for p in d.iterdir()}
-    assert {"quantlab.log", "quantlab.log.2", "error.log", "error.log.2"} <= remaining
+    assert {"quantlab.log", "quantlab.log.2", "error.log", "error.log.2",
+            "quantlab.log.lock"} <= remaining
 
 
 def test_cleanup_error_retained_longer_than_normal(tmp_path):

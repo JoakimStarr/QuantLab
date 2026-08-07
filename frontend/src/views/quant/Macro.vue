@@ -1,16 +1,12 @@
 <template>
   <PageContainer narrow>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">宏观指标</h1>
-        <p class="page-header__subtitle">
-          东财 + akshare 宏观数据（PMI/CPI/PPI/GDP/国债/Shibor/汇率等），同步后广播为 qlib 因子字段
-        </p>
-      </div>
-    </header>
+    <PageHeader
+      title="宏观指标"
+      subtitle="东财 + akshare 宏观数据（PMI/CPI/PPI/GDP/国债/Shibor/汇率等），同步后广播为 qlib 因子字段"
+    />
 
     <!-- 宏观指标：最新值 + 点击指标正面下方展开走势（按需加载） -->
-    <SectionCard title="宏观指标" class="mb-6">
+    <SectionCard title="宏观指标" class="macro-card mb-6">
       <template #extra>
         <div class="snapshot-toolbar">
           <el-button size="small" @click="reloadAll" :loading="loading">刷新</el-button>
@@ -21,24 +17,12 @@
       </template>
 
       <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
-      <div v-if="syncProgress" class="sync-progress">
-        <div class="progress-header">
-          <span class="progress-status">{{ syncProgress.message || '同步中...' }}</span>
-          <span class="progress-pct">{{ (syncProgress.progress_pct || 0).toFixed(1) }}%</span>
-        </div>
-        <el-progress
-          :percentage="syncProgress.progress_pct || 0"
-          :status="syncProgress.status === 'failed' ? 'exception' : syncProgress.status === 'done' ? 'success' : ''"
-          :stroke-width="12"
-          :show-text="false"
-        />
-      </div>
 
       <template v-if="snapshotItems.length">
         <div v-for="group in snapshotGroups" :key="group.label" class="snapshot-group">
           <div class="snapshot-group-title">{{ group.label }}</div>
           <div class="snapshot-grid">
-            <!-- 指标卡固定尺寸；点击后在卡片正下方展开占满整行的走势面板 -->
+            <!-- 指标卡固定尺寸；点击后在其所在行下方展开占满整行的走势面板（结构化布局，天然不错位） -->
             <template v-for="opt in group.options" :key="opt.key">
               <div
                 class="snapshot-cell"
@@ -71,9 +55,9 @@
                 </div>
               </div>
 
-              <!-- 走势面板：悬浮于被点击卡片正下方（占满整行，不影响其它卡片布局） -->
+              <!-- 走势面板：绝对定位悬浮于被点击卡所在行下方，覆盖后续行，不参与网格布局（右侧同行卡片保持原位） -->
               <transition name="expand">
-                <div v-if="expandedCard && isExpanded(opt)" class="snapshot-chart" :style="{ top: expandedTop + 'px' }">
+                <div v-if="isExpanded(opt)" class="snapshot-chart" :style="{ top: expandedTop + 'px' }">
                   <div class="snapshot-chart__head">
                     <div class="snapshot-chart__title">
                       <span class="snapshot-chart__name">{{ expandedCard.label }}</span>
@@ -83,6 +67,7 @@
                       <el-radio-button v-for="r in timeOptions" :key="r.key" :value="r.key">{{ r.label }}</el-radio-button>
                     </el-radio-group>
                   </div>
+                  <div v-if="expandedCard.desc" class="snapshot-chart__desc">{{ expandedCard.desc }}</div>
                   <div v-if="seriesLoading" class="chart-wrap">
                     <el-skeleton :rows="8" animated />
                   </div>
@@ -115,11 +100,11 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { syncMacro, getMacroIndicators, getMacroStatus, getMacroSnapshot } from '@/api/macro'
-import { getSyncProgress } from '@/api/quant'
 import { chartTheme, echartPalette as C } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
 
@@ -133,6 +118,7 @@ const fieldOptions = [
     key: 'pmi',
     indicator: 'PMI',
     label: 'PMI',
+    desc: '景气先行指标，< 50 经济收缩、> 50 扩张；见底回升常领先股市 1-3 个月。',
     group: '景气/价格',
     markLine: 50,
     fields: [
@@ -144,6 +130,7 @@ const fieldOptions = [
     key: 'cpi',
     indicator: 'CPI',
     label: 'CPI同比(%)',
+    desc: '通胀 > 3% → 央行可能加息 → 债市利空；< 1% 暗示通缩、降息空间打开。',
     group: '景气/价格',
     fields: [{ field: 'cpi', name: 'CPI同比', color: C.purple }],
   },
@@ -151,6 +138,7 @@ const fieldOptions = [
     key: 'ppi',
     indicator: 'PPI',
     label: 'PPI同比(%)',
+    desc: '上游涨价挤压中下游利润；CPI-PPI 剪刀差用于判断利润在上下游分配。',
     group: '景气/价格',
     fields: [{ field: 'ppi', name: 'PPI同比', color: C.teal }],
   },
@@ -158,6 +146,7 @@ const fieldOptions = [
     key: 'gdp',
     indicator: 'GDP',
     label: 'GDP同比(%)',
+    desc: '经济周期定位的最终锚；低于潜在增速 → 宽松预期、高于潜在增速 → 警惕过热。',
     group: '景气/价格',
     fields: [{ field: 'gdp', name: 'GDP同比', color: C.grass }],
   },
@@ -166,6 +155,7 @@ const fieldOptions = [
     key: 'cn_trsy',
     indicator: 'TREASURY',
     label: '中债收益率',
+    desc: '无风险利率锚，股债性价比切换信号；10Y 下行利好成长股估值。',
     group: '利率',
     fields: [
       { field: 'trsy2y', name: '中债2Y', color: C.blue },
@@ -178,6 +168,7 @@ const fieldOptions = [
     key: 'trsy_spread',
     indicator: 'TREASURY',
     label: '期限利差',
+    desc: '收益率曲线形态；倒挂 → 衰退预警，陡峭化 → 复苏预期。',
     group: '利率',
     fields: [{ field: 'trsy_spread_10y2y', name: '利差10Y-2Y', color: C.cyan }],
   },
@@ -185,6 +176,7 @@ const fieldOptions = [
     key: 'us_trsy',
     indicator: 'TREASURY',
     label: '美债收益率',
+    desc: '全球资产定价之锚；上行 → 美元强、新兴市场承压、北向流出。',
     group: '利率',
     fields: [{ field: 'us_trsy10y', name: '美债10Y', color: C.forest }],
   },
@@ -192,6 +184,7 @@ const fieldOptions = [
     key: 'shibor',
     indicator: 'SHIBOR',
     label: 'Shibor',
+    desc: '银行间流动性；隔夜飙升 → 资金紧张、股市利空；持续低位 → 流动性宽松。',
     group: '利率',
     fields: [
       { field: 'shibor_on', name: '隔夜', color: C.blue },
@@ -204,6 +197,7 @@ const fieldOptions = [
     key: 'lpr',
     indicator: 'LPR',
     label: 'LPR',
+    desc: '实体融资成本基准；1Y 降利好短贷，5Y 降利好地产链与可选消费。',
     group: '利率',
     fields: [
       { field: 'lpr1y', name: 'LPR 1Y', color: C.blue },
@@ -214,6 +208,7 @@ const fieldOptions = [
     key: 'repofr',
     indicator: 'REPO_FR',
     label: '回购定盘利率',
+    desc: '全市场质押式回购；FR007≈R007，衡量非银机构融资压力。',
     group: '利率',
     fields: [
       { field: 'fr001', name: 'FR001', color: C.blue },
@@ -225,6 +220,7 @@ const fieldOptions = [
     key: 'repofdr',
     indicator: 'REPO_FDR',
     label: '银银间回购',
+    desc: 'DR 系列，存款类机构资金价格；DR007 是央行观察的利率走廊。',
     group: '利率',
     fields: [
       { field: 'fdr001', name: 'FDR001', color: C.blue },
@@ -237,6 +233,7 @@ const fieldOptions = [
     key: 'commodity',
     indicator: 'COMMODITY',
     label: '大宗商品指数',
+    desc: '通胀与需求侧领先指标；持续上行 → 资源股利好，快速回落 → 需求担忧。',
     group: '商品/汇率',
     fields: [{ field: 'commodity_idx', name: '商品价格指数', color: C.blue }],
   },
@@ -244,6 +241,7 @@ const fieldOptions = [
     key: 'copper',
     indicator: 'COPPER',
     label: '沪铜',
+    desc: '"铜博士"，全球需求晴雨表；上行 + 库存去化 → 经济复苏预期。',
     group: '商品/汇率',
     fields: [{ field: 'copper_close', name: '沪铜主力收盘价', color: C.red }],
   },
@@ -251,6 +249,7 @@ const fieldOptions = [
     key: 'crude',
     indicator: 'CRUDE_OIL',
     label: '原油',
+    desc: '大宗商品之锚；上行 → 化工/航运成本与通胀压力，下行 → 利好航空/物流。',
     group: '商品/汇率',
     fields: [{ field: 'crude_close', name: '原油SC主力', color: C.orange }],
   },
@@ -258,6 +257,7 @@ const fieldOptions = [
     key: 'fx',
     indicator: 'FX',
     label: '人民币汇率',
+    desc: '央行每日发布中间价；贬值利好出口但输入通胀，升值利好进口。',
     group: '商品/汇率',
     fields: [{ field: 'usdcny_mid', name: '美元中间价', color: C.blue }],
   },
@@ -266,6 +266,7 @@ const fieldOptions = [
     key: 'ivix',
     indicator: 'IVIX',
     label: '波指iVIX',
+    desc: '市场恐慌情绪；> 30 警惕风险，< 20 过度乐观，底部反转领先大盘 1-2 周。',
     group: '风险/情绪',
     fields: [{ field: 'ivix', name: '50ETF波动率指数', color: C.red }],
   },
@@ -273,6 +274,7 @@ const fieldOptions = [
     key: 'futif',
     indicator: 'FUTURES_IF',
     label: '股指期货IF',
+    desc: '沪深300期货；基差/升贴水反映多空预期，持仓量变化反映机构倾向。',
     group: '风险/情绪',
     fields: [
       { field: 'if_close', name: 'IF主力收盘价', color: C.blue },
@@ -283,6 +285,7 @@ const fieldOptions = [
     key: 'futic',
     indicator: 'FUTURES_IC',
     label: '中证500期货',
+    desc: '中小盘情绪指标；IC 升贴水走阔 → 恐慌，收敛 → 情绪修复。',
     group: '风险/情绪',
     fields: [
       { field: 'ic_close', name: 'IC主力收盘价', color: C.blue },
@@ -293,6 +296,7 @@ const fieldOptions = [
     key: 'futtf',
     indicator: 'FUTURES_TF',
     label: '国债期货',
+    desc: '5Y 国债期货；TF 涨 → 预期利率下行、债牛，利率方向领先信号。',
     group: '风险/情绪',
     fields: [{ field: 'tf_close', name: 'TF主力收盘价', color: C.cyan }],
   },
@@ -300,14 +304,27 @@ const fieldOptions = [
     key: 'gold',
     indicator: 'GOLD',
     label: '沪金',
+    desc: '与实际利率反向；避险急涨 → 风险资产承压，金价新高警惕滞胀。',
     group: '风险/情绪',
     fields: [{ field: 'au_close', name: '沪金AU主力', color: C.gold }],
+  },
+  {
+    key: 'hsgt',
+    indicator: 'HSGT',
+    label: '北向资金',
+    desc: '外资配置 A 股力度；持续大幅净流入 → 看多核心资产，连续流出 → 警惕撤退。',
+    group: '风险/情绪',
+    fields: [
+      { field: 'hsgt_hold_mv', name: '北向持股总市值', color: C.blue, axis: 'right' },
+      { field: 'hsgt_inflow', name: '北向当日净流入', color: C.orangeAlt },
+    ],
   },
   // 货币/信贷
   {
     key: 'moneysupply',
     indicator: 'MONEY_SUPPLY',
     label: '货币供应',
+    desc: 'M1-M2 增速差 → 资金活化程度；M1 增速快 → 股市可能上涨。',
     group: '货币/信贷',
     fields: [
       { field: 'm0_yoy', name: 'M0同比', color: C.blue },
@@ -319,6 +336,7 @@ const fieldOptions = [
     key: 'socialfinance',
     indicator: 'SOCIAL_FINANCE',
     label: '社会融资',
+    desc: '新增社融超预期 → 流动性宽松 → 利好股市。',
     group: '货币/信贷',
     fields: [
       { field: 'social_finance', name: '社融增量', color: C.blue },
@@ -329,20 +347,22 @@ const fieldOptions = [
     key: 'loan',
     indicator: 'LOAN',
     label: '新增贷款',
+    desc: '实体融资需求；短贷大增常为票据冲量，中长贷回升 → 实体投资恢复。',
     group: '货币/信贷',
     fields: [
       { field: 'new_loan', name: '新增贷款', color: C.blue },
-      { field: 'new_loan_yoy', name: '新增贷款同比', color: C.orangeAlt },
+      { field: 'new_loan_yoy', name: '新增贷款同比', color: C.orangeAlt, axis: 'right' },
     ],
   },
   {
     key: 'margin',
     indicator: 'MARGIN',
     label: '两融余额',
+    desc: '场内杠杆资金；> 2 万亿偏热、< 1.5 万亿偏冷。',
     group: '货币/信贷',
     fields: [
       { field: 'margin_balance', name: '沪市两融余额', color: C.blue },
-      { field: 'margin_balance_sz', name: '深市两融余额', color: C.orangeAlt },
+      { field: 'margin_balance_sz', name: '深市两融余额', color: C.orangeAlt, indicator: 'MARGIN_SZ' },
     ],
   },
 ]
@@ -360,33 +380,45 @@ const loading = ref(false)
 const syncing = ref(false)
 const seriesLoading = ref(false)
 const syncMessage = ref('')
-const syncProgress = ref(null)
-let progressTimer = null
 const seriesData = ref([])
 const statusItems = ref([])
 const snapshotItems = ref([])
 
 // 当前展开的走势卡片（点击最新值卡片后按需加载走势）
 const expandedCard = ref(null)
-// 悬浮面板距离所在分组顶部的偏移（由被点击卡片计算）
+// 悬浮面板距离所在分组顶部的偏移（由被点击卡片测量，滚动/缩放时重算）
 const expandedTop = ref(0)
+const activeCell = ref(null)
 
 function isExpanded(card) {
   return card != null && expandedCard.value != null && expandedCard.value.key === card.key
 }
-// 点击指标卡片：展开/收起其走势（切换时按需拉取）
+
+// 测量被点击卡片相对其分组的垂直位置，作为悬浮面板的 top（不动其它卡片布局）
+function measurePanelTop() {
+  if (!activeCell.value) return
+  expandedTop.value = activeCell.value.offsetTop + activeCell.value.offsetHeight + 12
+}
+
+// 点击指标卡片：展开/收起其走势（切换时按需拉取；面板绝对定位覆盖后续行）
 function toggleExpand(card, e) {
   if (!card) return
   if (expandedCard.value && expandedCard.value.key === card.key) {
     expandedCard.value = null
+    activeCell.value = null
     seriesData.value = []
   } else {
-    const el = e && e.currentTarget
-    if (el) expandedTop.value = el.offsetTop + el.offsetHeight + 12
+    activeCell.value = e && e.currentTarget
+    measurePanelTop()
     expandedCard.value = card
     seriesData.value = []
     loadSeries(card)
   }
+}
+
+// 窗口缩放时重定位悬浮面板，避免静止偏移
+function onPanelResize() {
+  measurePanelTop()
 }
 
 // 时间范围切换后，若已有展开的指标则重新拉取
@@ -412,7 +444,7 @@ const snapshotGroups = computed(() => {
   const byGroup = {}
   for (const opt of fieldOptions) {
     const fields = (opt.fields ?? [])
-      .map((f) => ({ field: f.field, name: f.name, item: byField.get(f.field) }))
+      .map((f) => ({ ...f, item: byField.get(f.field) }))
       .filter((x) => x.item)
     if (!fields.length) continue
     const g = opt.group || '其他'
@@ -425,6 +457,7 @@ const snapshotGroups = computed(() => {
         label: opt.label,
         indicator: opt.indicator,
         group: opt.group,
+        desc: opt.desc,
         fields: fields.slice(i, i + 2),
         seriesFields,
       })
@@ -588,18 +621,17 @@ async function loadSeries(opt) {
   seriesLoading.value = true
   try {
     const startDate = rangeStartDate()
+    const params = startDate ? { start: startDate } : {}
     const fields = target.seriesFields || target.fields
     const series = await Promise.all(
       fields.map(async (f) => {
-        const res = await getMacroIndicators({ indicator: target.indicator, field: f.field })
+        const res = await getMacroIndicators({ indicator: f.indicator || target.indicator, field: f.field, ...params })
         const items = res?.items ?? []
         return {
           field: f.field,
           name: f.name,
           color: f.color,
-          points: items
-            .filter((d) => !startDate || d.available_date >= startDate)
-            .map((d) => ({ date: d.available_date, value: d.value })),
+          points: items.map((d) => ({ date: d.available_date, value: d.value })),
         }
       })
     )
@@ -675,10 +707,9 @@ async function doSync() {
   syncMessage.value = ''
   try {
     await syncMacro()
-    syncMessage.value = '同步已提交（后台执行），进度见下方。'
-    ElMessage.success('宏观同步已提交')
-    startMacroProgressPolling()
-    // 兜底：即使进度未显示，也刷新一次状态
+    syncMessage.value = '已提交：仅入库 PG，不写 qlib bin（无进度条）。约 5 秒后自动刷新最新值。'
+    ElMessage.success('宏观同步已提交（仅入库）')
+    // fetch-only 任务不写全局进度，5 秒后刷新一次最新值即可
     setTimeout(() => {
       loadStatus()
       loadSeries()
@@ -690,81 +721,21 @@ async function doSync() {
   }
 }
 
-// 轮询宏观同步进度（共享 /quant/data/sync-progress，kind=macro / data_source=eastmoney）
-function startMacroProgressPolling() {
-  if (progressTimer) clearInterval(progressTimer)
-  syncProgress.value = null
-  let nullCount = 0
-  const poll = async () => {
-    try {
-      const data = await getSyncProgress()
-      if (data && (data.kind === 'macro' || data.data_source === 'eastmoney')) {
-        nullCount = 0
-        syncProgress.value = data
-        if (data.status === 'done' || data.status === 'failed') {
-          clearInterval(progressTimer)
-          progressTimer = null
-          if (data.status === 'done') ElMessage.success('宏观同步完成')
-          else ElMessage.error('宏观同步失败: ' + (data.error || '未知错误'))
-          setTimeout(() => {
-            syncProgress.value = null
-          }, 2000)
-          loadStatus()
-          loadSeries()
-        }
-      } else if (data) {
-        // 其他任务（如 baostock）占用进度文件，非本页关注
-        nullCount = 0
-        syncProgress.value = null
-      } else {
-        nullCount += 1
-        if (nullCount > 20) {
-          clearInterval(progressTimer)
-          progressTimer = null
-          syncProgress.value = null
-        }
-      }
-    } catch (e) {
-      // 忽略瞬时错误，继续轮询
-    }
-  }
-  poll()
-  progressTimer = setInterval(poll, 1000)
-}
-
 onMounted(() => {
   loadStatus()
+  window.addEventListener('resize', onPanelResize)
 })
 
 onBeforeUnmount(() => {
-  if (progressTimer) clearInterval(progressTimer)
+  window.removeEventListener('resize', onPanelResize)
 })
 </script>
 
 <style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  animation: fadeInUp 0.5s var(--ease-out-expo);
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-  }
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
+/* 展开面板绝对定位向下覆盖，可能超出本卡底部触及下方「同步状态」卡，提升本卡层级 */
+.macro-card {
+  position: relative;
+  z-index: 2;
 }
 
 .snapshot-toolbar {
@@ -779,29 +750,6 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
-.sync-progress {
-  margin-top: 14px;
-  padding: 12px 14px;
-  background: var(--bg-tertiary, #f5f7fa);
-  border-radius: 8px;
-}
-.progress-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.progress-status {
-  font-size: 13px;
-  color: var(--text-primary);
-}
-.progress-pct {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--primary);
-  font-variant-numeric: tabular-nums;
-}
-
 .chart-wrap {
   min-height: 200px;
 }
@@ -811,7 +759,7 @@ onBeforeUnmount(() => {
 
 .snapshot-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 12px;
   align-items: start;
 }
@@ -860,7 +808,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 .snapshot-trends {
   display: flex;
@@ -919,24 +868,23 @@ onBeforeUnmount(() => {
   color: var(--primary);
 }
 
-/* 展开走势面板：悬浮于被点击卡片正下方，占满整行，不参与布局（右侧卡片完全不动） */
+/* 展开走势面板：绝对定位悬浮于被点击卡所在行下方，覆盖后续行（不推挤右侧/下方卡片） */
 .snapshot-chart {
   position: absolute;
   left: 0;
   right: 0;
-  top: 0;
-  z-index: 9999;
+  z-index: 3;
   padding: 14px 16px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
-  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.16));
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.12));
 
   &__head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-md, 12px);
     flex-wrap: wrap;
     margin-bottom: 12px;
   }
@@ -946,6 +894,7 @@ onBeforeUnmount(() => {
     align-items: baseline;
     gap: 10px;
     flex-wrap: wrap;
+    min-width: 0;
   }
 
   &__name {
@@ -957,6 +906,20 @@ onBeforeUnmount(() => {
   &__fields {
     font-size: 12px;
     color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+    border-left: 2px solid var(--primary);
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+    border-radius: 4px;
   }
 }
 

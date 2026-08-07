@@ -1,17 +1,21 @@
 <template>
   <PageContainer>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">日志管理</h1>
-      </div>
-      <div class="page-header__actions">
+    <PageHeader title="日志管理">
+      <template #actions>
+        <el-select
+          v-model="currentLevel"
+          style="width: 110px"
+          :disabled="levelSaving"
+          @change="onLevelChange">
+          <el-option v-for="lvl in levelOptions" :key="lvl" :label="lvl" :value="lvl" />
+        </el-select>
         <el-switch v-model="autoRefresh" active-text="自动刷新" @change="toggleAutoRefresh" />
         <el-button type="danger" plain :icon="Delete" :disabled="!currentFileSize" @click="clearCurrentLog"
           >清空日志</el-button
         >
         <el-button @click="loadLogs" :icon="Refresh" :loading="loading">刷新</el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <SectionCard class="mb-16">
       <div class="filter-bar">
@@ -79,6 +83,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="logger" label="Logger" width="180" show-overflow-tooltip />
+        <el-table-column label="来源" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.worker_kind" size="small" type="success">{{ row.worker_kind }}</el-tag>
+            <span v-else>--</span>
+          </template>
+        </el-table-column>
         <el-table-column label="Request ID" width="120" align="center">
           <template #default="{ row }">
             <span v-if="row.request_id" class="req-id" @click.stop="searchByReqId(row.request_id)">
@@ -140,12 +150,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { getLogFiles, getLogs, clearLogs } from '@/api/logs'
+import { usePolling } from '@/composables/usePolling'
+import { getLogFiles, getLogs, clearLogs, getLogLevel, setLogLevel } from '@/api/logs'
 import { humanSize } from '@/utils/format'
 
 const STORAGE_KEY = 'quantlab:logview:state'
@@ -155,7 +167,15 @@ const logs = ref([])
 const total = ref(0)
 const loading = ref(false)
 const autoRefresh = ref(false)
-let refreshTimer = null
+// 自动刷新轮询：增量拉取（since=当前最新时间，只扫尾部新日志）
+const autoRefreshPolling = usePolling(
+  () => {
+    const since = logs.value.length ? logs.value[0].timestamp : undefined
+    loadLogs({ since })
+  },
+  10000,
+  { immediate: false }
+)
 
 const filter = reactive({
   file: 'error.log',
@@ -167,6 +187,13 @@ const filter = reactive({
 })
 
 const currentPage = ref(1)
+
+// 运行时日志级别（排查用：切 DEBUG 复现问题 → 查看 quantlab.log → 切回 INFO）
+const levelOptions = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+const currentLevel = ref('INFO')
+// 已确认生效的级别（取消切换时回滚用）
+const appliedLevel = ref('INFO')
+const levelSaving = ref(false)
 
 // 清空日志确认弹窗状态
 const clearDialogVisible = ref(false)
@@ -281,14 +308,44 @@ function searchByReqId(reqId) {
 
 function toggleAutoRefresh(val) {
   if (val) {
-    refreshTimer = setInterval(() => {
-      // 增量刷新：传 since=当前最新一条时间，后端只扫尾部新日志，避免每次全量扫描
-      const since = logs.value.length ? logs.value[0].timestamp : undefined
-      loadLogs({ since })
-    }, 10000)
+    autoRefreshPolling.start()
   } else {
-    if (refreshTimer) clearInterval(refreshTimer)
-    refreshTimer = null
+    autoRefreshPolling.stop()
+  }
+}
+
+async function loadLevel() {
+  try {
+    const data = await getLogLevel()
+    const level = data?.level || 'INFO'
+    currentLevel.value = level
+    appliedLevel.value = level
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('获取日志级别失败')
+  }
+}
+
+async function onLevelChange(level) {
+  try {
+    await ElMessageBox.confirm(
+      `将日志级别切换为 ${level}？运行时立即生效，重启后端后恢复为配置默认。\n\n排查问题建议：切到 DEBUG → 复现问题 → 查看 quantlab.log → 切回 INFO。`,
+      '动态调整日志级别',
+      { confirmButtonText: '切换', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    currentLevel.value = appliedLevel.value
+    return
+  }
+  levelSaving.value = true
+  try {
+    await setLogLevel(level)
+    appliedLevel.value = level
+    ElMessage.success(`日志级别已切换为 ${level}`)
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('切换日志级别失败')
+    currentLevel.value = appliedLevel.value
+  } finally {
+    levelSaving.value = false
   }
 }
 
@@ -328,6 +385,7 @@ onMounted(async () => {
     currentPage.value = Math.floor(saved.offset / filter.limit) + 1
   }
   filter.offset = (currentPage.value - 1) * filter.limit
+  await loadLevel()
   await loadLogs()
 })
 
@@ -344,38 +402,9 @@ watch(
   ],
   saveState
 )
-
-onBeforeUnmount(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
-})
 </script>
 
 <style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  animation: fadeInUp 0.5s var(--ease-out-expo);
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0;
-  }
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-}
 .filter-bar {
   display: flex;
   align-items: center;

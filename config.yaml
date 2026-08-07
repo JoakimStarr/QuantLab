@@ -41,11 +41,21 @@ data:
 logging:
   dir: logs
   level: INFO
-  # 日志定期清理：普通日志(quantlab.log/audit.jsonl)轮转备份保留天数
+  # 日志定期清理：普通日志(quantlab.log/sync.log)轮转备份保留天数
   retention_days: 7
   # 错误日志(error.log)备份保留天数（更长，清理后仍可定位历史错误）
   error_retention_days: 15
   cleanup_enabled: true
+# 蒙特卡罗模拟（回测指标 bootstrap 置信区间 + 因子 IC 置换检验）
+monte_carlo:
+  bootstrap_iterations: 1000
+  # stationary bootstrap 平均块长（交易日）
+  bootstrap_block: 20
+  # 置信水平（0.9 → [5%, 95%]）
+  bootstrap_ci: 0.9
+  # 因子 IC 置换检验次数 / 显著性水平（深度分析页展示，不拦截挖掘）
+  permutation_n: 500
+  permutation_alpha: 0.05
 mining:
   automl:
     combo_method: lightgbm

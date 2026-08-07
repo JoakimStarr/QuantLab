@@ -341,6 +341,34 @@ def _parse_date(v):
         return None
 
 
+async def _pull_misc_data(refresh_misc: bool) -> tuple:
+    """拉取 stock_basic / stock_industry（仅 refresh_misc=True 时）。
+
+    Args:
+        refresh_misc: 是否拉取基础资料/行业。默认 False（日常同步不拉——
+            低频静态数据，仅新上市/行业调整时需要）。
+
+    Returns:
+        (df_basic, df_industry)：未拉取或失败时为 (None, None)。
+    """
+    df_basic = df_industry = None
+    if not refresh_misc:
+        return df_basic, df_industry
+    try:
+        basic_rows = await asyncio.to_thread(_fetch_all_sync, "query_stock_basic", "")
+        if basic_rows:
+            df_basic = pd.DataFrame(basic_rows)
+    except Exception as e:
+        logger.warning("stock_basic 拉取失败: %s", e)
+    try:
+        ind_rows = await asyncio.to_thread(_fetch_all_sync, "query_stock_industry", "")
+        if ind_rows:
+            df_industry = pd.DataFrame(ind_rows)
+    except Exception as e:
+        logger.warning("stock_industry 拉取失败: %s", e)
+    return df_basic, df_industry
+
+
 def _fetch_all_sync(api_name: str, date_str: str) -> list:
     """同步执行 baostock 全市场查询（query_stock_basic/query_stock_industry/成分股）。"""
     import baostock as bs
@@ -680,7 +708,8 @@ async def _run_backfill_downloads(
     return success_stocks
 
 
-async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "backfill") -> dict:
+async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "backfill",
+                                refresh_misc: bool = False) -> dict:
     """baostock 全量回填主入口（最新 → 最旧）。
 
     增量去重：是否已下载以数据库 stock_daily 为准（day.txt 由库重建、与之对齐），
@@ -694,6 +723,9 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         universe: 股票池（all/csi300/csi500），用于状态记录
         kind: 任务归属（backfill worker 默认 "backfill"；repair 补齐步骤传 "repair"，
             避免进度标识被覆盖成 backfill）
+        refresh_misc: 是否拉取 stock_basic/stock_industry。默认 False（日常同步
+            不拉基础资料/行业——低频静态数据，仅新上市/行业调整时需要），
+            前端/API 显式传 True 时才执行。
     """
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
@@ -780,20 +812,10 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
             logger.warning("宏观字段重广播失败（可稍后在宏观页同步）: %s", e)
 
         # 基础资料 / 行业 / 日历
-        update_progress(pct=88, status="running", message="入库股票基本资料/行业分类...")
-        df_basic = df_industry = None
-        try:
-            basic_rows = await asyncio.to_thread(_fetch_all_sync, "query_stock_basic", "")
-            if basic_rows:
-                df_basic = pd.DataFrame(basic_rows)
-        except Exception as e:
-            logger.warning("stock_basic 拉取失败: %s", e)
-        try:
-            ind_rows = await asyncio.to_thread(_fetch_all_sync, "query_stock_industry", "")
-            if ind_rows:
-                df_industry = pd.DataFrame(ind_rows)
-        except Exception as e:
-            logger.warning("stock_industry 拉取失败: %s", e)
+        # 用户明确要求：stock_basic/stock_industry 不随日常同步拉取（默认关闭）。
+        # 需要刷新（新上市/行业调整）时由前端/API 显式传 refresh_misc=true 触发。
+        df_basic, df_industry = await _pull_misc_data(refresh_misc)
+        # trade_calendar 由内存中的 global_calendar 派生，始终随本次回填更新
         await _insert_misc(df_basic, df_industry, global_calendar)
 
         # 指数成分股 + instruments（动态成分：按点按时点采样，消除幸存者偏差）
@@ -842,11 +864,18 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
 
 async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
                               code_range: dict, sync_path: str = "baostock_backfill") -> None:
-    """更新 stock_data_status 并写 sync_history。"""
+    """更新 stock_data_status 并写 sync_history。
+
+    latest_date 取"实际已落库 stock_daily 的最大交易日"，而非日历末日
+    （calendar 可能含今天——baostock 交易日历把今天标记为交易日，但数据要收盘后
+    才发布；数据未到前 latest_date 应显示昨天，拉到才显示今天）。
+    """
     from sqlalchemy import select, func
     now = datetime.now()
     async with async_session() as session:
         row_cnt = (await session.execute(select(func.count()).select_from(StockDaily))).scalar() or 0
+        max_date = (await session.execute(select(func.max(StockDaily.trade_date)))).scalar()
+        latest_date = max_date.strftime("%Y-%m-%d") if max_date else (calendar[-1] if calendar else None)
         existing = await session.execute(
             select(StockDataStatus).where(StockDataStatus.universe == universe)
         )
@@ -854,7 +883,7 @@ async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
         if rec is None:
             rec = StockDataStatus(universe=universe)
             session.add(rec)
-        rec.latest_date = calendar[-1]
+        rec.latest_date = latest_date
         rec.stock_count = len(code_range)
         rec.row_count = row_cnt
         rec.status = "ok"
@@ -866,7 +895,7 @@ async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
         h = SyncHistory(
             universe=universe, data_source="baostock", sync_path=sync_path,
             status="ok", started_at=now, finished_at=now,
-            latest_date=calendar[-1], stock_count=len(code_range),
+            latest_date=latest_date, stock_count=len(code_range),
             row_count=row_cnt,
         )
         session.add(h)
@@ -942,7 +971,9 @@ async def run_baostock_backfill_task(req) -> None:
     universe = req.universe or "all"
     years = req.years or int(settings.quant.get("backfill_years", 5))
     try:
-        result = await run_baostock_backfill(years=years, universe=universe)
+        result = await run_baostock_backfill(
+            years=years, universe=universe, refresh_misc=getattr(req, "refresh_misc", False),
+        )
         logger.info("baostock 回填后台任务完成: %s", result)
     except Exception as e:
         await mark_sync_failed(universe, str(e))

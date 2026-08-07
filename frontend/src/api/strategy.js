@@ -29,6 +29,11 @@ export function deleteBacktestResult(resultId) {
   return request.delete('/strategies/backtest-results/' + resultId)
 }
 
+// 蒙特卡罗模拟：回测指标 bootstrap 置信区间
+export function getMonteCarlo(resultId, params = {}) {
+  return request.post('/strategies/backtest-results/' + resultId + '/monte-carlo', params)
+}
+
 export function getAllBacktestStatuses() {
   return request.get('/strategies/backtest-statuses')
 }

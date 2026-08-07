@@ -10,6 +10,7 @@ class SyncDataRequest(BaseModel):
     universe: Optional[str] = None     # 覆盖 config.universe
     days: Optional[int] = None         # akshare增量同步天数（默认30）
     years: Optional[int] = None        # baostock 全量回填年数（从最新向旧）
+    refresh_misc: bool = False         # 是否强制重拉 stock_basic/stock_industry（默认跳过已入库数据）
 
 
 class RepairRequest(BaseModel):

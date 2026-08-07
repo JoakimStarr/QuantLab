@@ -61,7 +61,7 @@ async def log_cleanup_task():
     """日志文件定期清理：每天 03:30 删除过期的轮转备份。
 
     规则（config.logging）：
-    - quantlab.log / audit.jsonl 的轮转备份保留 retention_days 天（默认 7）
+    - quantlab.log / sync.log 的轮转备份保留 retention_days 天（默认 7）
     - error.log 的轮转备份保留 error_retention_days 天（默认 15，更长），
       保证普通日志清理后仍可定位历史错误
     """

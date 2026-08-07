@@ -553,6 +553,22 @@ def incremental_sync_eod_baostock(
     }
 
 
+async def _refresh_status_after_eod(provider_uri: str, universe: str, codes: list) -> None:
+    """EOD 同步后刷新 stock_data_status（latest_date 取实际落库最大交易日）。
+
+    仅回填/repair 更新状态会导致 EOD 后 latest_date 不刷新（等下次回填才变）。
+    这里复用 baostock_backfill._update_sync_status 统一口径。
+    """
+    try:
+        from app.services.data.baostock_backfill import _update_sync_status
+        calendar = _get_calendar(provider_uri)
+        # code_range 仅用于 stock_count（len），用 codes 构造
+        code_range = {c.lower(): [calendar[0], calendar[-1]] for c in codes} if calendar else {}
+        await _update_sync_status(universe, provider_uri, calendar, code_range, sync_path="eod")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("EOD 后刷新同步状态失败（可稍后回填修正）: %s", e)
+
+
 async def incremental_sync_eod(
     universe: str = "csi300",
     days: int = 5,
@@ -619,6 +635,7 @@ async def incremental_sync_eod(
         # 无新候选交易日（窗口内日期已全部在日历中）→ 数据已最新，直接返回。
         # 不能落 akshare：否则会对整个股票池逐只爬一遍（限速 3req/s）纯属浪费。
         if not candidate_dates:
+            await _refresh_status_after_eod(provider_uri, universe, codes)
             return {
                 "ok": True, "source": "baostock", "universe": universe,
                 "success": 0, "failed": 0, "skipped": 0,
@@ -640,6 +657,7 @@ async def incremental_sync_eod(
             if result.get("ok") and result.get("success", 0) > 0:
                 await _insert_pg_rows(result.get("pg_rows") or [], source="baostock")
                 result.pop("pg_rows", None)  # 不入 eod_last_result.json（量大无意义）
+                await _refresh_status_after_eod(provider_uri, universe, codes)
                 return result
             logger.warning(
                 "baostock 主源未取到数据(ok=%s, success=%d)，回退 akshare: %s",
@@ -652,10 +670,12 @@ async def incremental_sync_eod(
         # 落到 akshare fallback
 
     # akshare fallback：逐只爬
-    return await _incremental_sync_eod_akshare(
+    result = await _incremental_sync_eod_akshare(
         codes, start_str, end_str, old_calendar, provider_uri,
         universe, days, overwrite, include_intraday,
     )
+    await _refresh_status_after_eod(provider_uri, universe, codes)
+    return result
 
 
 async def _insert_pg_rows(rows: list, source: str = "") -> None:

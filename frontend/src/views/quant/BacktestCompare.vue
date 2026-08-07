@@ -1,15 +1,11 @@
 <template>
   <PageContainer>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">回测对比</h1>
-        <p class="page-header__subtitle">对比多个回测结果的关键指标与净值曲线</p>
-      </div>
-      <div class="page-header__actions">
+    <PageHeader title="回测对比" subtitle="对比多个回测结果的关键指标与净值曲线">
+      <template #actions>
         <el-button @click="goBack">返回策略</el-button>
         <span v-if="resultIds.length" class="page-header__count">共 {{ resultIds.length }} 个回测结果</span>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <!-- 始终显示的回测结果选择器：页面主要交互入口 -->
     <SectionCard title="选择回测结果" subtitle="至少选择 2 个回测结果进行对比，支持搜索筛选">
@@ -173,6 +169,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { chartTheme, withAlpha } from '@/utils/chartTheme'
 import { fmt, numClass } from '@/utils/format'
@@ -608,38 +605,6 @@ onMounted(loadData)
 </script>
 
 <style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  flex-wrap: wrap;
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-  }
-
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
-
-  &__count {
-    font-size: var(--font-size-sm);
-    color: var(--text-tertiary);
-    white-space: nowrap;
-  }
-}
-
 .chart-area {
   height: 400px;
   width: 100%;
@@ -725,13 +690,5 @@ onMounted(loadData)
 
 .num {
   font-family: var(--font-mono);
-
-  &.is-positive {
-    color: var(--success);
-  }
-
-  &.is-negative {
-    color: var(--danger);
-  }
 }
 </style>

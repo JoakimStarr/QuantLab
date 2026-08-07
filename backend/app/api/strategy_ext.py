@@ -1,23 +1,32 @@
-"""策略扩展 API：参数扫描、回测对比、交易明细导出、walk-forward 滚动回测"""
+"""策略扩展 API：参数扫描、回测对比、交易明细导出、walk-forward 滚动回测、蒙特卡罗"""
 import csv
 import io
 import json
 import logging
+
 import pandas as pd
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Body, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.core.errors import AppError
 from app.core.database import async_session
-from app.schemas.common import ApiResponse
+from app.core.errors import AppError
 from app.models.task_result import TaskResult
-from app.services.strategy.manager import get_backtest_result
+from app.schemas.common import ApiResponse
 from app.services.strategy import backtest_status
+from app.services.strategy.manager import get_backtest_result
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/strategies", tags=["strategy-ext"])
+
+
+class MonteCarloRequest(BaseModel):
+    """回测指标 bootstrap 置信区间参数（可空，缺省用 config.monte_carlo）。"""
+    n_iter: int | None = None
+    block: int | None = None
+    ci_level: float | None = None
 
 
 async def _get_latest_task_result(strategy_id: int, task_type: str) -> TaskResult | None:
@@ -253,6 +262,74 @@ async def portfolio_report_api(
     return ApiResponse(ok=True, data=report)
 
 
+# ---------------- 蒙特卡罗模拟：回测指标 bootstrap 置信区间 ----------------
+
+@router.post("/backtest-results/{result_id}/monte-carlo")
+async def monte_carlo_api(
+    result_id: int,
+    payload: MonteCarloRequest = Body(default=None),
+):
+    """回测指标 bootstrap 置信区间（实时按需计算，不改库）。
+
+    从回测结果的 nav_curve 重建日收益，做 stationary block bootstrap，
+    输出 Sharpe/CAGR/最大回撤/胜率等核心指标的分布与 90% 置信区间，
+    回答"这条回测曲线的指标是不是靠运气"。
+    """
+    from app.core.config import settings
+    from app.core.executor import run_cpu
+    from app.services.quant.monte_carlo import (
+        bootstrap_metric_ci,
+        mc_cache_get,
+        mc_cache_set,
+    )
+
+    r = await get_backtest_result(result_id)
+    if r is None:
+        return ApiResponse(ok=False, error={
+            "code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
+
+    nav_curve = r.get("nav_curve") or {}
+    dates, portfolio = None, None
+    if isinstance(nav_curve, dict):
+        dates = nav_curve.get("dates") or []
+        portfolio = nav_curve.get("portfolio") or []
+    elif isinstance(nav_curve, list):
+        dates = [p.get("date") for p in nav_curve]
+        portfolio = [p.get("nav") for p in nav_curve]
+    if not dates or not portfolio or len(dates) != len(portfolio):
+        return ApiResponse(ok=False, error={
+            "code": "NO_NAV", "message": "回测结果缺少净值曲线数据", "status": 422})
+
+    nav = pd.Series(portfolio, index=pd.to_datetime(dates)).astype(float)
+    returns = nav.pct_change().dropna()
+    if len(returns) == 0:
+        return ApiResponse(ok=False, error={
+            "code": "NO_RETURNS", "message": "净值曲线过短，无法模拟", "status": 422})
+
+    mc = settings.monte_carlo
+    n_iter = payload.n_iter if payload and payload.n_iter else mc.bootstrap_iterations
+    block = payload.block if payload and payload.block else mc.bootstrap_block
+    ci_level = payload.ci_level if payload and payload.ci_level else mc.bootstrap_ci
+    # 进程内 LRU 缓存：同 (result_id, 参数) 命中免重算（backtest_result 行不可变）
+    cache_key = (result_id, n_iter, block, ci_level)
+    cached = mc_cache_get(cache_key)
+    if cached is not None:
+        return ApiResponse(ok=True, data=cached)
+
+    result = await run_cpu(
+        bootstrap_metric_ci,
+        returns.to_numpy(),
+        n_iter=n_iter,
+        block=block,
+        ci_level=ci_level,
+        seed=42,
+    )
+    result["result_id"] = result_id
+    result["period"] = {"start": r.get("start_date"), "end": r.get("end_date")}
+    mc_cache_set(cache_key, result)
+    return ApiResponse(ok=True, data=result)
+
+
 # ---------------- Walk-forward 滚动回测（添加14） ----------------
 
 @router.post("/{strategy_id}/walk-forward")
@@ -313,6 +390,7 @@ async def walk_forward_api(
     async def _wf_task():
         try:
             import asyncio
+
             from app.services.quant.walk_forward import build_score_df_from_exprs, run_walk_forward
             loop = asyncio.get_running_loop()
             score_df = await loop.run_in_executor(

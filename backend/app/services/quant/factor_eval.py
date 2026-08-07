@@ -915,6 +915,22 @@ def deep_analyze_factor(
     ic_significance = compute_ic_significance(
         pd.Series(ic_timeseries["ic_series"]), lags=horizon
     )
+    # 非参数显著性补充：逐日截面置换检验（不依赖 IC 分布正态性/自相关假设）。
+    # 容错：置换失败不应拖垮整个深度分析，降级为"未计算"。
+    from app.services.quant.monte_carlo import permutation_ic_test
+
+    _mc = settings.monte_carlo
+    try:
+        perm_test = permutation_ic_test(
+            factor_df, label_df,
+            n_permutations=_mc.permutation_n,
+            alpha=_mc.permutation_alpha,
+            seed=42,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("因子置换检验失败，跳过 perm_pvalue", exc_info=True)
+        perm_test = {"p_value": None, "significant": False,
+                     "n_permutations": 0, "note": "置换检验失败"}
     quantile_nav = compute_quantile_nav_by_horizon(
         factor_df, prices_df, n_groups=n_groups, horizon=horizon
     )
@@ -941,6 +957,11 @@ def deep_analyze_factor(
             "t_stat": ic_significance["t_stat"],
             "p_value": ic_significance["p_value"],
             "significant": ic_significance["significant"],
+            # 置换检验（非参数）
+            "perm_pvalue": perm_test["p_value"],
+            "perm_significant": perm_test["significant"],
+            "perm_n": perm_test["n_permutations"],
+            "perm_note": perm_test["note"],
             "avg_turnover": turnover_curve["avg_turnover"],
             "annual_turnover": turnover_curve["annual_turnover"],
             "long_short_annual_return": quantile_nav["long_short_annual_return"],

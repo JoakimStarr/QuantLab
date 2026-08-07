@@ -537,18 +537,21 @@ async def _load_all_macro_series() -> dict[tuple[str, str], pd.Series]:
     return out
 
 
-def forward_fill_to_daily(provider_uri: str, field_name: str, series: pd.Series) -> np.ndarray:
+def forward_fill_to_daily(provider_uri: str, field_name: str, series: pd.Series,
+                          calendar: list | None = None) -> np.ndarray:
     """把月度序列按日历 forward-fill 成日频数组（长度=日历长度）。
 
     Args:
         provider_uri: qlib 数据目录（读 calendars/day.txt）
         field_name: 仅用于日志
         series: 索引为 available_date(datetime) 的月频序列，值已排序
+        calendar: 日历列表（可复用，避免逐字段重复读盘）；None 时内部读取
 
     Returns:
         np.ndarray[float32]: 与日历等长的数组，available_date 当天起生效并持续到下一个值
     """
-    calendar = _get_calendar(provider_uri)
+    if calendar is None:
+        calendar = _get_calendar(provider_uri)
     if not calendar:
         logger.warning("日历为空，无法 forward-fill %s", field_name)
         return np.array([], dtype=np.float32)
@@ -558,8 +561,7 @@ def forward_fill_to_daily(provider_uri: str, field_name: str, series: pd.Series)
     cal_dates = pd.to_datetime(calendar)
     # reindex 到日历：月频值落在日历日期上，其余 NaN；再 forward-fill
     daily = series.reindex(cal_dates, method="ffill")
-    values = daily.values.astype(np.float32)
-    return np.nan_to_num(values, nan=np.nan)
+    return daily.values.astype(np.float32)
 
 
 def broadcast_to_all_stocks(provider_uri: str, field_name: str, values: np.ndarray) -> int:
@@ -635,6 +637,8 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
     total_fields = len(all_field_specs)
     total_written = 0
     series_map = await _load_all_macro_series()  # 一次批量加载全部字段，避免逐字段 N+1
+    # 日历读取一次复用，避免逐字段重读 day.txt（51 个字段 = 51 次文件IO）
+    calendar = await run_io_cpu(_get_calendar, qlib_dir)
     for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
         if progress_cb:
             progress_cb(
@@ -645,14 +649,15 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
         if series is None or series.empty:
             logger.warning("宏观字段 %s.%s 无数据，跳过", indicator_key, field_name)
             continue
-        values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series)
+        values = await run_io_cpu(forward_fill_to_daily, qlib_dir, field_name, series, calendar)
         n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
         total_written += n
         logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
     return total_written
 
 
-async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool = True) -> dict:
+async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool = True,
+                                progress_cb=None) -> dict:
     """宏观指标同步主入口：抓取 → 入库 →（可选）forward-fill 广播写 bin。
 
     broadcast=False（fetch-only，API 默认）：只拉数据入库 PG，不写 bin，
@@ -661,6 +666,10 @@ async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool
 
     broadcast=True（数据校验/补齐阶段调用）：拉取 + 广播，带全局进度；
     此时通常无其他同步在跑，日历也已对齐到最终长度。
+
+    progress_cb: 传入时由调用方统一管理全局进度（如一键全同步并行阶段），
+        本函数不再 init/finish/clear 共享进度文件，只通过 ``progress_cb(pct, msg)``
+        上报进度——避免多个并行阶段互相覆盖进度文件造成竞态。
     """
     qlib_dir = provider_uri or settings.qlib_provider_path
 
@@ -672,30 +681,31 @@ async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool
         return {"ok": True, "source": "eastmoney+akshare", "inserted": inserted,
                 "fields_written": 0, "by_indicator": summary}
 
-    init_progress("macro", "eastmoney", writes_bins=True, kind="macro")
+    # 有外部进度回调（并行阶段）时不操作共享进度文件，避免并行阶段互相覆盖
+    owns_progress = progress_cb is None
+    report = progress_cb or (lambda pct, msg: update_progress(pct=pct, status="running", message=msg))
+    if owns_progress:
+        init_progress("macro", "eastmoney", writes_bins=True, kind="macro")
     summary: dict[str, int] = {}
     try:
-        all_rows, summary = await _fetch_all_macro_rows(
-            progress_cb=lambda pct, msg: update_progress(pct=pct, status="running", message=msg),
-        )
-        update_progress(pct=42, status="running", message="写入数据库...")
+        all_rows, summary = await _fetch_all_macro_rows(progress_cb=report)
+        report(42, "写入数据库...")
         inserted = await upsert_macro(all_rows)
         logger.info("宏观入库: 新增 %d 行", inserted)
 
-        total_written = await broadcast_macro_to_bins(
-            qlib_dir,
-            progress_cb=lambda pct, msg: update_progress(pct=pct, status="running", message=msg),
-        )
+        total_written = await broadcast_macro_to_bins(qlib_dir, progress_cb=report)
 
-        finish_progress(True)
-        await asyncio.sleep(3)
-        clear_progress()
+        if owns_progress:
+            finish_progress(True)
+            await asyncio.sleep(3)
+            clear_progress()
         return {"ok": True, "source": "eastmoney+akshare", "inserted": inserted,
                 "fields_written": total_written, "by_indicator": summary}
     except Exception as e:
-        finish_progress(False, str(e))
-        await asyncio.sleep(3)
-        clear_progress()
+        if owns_progress:
+            finish_progress(False, str(e))
+            await asyncio.sleep(3)
+            clear_progress()
         logger.exception("宏观同步失败")
         raise
 

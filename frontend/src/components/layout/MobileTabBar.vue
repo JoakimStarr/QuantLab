@@ -15,15 +15,9 @@
 
 <script setup>
 import { resolveIcon } from '@/utils/icons'
+import { mobileTabs } from '@/config/nav'
 
-const tabItems = [
-  { path: '/', label: '首页', icon: 'DataAnalysis' },
-  { path: '/quant/factors', label: '因子', icon: 'Coin' },
-  { path: '/quant/strategy', label: '回测', icon: 'TrendCharts' },
-  { path: '/quant/mining', label: '挖掘', icon: 'MagicStick' },
-  { path: '/quant/data', label: '数据', icon: 'SetUp' },
-  { path: '/system/logs', label: '日志', icon: 'Document' },
-]
+const tabItems = mobileTabs
 </script>
 
 <style scoped lang="scss">

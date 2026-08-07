@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy import select
 
@@ -69,8 +70,29 @@ async def _get_index_catalog() -> list[dict]:
         return [{"code": r.code, "name": r.name or "", "type": r.type or "index"} for r in rows.all()]
 
 
-async def _build_search_catalog() -> list[dict]:
-    """构建搜索清单：A 股（type=stock）+ 注册指数/ETF（type=index/etf），预计算拼音。"""
+# 搜索清单进程级缓存：拼音计算（pypinyin）对每只股票较慢，若每个搜索请求都重建
+# （~5000 只 A 股 + 指数重算首字母/全拼）就会让每次键入都卡顿。缓存 TTL 与股票列表一致。
+_search_catalog_cache: Optional[list[dict]] = None
+_search_catalog_updated_at: Optional[datetime] = None
+_SEARCH_CATALOG_TTL_SECONDS = 3600
+
+
+async def _build_search_catalog(force_refresh: bool = False) -> list[dict]:
+    """构建搜索清单：A 股（type=stock）+ 注册指数/ETF（type=index/etf），预计算拼音。
+
+    拼音映射（含 lazy_pinyin 逐股计算）成本高，结果做进程级 TTL 缓存，
+    避免每个 /stocks/search 请求都重建整套清单。
+    """
+    global _search_catalog_cache, _search_catalog_updated_at
+    now = datetime.now()
+    if (
+        not force_refresh
+        and _search_catalog_cache is not None
+        and _search_catalog_updated_at is not None
+        and (now - _search_catalog_updated_at).total_seconds() < _SEARCH_CATALOG_TTL_SECONDS
+    ):
+        return _search_catalog_cache
+
     items: list[dict] = []
     for s in await _get_stock_catalog():
         initials, pinyin = _get_name_keys(str(s.get("name", "")))
@@ -92,6 +114,9 @@ async def _build_search_catalog() -> list[dict]:
             "initials": initials,
             "pinyin": pinyin,
         })
+
+    _search_catalog_cache = items
+    _search_catalog_updated_at = now
     return items
 
 
@@ -158,6 +183,10 @@ async def data_preview_api(
             df = None
         if df is None or df.empty:
             return []
+        # 过滤无实际数据的日历日（"今天"数据未发布时 qlib 返回 NaN 行）：
+        # 与 /market/kline 一致，避免预览列表出现全 null 的一行
+        close_series = df["$close"]
+        df = df[close_series.notna()]
         df = df.sort_index(ascending=False).head(limit)
         rows = []
         for (inst, dt), row in df.iterrows():
@@ -190,7 +219,7 @@ async def data_preview_api(
 
 @router.get("/stocks/search")
 async def search_stocks_api(
-    q: str = Query(..., min_length=1, description="股票名称 / 首字母 / 代码"),
+    q: str = Query("", description="股票名称 / 首字母 / 代码，空返回空列表"),
     limit: int = Query(20, ge=1, le=50, description="返回条数上限"),
 ):
     """搜索证券（A 股 + 注册指数/ETF）：支持中文名称、拼音首字母和代码。"""
@@ -482,6 +511,7 @@ async def eod_result_api():
 async def sync_full_api(
     years: int = Query(5, ge=0, le=30, description="A股回填年数（0=仅增量补最新）"),
     universe: str = Query("all", description="股票池（仅状态标签，回填本质是全市场）"),
+    refresh_misc: bool = Query(False, description="强制重拉 stock_basic/stock_industry（默认已入库则跳过）"),
 ):
     """一键全同步：按依赖顺序串联 A股回填 → 指数 → 宏观 → 财报 → 外盘（独立 worker 后台执行）。
 
@@ -495,11 +525,12 @@ async def sync_full_api(
     ensure_no_bin_sync("full")
 
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("full", universe, years=years)
+    spawn_sync_worker("full", universe, years=years, refresh_misc=refresh_misc)
     return ApiResponse(ok=True, data={
         "message": f"一键全同步已提交（A股回填 {years} 年 → 指数 → 宏观 → 财报 → 外盘），独立进程后台执行中",
         "universe": universe,
         "years": years,
+        "refresh_misc": refresh_misc,
     })
 
 

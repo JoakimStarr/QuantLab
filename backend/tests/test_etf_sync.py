@@ -75,7 +75,7 @@ def test_sync_etf_writes_bins_and_pg_rows(tmp_path):
 
     with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
                side_effect=lambda d: _mock_etf_market(d)):
-        r = es.sync_etf_to_qlib(str(base), [new_date], calendar, overwrite=True)
+        r = es.sync_etf_to_qlib(str(base), [new_date], calendar)
 
     assert r["ok"]
     assert r["success"] == 2
@@ -105,6 +105,38 @@ def test_sync_etf_writes_bins_and_pg_rows(tmp_path):
     assert rows["SH510300"]["pct_chg"] == 1.25
     assert rows["SH510300"]["amount"] == pytest.approx(4050000.0)
     assert rows["SZ159915"]["trade_date"] == new_date
+
+
+def test_sync_etf_writes_bins_for_existing_calendar_date(tmp_path):
+    """回归：候选日期已在 day.txt 中时也必须写 bin（此前 overwrite=False 全跳过）。
+
+    baostock ETF 增量路径的候选日期全部来自 A 股主日历，_sync_stock_bin 若用
+    overwrite=False 只写"不在日历的新日期"→ bin 一行不写、数据只落 etf_daily，
+    导致 bin 全 NaN。这里模拟增量同步（日期在日历内）验证 bin 有值。
+    """
+    import os
+
+    base = tmp_path / "qlib"
+    (base / "calendars").mkdir(parents=True)
+    (base / "features").mkdir(parents=True)
+    (base / "instruments").mkdir(parents=True)
+    calendar = ["2026-01-02", "2026-01-05", "2026-01-06"]
+    with open(base / "calendars" / "day.txt", "w") as f:
+        f.write("\n".join(calendar) + "\n")
+    # 候选日期是日历中已有的 01-05（增量同步只传缺数据的日期）
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=lambda d: _mock_etf_market(d)):
+        r = es.sync_etf_to_qlib(str(base), ["2026-01-05"], calendar)
+
+    assert r["ok"]
+    assert r["success"] == 2
+    # 01-05 在日历内：必须写入 bin（这是 bug 修复的核心断言）
+    from app.services.data.eod_incremental import _read_bin
+    close, start = _read_bin(os.path.join(str(base), "features", "sh510300", "close.day.bin"))
+    assert start == 0
+    assert len(close) == len(calendar)
+    assert close[1] == pytest.approx(4.05, abs=1e-4)  # 01-05 位置有值
+    assert np.isnan(close[0])  # 01-02 未请求，仍为 NaN
 
 
 def test_sync_etf_skips_empty_and_non_trading(tmp_path):

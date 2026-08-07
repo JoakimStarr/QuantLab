@@ -88,3 +88,4 @@ data/sync_progress.json
 data/baostock_requests.json
 data/eod_last_result.json
 data/external_market.json
+data/etf_tencent_done.json

@@ -1,11 +1,6 @@
 <template>
   <PageContainer narrow>
-    <header class="page-header">
-      <div class="page-header__lead">
-        <h1 class="page-header__title">数据管理</h1>
-        <p class="page-header__subtitle">管理 qlib 数据源同步与新鲜度</p>
-      </div>
-    </header>
+    <PageHeader title="数据管理" subtitle="管理 qlib 数据源同步与新鲜度" />
 
     <!-- KPI 概览 -->
     <div class="kpi-grid mb-6">
@@ -17,7 +12,10 @@
       <div class="kpi-card">
         <div class="kpi-label">最新交易日</div>
         <div class="kpi-value">{{ currentStatus.latest_date || '--' }}</div>
-        <div class="kpi-sub">{{ daysSinceUpdate }} 天前更新</div>
+        <div class="kpi-sub">
+          {{ daysSinceUpdate }} 天前更新
+          <el-tag v-if="dataNotToday" size="small" type="warning" class="ml-2">今日数据未发布</el-tag>
+        </div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">数据时间范围</div>
@@ -96,6 +94,7 @@
             <el-button type="primary" @click="startFullSync" :loading="syncing" :disabled="!qlib.available || syncing">
               {{ syncing ? '同步中...' : '开始同步' }}
             </el-button>
+            <el-checkbox v-model="refreshMisc" size="small">刷新基础资料/行业</el-checkbox>
           </div>
           <el-dropdown trigger="click" @command="onSyncMaintenance" :disabled="!qlib.available || syncing">
             <el-button :loading="anySyncing" :disabled="!qlib.available || syncing">
@@ -380,39 +379,8 @@
       </el-table>
     </SectionCard>
 
-    <!-- 数据预览对话框 -->
-    <el-dialog v-model="previewVisible" title="数据预览" width="80%" :close-on-click-modal="true">
-      <div class="preview-toolbar">
-        <el-input
-          v-model="previewCodeInput"
-          placeholder="输入股票代码如 sh600000 或股票池 csi300"
-          style="width: 260px"
-          @keyup.enter="loadPreview(previewCodeInput)"
-        />
-        <el-button @click="loadPreview(previewCodeInput)" size="small">查询</el-button>
-        <el-button @click="loadPreview()" size="small">最近数据</el-button>
-        <span class="preview-hint-inline">
-          {{ previewCode ? '当前: ' + previewCode : '最近数据' }}
-          ({{ previewData.length }} 条)
-        </span>
-      </div>
-      <el-table :data="previewData" size="small" stripe max-height="500" v-loading="previewLoading">
-        <el-table-column
-          v-for="col in previewColumns"
-          :key="col"
-          :prop="col"
-          :label="col"
-          min-width="120"
-          show-overflow-tooltip
-        />
-        <template #empty>
-          <div class="preview-empty">
-            <p v-if="!previewLoading">暂无数据，请检查股票代码是否正确，或尝试输入其他代码</p>
-            <p v-else>加载中...</p>
-          </div>
-        </template>
-      </el-table>
-    </el-dialog>
+    <!-- 数据预览对话框（独立子组件，通过 ref.open(code) 调用） -->
+    <DataPreviewDialog ref="previewDialogRef" />
 
     <!-- 增量EOD同步对话框 -->
     <el-dialog v-model="showEodDialog" title="增量EOD同步" width="460px" :close-on-click-modal="false">
@@ -651,18 +619,20 @@
 
 <script setup>
 defineOptions({ name: 'QuantData' })
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled, ArrowDown } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { usePolling } from '@/composables/usePolling'
+import DataPreviewDialog from '@/components/quant/DataPreviewDialog.vue'
 import { formatDuration, formatTime, humanSize } from '@/utils/format'
 import {
   getQuantDataStatus,
   syncFullData,
   getQlibStatus,
-  getDataPreview,
   getSyncHistory,
   getSyncStats,
   eodSync,
@@ -684,14 +654,9 @@ const loading = ref(false)
 const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0, disk_usage: null })
 const syncProgress = ref(null)
-let progressTimer = null
 // 轮询连续拿不到进度（data=null）的次数，超过阈值停止轮询，避免空转泄漏
 let nullPollCount = 0
-const previewVisible = ref(false)
-const previewData = ref([])
-const previewLoading = ref(false)
-const previewCode = ref('')
-const previewCodeInput = ref('')
+const previewDialogRef = ref(null)
 const syncHistory = ref([])
 const syncStats = ref(null)
 const indicesList = ref([])
@@ -701,6 +666,7 @@ const eodSyncing = ref(false)
 const eodResult = ref(null)
 const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, overwrite: false })
 const syncYears = ref(5)
+const refreshMisc = ref(false) // 一键全同步时是否顺带刷新基础资料/行业（默认关，日常不需要）
 const indexSyncing = ref(false)
 const etfSyncing = ref(false)
 const fundamentalSyncing = ref(false)
@@ -732,6 +698,14 @@ const daysSinceUpdate = computed(() => {
   return diff
 })
 
+// 今日是交易日但 baostock 数据未发布/未拉到（latest_date 落后于今天）→ 提示而非异常
+const dataNotToday = computed(() => {
+  if (!currentStatus.value.latest_date) return false
+  const latest = new Date(currentStatus.value.latest_date + 'T00:00:00')
+  const now = new Date()
+  return latest.toDateString() < now.toDateString()
+})
+
 const syncProgressText = computed(() => {
   const kind = syncProgress.value?.kind || syncProgress.value?.data_source
   if (kind === 'repair') return '正在执行数据补齐（独立进程后台运行），请耐心等待...'
@@ -746,11 +720,6 @@ const eodResultTitle = computed(() => {
   return `同步完成: 成功 ${r.success ?? 0}/${r.total_stocks ?? 0}，新增 ${r.new_dates?.length || 0} 个交易日`
 })
 
-const previewColumns = computed(() => {
-  if (!previewData.value.length) return []
-  return Object.keys(previewData.value[0])
-})
-
 function getStatusClass(status) {
   if (status === 'ok') return 'success'
   if (status === 'syncing') return 'warning'
@@ -758,20 +727,9 @@ function getStatusClass(status) {
   return ''
 }
 
-async function loadPreview(code) {
-  previewCode.value = code || ''
-  previewCodeInput.value = code || ''
-  previewVisible.value = true
-  previewLoading.value = true
-  try {
-    const data = await getDataPreview(code, 20)
-    previewData.value = data?.items || data || []
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('数据预览加载失败')
-    previewData.value = []
-  } finally {
-    previewLoading.value = false
-  }
+// 数据预览：委托给独立子组件（DataPreviewDialog）打开并加载
+function loadPreview(code) {
+  previewDialogRef.value?.open(code || '')
 }
 
 async function loadSyncHistory() {
@@ -787,9 +745,9 @@ async function loadStatus() {
   try {
     const data = await getQuantDataStatus()
     statusList.value = data?.items || []
-    // syncing 状态由 progressTimer 统一轮询；检测到外部（如定时任务）触发的 syncing 时启动进度轮询
+    // syncing 状态由进度轮询统一管理；检测到外部（如定时任务）触发的 syncing 时启动
     const cur = statusList.value[0]
-    if (cur && cur.status === 'syncing' && !progressTimer && !syncing.value) {
+    if (cur && cur.status === 'syncing' && !progressPolling.isPolling.value && !syncing.value) {
       syncing.value = true
       startProgressPolling()
     }
@@ -844,7 +802,7 @@ async function startFullSync() {
   syncing.value = true
   syncProgress.value = null
   try {
-    await syncFullData(syncYears.value)
+    await syncFullData(syncYears.value, 'all', refreshMisc.value)
     ElMessage.success(`一键全同步已提交（A股回填 ${syncYears.value} 年 → 指数 → 宏观 → 财报 → 外盘，后台执行）`)
     startProgressPolling()
   } catch (e) {
@@ -854,10 +812,8 @@ async function startFullSync() {
 }
 
 function startProgressPolling() {
-  if (progressTimer) clearInterval(progressTimer)
   nullPollCount = 0
-  pollSyncProgress()
-  progressTimer = setInterval(pollSyncProgress, 1000)
+  progressPolling.start()
 }
 
 // 任务标签：优先用进度文件的 kind（任务归属），回退到 data_source（真实数据源）
@@ -884,10 +840,7 @@ async function pollSyncProgress() {
     const data = await getSyncProgress()
     syncProgress.value = data
     if (data?.status === 'done' || data?.status === 'failed') {
-      if (progressTimer) {
-        clearInterval(progressTimer)
-        progressTimer = null
-      }
+      progressPolling.stop()
       nullPollCount = 0
       syncing.value = false
       const taskKey = data?.kind || data?.data_source
@@ -920,10 +873,7 @@ async function pollSyncProgress() {
       // 连续一段时间无进度（worker 未写入/已退出且无残留文件），停止轮询
       nullPollCount += 1
       if (nullPollCount > 30) {
-        if (progressTimer) {
-          clearInterval(progressTimer)
-          progressTimer = null
-        }
+        progressPolling.stop()
         nullPollCount = 0
         syncing.value = false
         eodSyncing.value = false
@@ -936,6 +886,9 @@ async function pollSyncProgress() {
     // 静默失败，继续轮询
   }
 }
+
+// 进度轮询：每 1s 拉取同步进度；done/failed 或连续无数据时自动停止
+const progressPolling = usePolling(pollSyncProgress, 1000)
 
 async function doEodSync() {
   eodSyncing.value = true
@@ -1238,36 +1191,9 @@ watch(
   },
   { immediate: true }
 )
-onBeforeUnmount(() => {
-  if (progressTimer) clearInterval(progressTimer)
-})
 </script>
 
 <style scoped lang="scss">
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-  animation: fadeInUp 0.5s var(--ease-out-expo);
-
-  &__lead {
-    flex: 1;
-    min-width: 0;
-  }
-  &__title {
-    font-size: var(--font-size-2xl);
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 var(--space-xs);
-  }
-  &__subtitle {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-  }
-}
 .card-header {
   display: flex;
   align-items: center;
@@ -1553,30 +1479,6 @@ onBeforeUnmount(() => {
 
 .mt-6 {
   margin-top: 24px;
-}
-.preview-hint {
-  font-size: var(--font-size-base);
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-}
-
-.preview-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.preview-hint-inline {
-  font-size: var(--font-size-base);
-  color: var(--text-secondary);
-  margin-left: auto;
-}
-.preview-empty {
-  padding: 32px 0;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: var(--font-size-base);
 }
 
 .quick-preview-bar {

@@ -50,6 +50,8 @@ vectorbt>=1.0.0
 exchange-calendars>=4.5.0
 # 绩效指标：empyrical 为核心（纯 numpy 快）；quantstats 已移除（仅 HTML tear-sheet，缺失时降级跳过）
 empyrical-reloaded>=0.5.12
+# 蒙特卡罗模拟：arch.bootstrap（StationaryBootstrap 回测指标置信区间）
+arch>=7.0
 # 数据库迁移
 alembic>=1.13
 

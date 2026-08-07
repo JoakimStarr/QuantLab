@@ -137,6 +137,15 @@ class QuantSettings(SettingsBaseModel):
     auto_retry_sync: bool = False
 
 
+class MonteCarloSettings(SettingsBaseModel):
+    """蒙特卡罗模拟默认参数（回测指标 bootstrap + 因子 IC 置换检验）。"""
+    bootstrap_iterations: int = 1000
+    bootstrap_block: int = 20  # stationary bootstrap 平均块长（交易日）
+    bootstrap_ci: float = 0.9  # 置信水平
+    permutation_n: int = 500  # 因子 IC 置换检验次数
+    permutation_alpha: float = 0.05  # 置换检验显著性水平
+
+
 class MiningSettings(SettingsBaseModel):
     automl: dict[str, Any] = Field(default_factory=lambda: {"combo_method": "lightgbm"})
     llm: dict[str, Any] = Field(
@@ -276,6 +285,7 @@ class Settings(BaseSettings):
     logging: LoggingSettings = LoggingSettings()
     quant: QuantSettings = QuantSettings()
     mining: MiningSettings = MiningSettings()
+    monte_carlo: MonteCarloSettings = MonteCarloSettings()
     task: TaskSettings = TaskSettings()
 
     # -- API keys（从 .env / 环境变量加载） --
@@ -316,6 +326,7 @@ class Settings(BaseSettings):
             "logging": "logging",
             "quant": "quant",
             "mining": "mining",
+            "monte_carlo": "monte_carlo",
             "task": "task",
         }
         for section, field_name in section_map.items():

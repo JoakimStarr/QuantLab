@@ -262,7 +262,9 @@ async def check_calendar(provider_uri: str) -> dict:
     missing_in_day_txt = diff["missing_in_day_txt"]
     missing_in_stock_daily = diff["missing_in_stock_daily"]
     # 今天的日期若在 baostock 发布时间点前出现，是"尚未发布"而非缺口，过滤掉
+    # （day.txt 由回填写入时已含今天，但 stock_daily 要收盘后才有数据）
     pg_missing_dates = _exclude_pending_today(diff["pg_missing_dates"])
+    missing_in_stock_daily = _exclude_pending_today(missing_in_stock_daily)
 
     status = _status_from_counts(
         error=len(missing_in_day_txt) + len(missing_in_stock_daily),

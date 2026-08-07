@@ -1,14 +1,20 @@
 """策略 API：CRUD、回测执行、结果查询。"""
 import logging
-from fastapi import APIRouter, Query, BackgroundTasks
+
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
-from app.services.strategy.manager import (
-    list_strategies, get_strategy, create_strategy, archive_strategy,
-    run_strategy_backtest, list_backtest_results, get_backtest_result,
-)
 from app.services.strategy import backtest_status
+from app.services.strategy.manager import (
+    archive_strategy,
+    create_strategy,
+    get_backtest_result,
+    get_strategy,
+    list_backtest_results,
+    list_strategies,
+    run_strategy_backtest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +181,18 @@ async def run_backtest_api(
     if strategy is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
     backtest_status.set_running(strategy_id)
+    from app.core.audit_log import audit
+
+    audit(
+        "backtest_submit",
+        resource=f"strategy:{strategy_id}",
+        detail=f"提交策略回测（{backend} 后端）",
+        backend=backend,
+        start_date=start_date,
+        end_date=end_date,
+        universe=universe,
+        asset_class=asset_class,
+    )
     background_tasks.add_task(
         _run_backtest_task, strategy_id, start_date, end_date, backend, initial_capital,
         trade_unit, deal_price, slippage_bps, cost_buy, cost_sell, min_cost, universe,

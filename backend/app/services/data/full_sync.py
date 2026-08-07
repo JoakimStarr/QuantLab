@@ -31,7 +31,7 @@ from app.services.data.sync_progress import (
 logger = logging.getLogger(__name__)
 
 
-async def run_full_sync(years: int, universe: str = "all") -> dict:
+async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = False) -> dict:
     """一键全同步主入口（worker 子进程中执行）。"""
     qlib_dir = settings.qlib_provider_path
     init_progress(universe, "full", writes_bins=True, kind="full")
@@ -52,7 +52,8 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
                         message=f"阶段1/6: baostock A股回填 {years} 年...")
         from app.services.data.baostock_backfill import run_baostock_backfill
 
-        backfill = await run_baostock_backfill(years=years, universe=universe)
+        backfill = await run_baostock_backfill(years=years, universe=universe,
+                                               refresh_misc=refresh_misc)
         steps.append(f"a-share({backfill.get('stocks', 0)}stocks)")
         logger.info("阶段1/6 完成: %s", backfill)
 
@@ -72,29 +73,40 @@ async def run_full_sync(years: int, universe: str = "all") -> dict:
         steps.append(f"etf({etf.get('etf_count', 0)}etfs/{etf.get('pool_count', 0)}pool)")
         logger.info("阶段3/6 完成: %s", etf)
 
-        # 阶段 4/6: 宏观指标 拉取 + 广播
-        _restage(56, "阶段4/6: 宏观指标同步+广播（PMI/CPI/利率/汇率等）...")
-        from app.services.data.macro_sync import run_macro_sync_task
-
-        await run_macro_sync_task(broadcast=True)
-        steps.append("macro")
-        logger.info("阶段4/6 完成: 宏观同步+广播")
-
-        # 阶段 5/6: 财报 拉取(增量) + PIT 广播
-        _restage(68, "阶段5/6: 财报同步（增量拉取）+广播...")
+        # 阶段 4-6/6: 宏观 / 财报 / 外盘 —— 三者都不连 baostock（无并发连接限制），
+        # 并行下载拉取（akshare/eastmoney 各自独立，互不依赖）。
+        # 并发约束：它们都会写 bin，但写的是**不同字段文件**（$pmi/$roe/$us_*_ret），
+        # 互不冲突；共享进度文件由本函数统一管理，各阶段通过 progress_cb 上报，
+        # 避免多个并行阶段互相 init/finish/clear 进度造成竞态。
+        _restage(56, "阶段4-6/6: 宏观/财报/外盘 并行同步+广播...")
+        from app.services.data.macro_sync import sync_macro_indicators
         from app.services.data.fundamental_sync import run_financial_sync
-
-        fin = await run_financial_sync(broadcast=True)
-        steps.append(f"fin({fin.get('fetched', 0)}fetched/{fin.get('inserted', 0)}rows)")
-        logger.info("阶段5/6 完成: %s", fin)
-
-        # 阶段 6/6: 外盘数据 拉取 + 广播
-        _restage(88, "阶段6/6: 外盘隔夜情绪因子同步...")
         from app.services.data.external_market import sync_external_market
 
-        ext = await sync_external_market()
+        def _cb(base: float, span: float, label: str):
+            def cb(pct: float, msg: str) -> None:
+                update_progress(pct=base + span * pct / 100.0, status="running",
+                                message=f"{label}: {msg}")
+            return cb
+
+        # 财报的进度回调签名是 (i, n, msg)——按计数上报，这里换算成百分比
+        def _cb_fin(base: float, span: float):
+            def cb(i: int, n: int, msg: str) -> None:
+                update_progress(pct=base + span * i / max(n, 1), status="running",
+                                message=f"财报: {msg}")
+            return cb
+
+        # 并行执行：macro(56-72) / financial(56-86，大头) / external(56-64)
+        fin_task = asyncio.create_task(run_financial_sync(broadcast=True, progress_cb=_cb_fin(56, 30)))
+        macro_task = asyncio.create_task(sync_macro_indicators(broadcast=True, progress_cb=_cb(56, 10, "宏观")))
+        ext_task = asyncio.create_task(sync_external_market())
+        fin = await fin_task
+        macro = await macro_task
+        ext = await ext_task
+        steps.append(f"macro({macro.get('inserted', 0)}rows/{macro.get('fields_written', 0)}fields)")
+        steps.append(f"fin({fin.get('fetched', 0)}fetched/{fin.get('inserted', 0)}rows)")
         steps.append("external")
-        logger.info("阶段6/6 完成: %s", ext)
+        logger.info("阶段4-6/6 完成: macro=%s fin=%s ext=%s", macro, fin, ext)
 
         update_progress(pct=100, status="running", message=f"全同步完成: {', '.join(steps)}")
         finish_progress(True)
