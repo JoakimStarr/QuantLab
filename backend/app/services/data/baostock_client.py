@@ -108,19 +108,26 @@ def ensure_logout():
     """幂等登出：仅在已登录时调用 bs.logout()，线程安全。
 
     由爬取进程在 finally / 信号 handler 中调用，确保退出进程前释放服务端会话。
+
+    baostock 服务端异常时（数据查询不响应），logout 也可能阻塞在 socket 读上。
+    因此把 bs.logout() 放入 **daemon 线程** 执行——即使卡住也不阻塞 worker 退出
+    （否则 worker 卡在登出、爬取锁不释放，后续所有 baostock 同步全被挡）。
     """
     global _logged_in
     with _login_lock:
         if not _logged_in:
             return
+        _logged_in = False
+
+    def _do_logout():
         import baostock as bs
         try:
             bs.logout()
-        except Exception as e:
-            logger.warning("baostock logout 异常: %s", e)
-        finally:
-            _logged_in = False
             logger.info("baostock logout OK")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("baostock logout 异常: %s", e)
+
+    threading.Thread(target=_do_logout, daemon=True, name="baostock-logout").start()
 
 
 def _logout():

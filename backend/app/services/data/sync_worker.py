@@ -220,8 +220,11 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
 
                 days = args.days or (args.years * 365 if args.years else 730)
                 if (args.source or "baostock") == "tencent":
-                    # 腾讯 qfq 对齐回填：只拉现有时间范围，不拉全历史
-                    result = await sync_etf_tencent_aligned(days=days, overwrite=args.overwrite)
+                    # 腾讯 qfq 对齐回填：只拉现有时间范围，不拉全历史。
+                    # 必须 overwrite=True：对齐窗口内的日期都已在 day.txt 中，
+                    # 若传 False，_sync_stock_bin 只写"不在日历的新日期"→ 全部被跳过，
+                    # 结果 bin 全 NaN 但 success=1622（只写 PG 不写 bin）。
+                    result = await sync_etf_tencent_aligned(days=days, overwrite=True)
                 else:
                     result = await sync_etf_task(days=days, overwrite=args.overwrite)
                 logger.info("ETF 同步完成: %s", result)
