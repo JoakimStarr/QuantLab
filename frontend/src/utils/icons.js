@@ -12,6 +12,7 @@ import {
   Odometer,
   Reading,
   Document,
+  Postcard,
 } from '@element-plus/icons-vue'
 
 const iconMap = {
@@ -24,6 +25,7 @@ const iconMap = {
   Odometer,
   Reading,
   Document,
+  Postcard,
 }
 
 export function resolveIcon(name) {

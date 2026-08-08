@@ -44,11 +44,9 @@ summary: QLib表达式语法、算子白名单、因子分类、评价指标、�
 
 **数据层扩展字段**（资金/情绪/市值，详见 [DATA_LAYER.md](DATA_LAYER.md)）：
 - `$tradable` — 是否可交易（ST/停牌过滤）
-- `$north_net` — 北向资金净流入
-- `$margin_balance` — 融资余额
-- `$dragon_net` — 龙虎榜净买入
-- `$big_order_net` — 大单净买入
-- `$total_mv` — 总市值
+- `$pe_tt_quant_hist` — 全A市盈率历史分位数（乐咕，市场热度）
+- `$congestion` — A股市场拥挤度（0~1，发布滞后约2月）
+- `$sh_idx_close` / `$sh_idx_vol` — 上证指数收盘/成交量量能
 
 ### 1.2 算子白名单（能做什么运算）
 
@@ -100,8 +98,8 @@ Mean(($high - $low) / $close, 20)
 Mean(Greater($close - Ref($close, 1), 0), 20) -
 Mean(Greater(Ref($close, 1) - $close, 0), 20)
 
-# 资金信号：北向资金净流入为正时取 1
-If($north_net > 0, 1, 0)
+# 市场热度信号：全A估值分位超过 0.8（偏贵）时取 1
+If($pe_tt_quant_hist > 0.8, 1, 0)
 
 # Alpha158 标准因子示例
 ($close - $open) / ($high - $low + 1e-12)        # KMID2

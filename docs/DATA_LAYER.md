@@ -351,6 +351,8 @@ open / high / low / close / volume / amount / change / tradable / factor
 | `financial_indicator` | 财报窄表，键 `(code, report_date, field_name, value, available_date)`，PIT 语义 |
 | `stock_index` | 指数/ETF 注册表（`type` 列 'index'/'etf'），校验/修复据此排除非股票 |
 | `stock_basic` / `stock_industry` / `trade_calendar` | 股票基础信息 / 行业 / 交易日历 |
+| `news_policy` | 新闻联播文字稿（政策风向页，akshare `news_cctv`；只展示不接 bin），键 `(news_date, title)` |
+| `policy_analysis` | 每日 AI 政策解读（LLM 生成：摘要/定调/点名行业/主题热度/关键词），键 `news_date`，`status` done/failed，失败自动重试 |
 | 业务表 | `factor` / `strategy` / `backtest_result` / `mining_task` / `task_result` / `user` |
 | 同步元数据 | `stock_data_status` / `sync_history` |
 
@@ -363,7 +365,8 @@ open / high / low / close / volume / amount / change / tradable / factor
 | 1 | baostock | 账号/IP 可能被风控拉黑（10001011），需等待解封 |
 | 2 | 日历 | 宏观/财报 bin 与日历长度耦合，日历变更后需重新广播（§5.4） |
 | 3 | 宏观 | DR007 精确加权平均不可得（akshare 仅 FR007/FDR007 定盘口径） |
-| 4 | 北向 | 北向持股明细 2024-08 起停更（港交所披露规则变更） |
+| 4 | 北向 | 北向持股明细 2024-08 起停更（港交所披露规则变更）；市场热度已切换为非东财源（乐咕全A估值/股息率/拥挤度、新浪上证指数），`hsgt_*` bin 已随广播清理 |
+| 4b | 市场热度 | 拥挤度（`stock_a_congestion_lg`）实际发布滞后约 2 个月，config 内 delay=60 做 PIT 保护；`stock_buffett_index_lg`（巴菲特指标）当前 akshare 版本接口异常暂不可用 |
 | 5 | 完整性 | `check_fields` 用 `文件长度==期望` 严格判定，日历被截短时会全市场误报；建议按 start_index 对齐或放宽为 ≥ |
 | 6 | AutoML | `factor_eval._resolve_task_id_from_factor_ids()` 仍读旧 SQLite `data/quantlab.db` 映射老格式 `AutoML(method, fid1, ...)` 表达式（SQLite→PG 迁移遗留），文件删除后需改为查 PG |
 

@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.macro import MacroIndicator
+from app.services.data.broadcast_state import broadcast_up_to_date, mark_broadcast
 from app.services.data.data_clean import to_float as _to_float
 from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _get_calendar, _write_bin
@@ -156,20 +157,87 @@ AKSHARE_INDICATORS: dict[str, dict] = {
             "commodity_idx": {"source": "最新值", "label": "中国大宗商品价格指数", "unit": ""},
         },
     },
-    "HSGT": {
-        # 北向资金（沪深港通）日频：市场级每日，广播全市场同一数组（走宏观管线）
-        "ak_func": "stock_hsgt_hist_em",
-        "ak_kwargs": {"symbol": "北向资金"},
+    "MARKET_PE": {
+        # 全A市盈率（乐咕乐股，非东财）：中位数 TTM/静态 + 历史/近十年分位数（0~1）
+        # 分位数直接给"当前估值贵不贵"，比绝对估值更适合做择时阈值
+        "ak_func": "stock_a_ttm_lyr",
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "pe_mid_ttm": {"source": "middlePETTM", "label": "全A市盈率TTM中位数", "unit": ""},
+            "pe_mid_lyr": {"source": "middlePELYR", "label": "全A市盈率静态中位数", "unit": ""},
+            "pe_tt_quant_hist": {"source": "quantileInAllHistoryMiddlePeTtm", "label": "全A市盈率历史分位数", "unit": ""},
+            "pe_tt_quant_10y": {"source": "quantileInRecent10YearsMiddlePeTtm", "label": "全A市盈率近十年分位数", "unit": ""},
+        },
+    },
+    "MARKET_PE_SH": {
+        # 上证指数平均市盈率（乐咕乐股，非东财），周频（每周五）
+        "ak_func": "stock_market_pe_lg",
+        "ak_kwargs": {"symbol": "上证"},
         "date_col": "日期",
         "date_freq": "day",
-        "delay": 1,  # 北向当日盘后公布，+1 天防 look-ahead
+        "delay": 0,
         "fields": {
-            "hsgt_net_buy": {"source": "当日成交净买额", "label": "北向净买入额", "unit": "亿元"},
-            "hsgt_buy": {"source": "买入成交额", "label": "北向买入额", "unit": "亿元"},
-            "hsgt_sell": {"source": "卖出成交额", "label": "北向卖出额", "unit": "亿元"},
-            "hsgt_cum_net": {"source": "历史累计净买额", "label": "北向历史累计净买额", "unit": "亿元"},
-            "hsgt_inflow": {"source": "当日资金流入", "label": "北向当日资金流入", "unit": "亿元"},
-            "hsgt_hold_mv": {"source": "持股市值", "label": "北向持股总市值", "unit": "亿元"},
+            "pe_sh": {"source": "平均市盈率", "label": "上证平均市盈率", "unit": ""},
+        },
+    },
+    "MARKET_PB": {
+        # 上证平均市净率 + 中位数（乐咕乐股，非东财），日频
+        "ak_func": "stock_market_pb_lg",
+        "ak_kwargs": {"symbol": "上证"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "pb_sh": {"source": "市净率", "label": "上证平均市净率", "unit": ""},
+            "pb_sh_mid": {"source": "市净率中位数", "label": "上证市净率中位数", "unit": ""},
+        },
+    },
+    "MARKET_DIV": {
+        # 上证A股整体股息率（乐咕乐股，非东财），日频
+        "ak_func": "stock_a_gxl_lg",
+        "ak_kwargs": {"symbol": "上证A股"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "div_yield_sh": {"source": "股息率", "label": "上证A股股息率", "unit": "%"},
+        },
+    },
+    "HS300_PE": {
+        # 沪深300指数估值（乐咕乐股，非东财）：滚动/静态市盈率
+        "ak_func": "stock_index_pe_lg",
+        "ak_kwargs": {"symbol": "沪深300"},
+        "date_col": "日期",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "hs300_pe_ttm": {"source": "滚动市盈率", "label": "沪深300滚动市盈率", "unit": ""},
+            "hs300_pe_std": {"source": "静态市盈率", "label": "沪深300静态市盈率", "unit": ""},
+        },
+    },
+    "SH_INDEX": {
+        # 上证指数日线（新浪，非东财）：收盘点位 + 成交量（量能）
+        "ak_func": "stock_zh_index_daily",
+        "ak_kwargs": {"symbol": "sh000001"},
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 0,
+        "fields": {
+            "sh_idx_close": {"source": "close", "label": "上证指数收盘", "unit": "点"},
+            "sh_idx_vol": {"source": "volume", "label": "上证指数成交量", "unit": "手"},
+        },
+    },
+    "MARKET_CONG": {
+        # A股市场拥挤度（乐咕乐股，非东财），0~1，越高越拥挤（涨多了风险大）。
+        # 注意：数据实际发布滞后约 2 个月（最新值约落后当前日期），delay=60 防 PIT 前视。
+        "ak_func": "stock_a_congestion_lg",
+        "date_col": "date",
+        "date_freq": "day",
+        "delay": 60,
+        "fields": {
+            "congestion": {"source": "congestion", "label": "A股市场拥挤度", "unit": ""},
         },
     },
     "COPPER": {
@@ -583,6 +651,43 @@ def broadcast_to_all_stocks(provider_uri: str, field_name: str, values: np.ndarr
     return written
 
 
+# 已从注册表移除的宏观字段（数据源停更/替换）：广播时清掉残留 bin，防止过期数据误用
+OBSOLETE_MACRO_FIELDS = frozenset({
+    # 北向资金 2024-08 起停更（港交所披露规则变更），HSGT 配置已移除
+    "hsgt_net_buy", "hsgt_buy", "hsgt_sell", "hsgt_cum_net",
+    "hsgt_inflow", "hsgt_hold_mv",
+})
+
+
+def _prune_stale_macro_bins(provider_uri: str, active_fields: set[str]) -> int:
+    """删除已废弃宏观字段的 features/*/{field}.day.bin（仅限 OBSOLETE_MACRO_FIELDS）。
+
+    避免 config 移除后旧 bin 残留冻结值被因子/回测误用（无感知静默过期）。
+    Returns: 删除的 bin 文件数
+    """
+    feat_root = os.path.join(provider_uri, "features")
+    if not os.path.isdir(feat_root):
+        return 0
+    removed = 0
+    for code in os.listdir(feat_root):
+        code_dir = os.path.join(feat_root, code)
+        if not os.path.isdir(code_dir):
+            continue
+        for fname in os.listdir(code_dir):
+            if not fname.endswith(".day.bin"):
+                continue
+            field = fname[: -len(".day.bin")]
+            if field in OBSOLETE_MACRO_FIELDS and field not in active_fields:
+                try:
+                    os.remove(os.path.join(code_dir, fname))
+                    removed += 1
+                except OSError:
+                    pass
+    if removed:
+        logger.info("清理废弃宏观 bin 字段 %d 个文件（%s）", removed, sorted(OBSOLETE_MACRO_FIELDS))
+    return removed
+
+
 async def _fetch_all_macro_rows(progress_cb=None) -> tuple[list[dict], dict]:
     """拉取全部宏观指标（东财 datacenter + akshare）→ 归一化窄表行。
 
@@ -614,19 +719,31 @@ async def _fetch_all_macro_rows(progress_cb=None) -> tuple[list[dict], dict]:
     return all_rows, summary
 
 
-async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
+async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None, force: bool = False) -> int:
     """把 PG 窄表的宏观数据 forward-fill 广播写入全部股票 bin 字段。
 
     与拉取解耦：bin 广播依赖最终日历（day.txt 对齐 bin 长度），
     应在数据校验/补齐阶段（日历已定）调用，避免回填期间写入错位长度。
 
+    跳过优化：数据没变（macro_indicator 行数/最新报告期不变）且日历没变时，
+    指纹一致直接跳过全市场重写；force=True（如校验发现宏观字段缺失/错位）
+    时强制重广播。
+
     Args:
         provider_uri: qlib 数据目录
         progress_cb: 可选进度回调 progress_cb(pct, message)，调用方决定是否上报
+        force: 跳过指纹检查强制广播（校验发现差异时）
     Returns:
         写成功的股票数（跨全部字段累计）
     """
     qlib_dir = provider_uri or settings.qlib_provider_path
+    calendar = await run_io_cpu(_get_calendar, qlib_dir)
+    fp = {"cal_len": len(calendar), "cal_end": calendar[-1] if calendar else None}
+    fp.update(await _macro_fingerprint())
+    if not force and await asyncio.to_thread(broadcast_up_to_date, qlib_dir, "macro", fp):
+        logger.info("宏观字段无变化（日历 %s 天，数据行数 %s），跳过广播", fp["cal_len"], fp.get("count"))
+        return 0
+
     all_field_specs = [
         (ind, fname, fcfg)
         for ind, cfg in MACRO_INDICATORS.items() for fname, fcfg in cfg["fields"].items()
@@ -637,8 +754,8 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
     total_fields = len(all_field_specs)
     total_written = 0
     series_map = await _load_all_macro_series()  # 一次批量加载全部字段，避免逐字段 N+1
-    # 日历读取一次复用，避免逐字段重读 day.txt（51 个字段 = 51 次文件IO）
-    calendar = await run_io_cpu(_get_calendar, qlib_dir)
+    active_fields = {fname for _, fname, _ in all_field_specs}
+    await run_io_cpu(_prune_stale_macro_bins, qlib_dir, active_fields)
     for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
         if progress_cb:
             progress_cb(
@@ -653,7 +770,18 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None) -> int:
         n = await run_io_cpu(broadcast_to_all_stocks, qlib_dir, field_name, values)
         total_written += n
         logger.info("宏观 %s.%s 广播写入 %d 只股票", indicator_key, field_name, n)
+    await asyncio.to_thread(mark_broadcast, qlib_dir, "macro", fp)
     return total_written
+
+
+async def _macro_fingerprint() -> dict:
+    """macro_indicator 表聚合指纹：行数 + 最新报告期（防 look-ahead 的可用日）。"""
+    from sqlalchemy import func
+
+    async with async_session() as session:
+        count = (await session.execute(select(func.count()).select_from(MacroIndicator))).scalar() or 0
+        max_d = (await session.execute(select(func.max(MacroIndicator.available_date)))).scalar()
+    return {"count": count, "max_available": max_d.strftime("%Y-%m-%d") if max_d else None}
 
 
 async def sync_macro_indicators(provider_uri: str | None = None, broadcast: bool = True,

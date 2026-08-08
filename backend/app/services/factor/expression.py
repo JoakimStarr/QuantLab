@@ -40,9 +40,10 @@ _QLIB_FIELDS = {
     "$pmi", "$pmi_nm", "$cpi", "$ppi", "$gdp",
     # 外盘隔夜情绪因子（external_market 广播写入 features/*/{field}.day.bin）
     "$us_sp500_ret", "$us_nasdaq_ret", "$us_dow_ret", "$hk_hsi_ret",
-    # 北向资金日频字段（macro_sync HSGT 广播全市场同一数组）
-    "$hsgt_net_buy", "$hsgt_buy", "$hsgt_sell", "$hsgt_cum_net",
-    "$hsgt_inflow", "$hsgt_hold_mv",
+    # 市场热度日频字段（macro_sync MARKET_*/SH_INDEX/CONG，非东财源，广播全市场同一数组）
+    "$pe_mid_ttm", "$pe_tt_quant_hist", "$pe_tt_quant_10y",
+    "$pe_sh", "$pb_sh", "$pb_sh_mid", "$div_yield_sh",
+    "$hs300_pe_ttm", "$hs300_pe_std", "$sh_idx_close", "$sh_idx_vol", "$congestion",
     # 季频财报字段（fundamental_sync 按股 PIT 广播写入 features/*/{field}.day.bin）
     "$netprofit", "$revenue", "$netprofit_deduct", "$roe", "$roa",
     "$gross_margin", "$net_margin", "$debt_ratio", "$ocf",

@@ -126,6 +126,22 @@ async def _run(args: argparse.Namespace) -> None:
         logger.info("宏观同步完成: %s", result)
         return
 
+    if args.kind == "policy":
+        # 政策风向（新闻联播文字稿）只存库不写 bin，不需要爬取锁，可与回填并行。
+        from app.services.data.policy_sync import run_policy_sync_task
+
+        logger.info("policy worker 启动 pid=%s", os.getpid())
+        await run_policy_sync_task()
+        return
+
+    if args.kind == "policy_ai":
+        # AI 政策解读（LLM 逐日生成结构化解读）只写 policy_analysis，不需要爬取锁。
+        from app.services.data.policy_ai import run_policy_ai_task
+
+        logger.info("policy_ai worker 启动 pid=%s", os.getpid())
+        await run_policy_ai_task()
+        return
+
     from app.services.data.sync_lock import SyncLock
     from app.services.data.sync_progress import (
         clear_progress,
@@ -269,7 +285,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="QuantLab 数据同步独立 worker")
     parser.add_argument(
         "--kind",
-        choices=["backfill", "eod", "repair", "indices", "fundamental", "macro", "etf", "full"],
+        choices=["backfill", "eod", "repair", "indices", "fundamental", "macro", "etf", "policy", "policy_ai", "full"],
         default="backfill",
     )
     parser.add_argument("--universe", default="csi300")

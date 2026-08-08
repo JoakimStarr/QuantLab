@@ -90,6 +90,17 @@ const routes = [
         },
       },
       {
+        path: 'quant/policy',
+        name: 'Policy',
+        component: () => import('@/views/quant/Policy.vue'),
+        meta: {
+          title: '政策风向',
+          icon: 'Postcard',
+          transition: 'fade-in-up',
+          keepAlive: true,
+        },
+      },
+      {
         path: 'quant/factor-compare',
         name: 'FactorCompare',
         component: () => import('@/views/quant/FactorCompare.vue'),

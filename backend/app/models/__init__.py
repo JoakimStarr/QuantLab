@@ -5,11 +5,13 @@ from .factor import Factor
 from .strategy import Strategy
 from .backtest_result import BacktestResult
 from .mining_task import MiningTask
+from .mining_candidate import MiningCandidate
 from .sync_history import SyncHistory
 from .task_result import TaskResult
 from .rule_backtest_history import RuleBacktestHistory
 from .fundamental import FinancialIndicator
 from .macro import MacroIndicator
+from .policy import PolicyNews
 from .baostock import (
     StockDaily,
     StockBasic,
@@ -26,11 +28,13 @@ __all__ = [
     "Strategy",
     "BacktestResult",
     "MiningTask",
+    "MiningCandidate",
     "SyncHistory",
     "TaskResult",
     "RuleBacktestHistory",
     "FinancialIndicator",
     "MacroIndicator",
+    "PolicyNews",
     "StockDaily",
     "StockBasic",
     "StockIndustry",

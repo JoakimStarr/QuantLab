@@ -76,8 +76,12 @@ $close / Ref($close, 20) - 1
 |------|------|------|------|
 | `$pmi` / `$pmi_nm` | 制造业/非制造业 PMI | `$cpi` | 居民消费价格指数 |
 | `$ppi` | 工业品出厂价格指数 | `$gdp` | GDP 增速 |
-| `$hsgt_net_buy` | 北向净买入 | `$hsgt_cum_net` | 北向累计净买入 |
-| `$hsgt_buy` / `$hsgt_sell` | 北向买入/卖出 | `$hsgt_hold_mv` | 北向持股市值 |
+| `$pe_mid_ttm` | 全A市盈率TTM中位数（乐咕） | `$pe_tt_quant_hist` / `$pe_tt_quant_10y` | 全A市盈率历史/近十年分位数 |
+| `$pe_sh` | 上证平均市盈率 | `$pb_sh` / `$pb_sh_mid` | 上证平均/中位数市净率 |
+| `$div_yield_sh` | 上证A股股息率 | `$hs300_pe_ttm` / `$hs300_pe_std` | 沪深300滚动/静态市盈率 |
+| `$sh_idx_close` / `$sh_idx_vol` | 上证指数收盘/成交量（新浪） | `$congestion` | A股拥挤度（乐咕，发布滞后约2月） |
+
+> 北向资金（`$hsgt_*`）2024-08 起停更（港交所披露规则变更），已移除；市场热度字段全部来自非东财源（乐咕乐股/新浪）。
 
 ### 2.4 外盘隔夜情绪（每日 9 点前更新）
 

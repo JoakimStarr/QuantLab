@@ -8,6 +8,7 @@ export const navItems = [
   { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
   { path: '/quant/data', title: '数据管理', icon: 'SetUp' },
   { path: '/quant/macro', title: '宏观指标', icon: 'Odometer' },
+  { path: '/quant/policy', title: '政策风向', icon: 'Postcard' },
   { path: '/docs', title: '技术文档', icon: 'Reading' },
   { path: '/system/logs', title: '日志管理', icon: 'Document' },
 ]

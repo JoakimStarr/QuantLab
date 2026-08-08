@@ -30,7 +30,7 @@
                 :title="opt.fields[0].item.available_date + (opt.fields[0].item.prevDate ? '，较 ' + opt.fields[0].item.prevDate : '')"
                 @click="toggleExpand(opt, $event)"
               >
-                <div class="snapshot-label">{{ opt.fields.map((f) => f.name).join(' / ') }}</div>
+                <div class="snapshot-label">{{ cardTitle(opt) }}</div>
                 <div class="snapshot-value" :class="trendClass(opt.fields[0].item.change)">
                   {{ opt.fields.map((f) => formatValue(f.item.value)).join(' / ') }}
                   <span v-if="opt.fields[0].item.unit" class="snapshot-unit">{{ opt.fields[0].item.unit }}</span>
@@ -308,24 +308,84 @@ const fieldOptions = [
     group: '风险/情绪',
     fields: [{ field: 'au_close', name: '沪金AU主力', color: C.gold }],
   },
+  // 市场热度（乐咕乐股/新浪，非东财；北向资金 2024-08 停更已移除 HSGT）
   {
-    key: 'hsgt',
-    indicator: 'HSGT',
-    label: '北向资金',
-    desc: '外资配置 A 股力度；持续大幅净流入 → 看多核心资产，连续流出 → 警惕撤退。',
-    group: '风险/情绪',
+    key: 'marketPE',
+    indicator: 'MARKET_PE',
+    label: '全A估值分位',
+    desc: '全市场市盈率中位数 TTM + 历史分位；分位 > 0.8 偏贵、< 0.2 便宜，估值温度计。',
+    group: '市场热度',
     fields: [
-      { field: 'hsgt_hold_mv', name: '北向持股总市值', color: C.blue, axis: 'right' },
-      { field: 'hsgt_inflow', name: '北向当日净流入', color: C.orangeAlt },
+      { field: 'pe_mid_ttm', name: '全A市盈率TTM(中位数)', color: C.blue },
+      { field: 'pe_tt_quant_hist', name: '历史分位数', color: C.orangeAlt, axis: 'right' },
     ],
+  },
+  {
+    key: 'shPE',
+    indicator: 'MARKET_PE_SH',
+    label: '上证市盈率',
+    desc: '上证平均市盈率（周频）；历史区间约 13-25，极端低位=机会区、高位=风险区。',
+    group: '市场热度',
+    fields: [{ field: 'pe_sh', name: '上证平均市盈率', color: C.teal }],
+  },
+  {
+    key: 'shPB',
+    indicator: 'MARKET_PB',
+    label: '上证市净率',
+    desc: '上证平均市净率 + 中位数；历史低位约 1.2-1.5，高位约 3.5+。',
+    group: '市场热度',
+    fields: [
+      { field: 'pb_sh_mid', name: '市净率中位数', color: C.blue },
+      { field: 'pb_sh', name: '平均市净率', color: C.orangeAlt, axis: 'right' },
+    ],
+  },
+  {
+    key: 'hs300PE',
+    indicator: 'HS300_PE',
+    label: '沪深300估值',
+    desc: '沪深300 滚动/静态市盈率；权重股估值温度，与股指期货 IF 呼应。',
+    group: '市场热度',
+    fields: [
+      { field: 'hs300_pe_ttm', name: '滚动市盈率', color: C.blue },
+      { field: 'hs300_pe_std', name: '静态市盈率', color: C.orangeAlt, axis: 'right' },
+    ],
+  },
+  {
+    key: 'divYield',
+    indicator: 'MARKET_DIV',
+    label: '上证股息率',
+    desc: '上证A股整体股息率；> 3% 吸引长线配置资金，股债性价比的重要参照。',
+    group: '市场热度',
+    fields: [{ field: 'div_yield_sh', name: '股息率', color: C.gold }],
+  },
+  {
+    key: 'shIndex',
+    indicator: 'SH_INDEX',
+    label: '上证指数量能',
+    desc: '上证指数收盘点位 + 成交量；放量上攻可信，缩量新高存疑。',
+    group: '市场热度',
+    fields: [
+      { field: 'sh_idx_close', name: '上证收盘', color: C.blue },
+      { field: 'sh_idx_vol', name: '成交量', color: C.orangeAlt, axis: 'right' },
+    ],
+  },
+  {
+    key: 'congestion',
+    indicator: 'MARKET_CONG',
+    label: '市场拥挤度',
+    desc: 'A股拥挤度（乐咕，0~1）；数据发布滞后约 2 个月，高位拥挤 → 上涨空间透支。',
+    group: '市场热度',
+    fields: [{ field: 'congestion', name: '拥挤度', color: C.red }],
   },
   // 货币/信贷
   {
     key: 'moneysupply',
     indicator: 'MONEY_SUPPLY',
-    label: '货币供应',
+    label: 'M0/M1/M2同比',
+    cardTitle: 'M0/M1/M2同比',
     desc: 'M1-M2 增速差 → 资金活化程度；M1 增速快 → 股市可能上涨。',
     group: '货币/信贷',
+    cardFields: 3,
     fields: [
       { field: 'm0_yoy', name: 'M0同比', color: C.blue },
       { field: 'm1_yoy', name: 'M1同比', color: C.orangeAlt },
@@ -394,6 +454,11 @@ function isExpanded(card) {
   return card != null && expandedCard.value != null && expandedCard.value.key === card.key
 }
 
+// 卡片标题：显式 cardTitle（如 "M0/M1/M2同比"）优先，否则字段名拼接
+function cardTitle(opt) {
+  return opt.cardTitle || opt.fields.map((f) => f.name).join(' / ')
+}
+
 // 测量被点击卡片相对其分组的垂直位置，作为悬浮面板的 top（不动其它卡片布局）
 function measurePanelTop() {
   if (!activeCell.value) return
@@ -439,7 +504,7 @@ async function reloadAll() {
 
 // 快照卡片：按「指标 option」合并（如 PMI 的制造业/非制造业合成一张卡），再按分类分组展示
 const snapshotGroups = computed(() => {
-  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '货币/信贷']
+  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '市场热度', '货币/信贷']
   const byField = new Map(snapshotItems.value.map((it) => [it.field_name, it]))
   const byGroup = {}
   for (const opt of fieldOptions) {
@@ -448,17 +513,19 @@ const snapshotGroups = computed(() => {
       .filter((x) => x.item)
     if (!fields.length) continue
     const g = opt.group || '其他'
-    // 每张卡片最多展示 2 个字段，超出部分拆成独立卡片；
+    // 每张卡片最多展示 cardFields 个字段（默认 2），超出部分拆成独立卡片；
     // 属于同一族（如中债所有期限）的卡片共用 seriesFields，点击任一张一起展开整族走势
     const seriesFields = fields
-    for (let i = 0; i < fields.length; i += 2) {
+    const step = opt.cardFields || 2
+    for (let i = 0; i < fields.length; i += step) {
       ;(byGroup[g] = byGroup[g] || []).push({
-        key: i === 0 ? opt.key : `${opt.key}_${i / 2}`,
+        key: i === 0 ? opt.key : `${opt.key}_${i / step}`,
         label: opt.label,
+        cardTitle: opt.cardTitle,
         indicator: opt.indicator,
         group: opt.group,
         desc: opt.desc,
-        fields: fields.slice(i, i + 2),
+        fields: fields.slice(i, i + step),
         seriesFields,
       })
     }
@@ -570,6 +637,7 @@ const chartOption = computed(() => {
       data: dates.map((d) => (valByDate.has(d) ? valByDate.get(d) : null)),
       lineStyle: { width: 2, color: s.color },
       itemStyle: { color: s.color },
+      unit: s.unit || '',
     }
     // 量纲差异大的字段（如持仓量 vs 收盘价）放右轴，避免价格线被压平
     if (fieldCfg?.axis === 'right') cfg.yAxisIndex = 1
@@ -595,18 +663,50 @@ const chartOption = computed(() => {
     })
   }
 
+  // 某序列所在轴（右轴字段在 axis 1，其余 0）
+  const axisIndexOf = (s) => {
+    const fc = opt?.fields.find((x) => x.field === s.field)
+    return fc?.axis === 'right' ? 1 : 0
+  }
+  // 按轴聚合单位：同轴序列单位一致才显示（如整轴是同比%则轴标带%）
+  const axisUnit = (idx) => {
+    const units = seriesData.value.filter((s) => axisIndexOf(s) === idx).map((s) => s.unit)
+    return units.length && units.every((u) => u === units[0]) ? units[0] : ''
+  }
+  const axisLabelWithUnit = (idx) => {
+    const u = axisUnit(idx)
+    if (!u) return { color: chartTheme.axisText() }
+    return { color: chartTheme.axisText(), formatter: (v) => (v == null ? v : `${v}${u}`) }
+  }
+
+  const yAxisOpt = opt?.fields.some((f) => f.axis === 'right')
+    ? [
+        { type: 'value', scale: true, axisLabel: axisLabelWithUnit(0) },
+        { type: 'value', scale: true, axisLabel: axisLabelWithUnit(1), splitLine: { show: false } },
+      ]
+    : { type: 'value', scale: true, axisLabel: axisLabelWithUnit(0) }
+
   return {
-    tooltip: { trigger: 'axis' },
+    // 悬停十字线数值带单位（% 等），如 "49.6%"
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => {
+        const list = Array.isArray(params) ? params : [params]
+        const head = list[0]?.axisValue ?? ''
+        const rows = list
+          .filter((p) => p.value != null && p.value !== '' && p.value !== '-')
+          .map((p) => {
+            const unit = series[p.seriesIndex]?.unit ?? ''
+            return `${p.marker}${p.seriesName}: ${Number(p.value).toFixed(2)}${unit}`
+          })
+        return [head, ...rows].join('<br/>')
+      },
+    },
     textStyle: { color: chartTheme.axisText() },
     legend: { top: 0, left: 8, textStyle: { color: chartTheme.axisText() } },
     grid: { left: 48, right: 48, top: 40, bottom: 40 },
     xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, color: chartTheme.axisText() } },
-    yAxis: opt?.fields.some((f) => f.axis === 'right')
-      ? [
-          { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() } },
-          { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() }, splitLine: { show: false } },
-        ]
-      : { type: 'value', scale: true, axisLabel: { color: chartTheme.axisText() } },
+    yAxis: yAxisOpt,
     series,
   }
 })
@@ -631,6 +731,7 @@ async function loadSeries(opt) {
           field: f.field,
           name: f.name,
           color: f.color,
+          unit: items[0]?.unit ?? '',
           points: items.map((d) => ({ date: d.available_date, value: d.value })),
         }
       })
