@@ -136,10 +136,11 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.kind == "policy_ai":
         # AI 政策解读（LLM 逐日生成结构化解读）只写 policy_analysis，不需要爬取锁。
+        # backfill_days 透传 API 的 days 参数（默认 30）。
         from app.services.data.policy_ai import run_policy_ai_task
 
-        logger.info("policy_ai worker 启动 pid=%s", os.getpid())
-        await run_policy_ai_task()
+        logger.info("policy_ai worker 启动 pid=%s backfill_days=%s", os.getpid(), args.days)
+        await run_policy_ai_task(backfill_days=args.days or 30)
         return
 
     from app.services.data.sync_lock import SyncLock

@@ -161,10 +161,14 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
     return {"days": len(rows), "done": done, "failed": failed}
 
 
-async def run_policy_ai_task() -> None:
-    """后台任务包装（worker 子进程调用）。"""
+async def run_policy_ai_task(backfill_days: int = AI_BACKFILL_DAYS) -> None:
+    """后台任务包装（worker 子进程调用）。
+
+    Args:
+        backfill_days: AI 解读回填窗口（天），透传 API 的 backfill_days 参数。
+    """
     try:
-        result = await sync_policy_analysis()
+        result = await sync_policy_analysis(backfill_days=backfill_days)
         logger.info("AI 政策解读后台任务完成: %s", result)
     except Exception:
         logger.exception("AI 政策解读后台任务失败")
