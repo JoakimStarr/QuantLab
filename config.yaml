@@ -62,6 +62,10 @@ monte_carlo:
 mining:
   automl:
     combo_method: lightgbm
+  # 政策风向 AI 解读（policy_ai）：LLM 并发与失败重试上限
+  policy_ai:
+    concurrency: 4
+    max_retry: 3
   llm:
     # AI 策略选因子的达标阈值（区别于 ic_threshold=0.03 的挖掘线，
     # A 股截面 IC 0.02-0.03 已可用，用 0.03 达标池过小 AI 无法生成策略）

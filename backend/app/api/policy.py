@@ -73,7 +73,7 @@ async def policy_list_api(
 
 @router.get("/status")
 async def policy_status_api(db=Depends(get_db)):
-    """政策风向数据状态：总条数、覆盖天数、最新/最早播出日期。"""
+    """政策风向数据状态：总条数、覆盖天数、最新/最早播出日期 + AI 解读进度。"""
     latest = (await db.execute(select(func.max(PolicyNews.news_date)))).scalar()
     earliest = (await db.execute(select(func.min(PolicyNews.news_date)))).scalar()
     total = (await db.execute(select(func.count()).select_from(PolicyNews))).scalar() or 0
@@ -82,6 +82,20 @@ async def policy_status_api(db=Depends(get_db)):
                               .where(PolicyAnalysis.status == "done"))).scalar() or 0
     ai_failed = (await db.execute(select(func.count()).select_from(PolicyAnalysis)
                                 .where(PolicyAnalysis.status == "failed"))).scalar() or 0
+    # 待解读日期数：有新闻但尚无 done 解读的日期（含 failed，供前端展示进度）
+    ai_pending = 0
+    if latest is not None:
+        sub = (
+            select(PolicyNews.news_date.distinct())
+            .where(PolicyNews.news_date <= latest)
+        ).subquery()
+        done_sub = (
+            select(PolicyAnalysis.news_date)
+            .where(PolicyAnalysis.status == "done")
+        ).subquery()
+        ai_pending = (await db.execute(
+            select(func.count()).select_from(sub).where(sub.c.news_date.notin_(select(done_sub.c.news_date)))
+        )).scalar() or 0
     return ApiResponse(ok=True, data={
         "total": total,
         "days": days,
@@ -89,6 +103,8 @@ async def policy_status_api(db=Depends(get_db)):
         "earliest_date": earliest.isoformat() if earliest else None,
         "ai_done": ai_done,
         "ai_failed": ai_failed,
+        "ai_pending": ai_pending,
+        "ai_total": days,  # 有新闻的日期总数（解读窗口 = ai_total）
     })
 
 

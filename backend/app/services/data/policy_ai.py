@@ -23,7 +23,26 @@ logger = logging.getLogger(__name__)
 AI_BACKFILL_DAYS = 30        # 默认回填窗口（天）
 _MAX_CONTENT_CHARS = 400     # 每条新闻内容截断长度
 _MAX_ITEMS = 24              # 每天最多送入 LLM 的新闻条数
-_CONCURRENCY = 2             # LLM 并发数（保守，防限流）
+_CONCURRENCY = 4             # LLM 并发数（默认 4；可用 config.mining.policy_ai.concurrency 覆盖）
+_MAX_RETRY = 3               # 失败日期最大重试次数（超过后不再自动重试，避免每次同步反复打失败日）
+
+
+def _concurrency() -> int:
+    """AI 解读并发数：优先读 config（mining.policy_ai.concurrency），默认 _CONCURRENCY。"""
+    try:
+        from app.core.config import settings
+        return int(settings.mining.get("policy_ai", {}).get("concurrency", _CONCURRENCY))
+    except Exception:
+        return _CONCURRENCY
+
+
+def _max_retry() -> int:
+    """失败日期最大重试次数：优先读 config（mining.policy_ai.max_retry），默认 _MAX_RETRY。"""
+    try:
+        from app.core.config import settings
+        return int(settings.mining.get("policy_ai", {}).get("max_retry", _MAX_RETRY))
+    except Exception:
+        return _MAX_RETRY
 
 SYSTEM_PROMPT = """你是 A 股的宏观政策研究员。用户会给你某一天的央视《新闻联播》文字稿列表（标题+正文前段）。
 请输出 JSON（不要输出 JSON 之外的任何内容），结构：
@@ -100,7 +119,11 @@ async def analyze_one_day(news_date: date) -> dict:
 
 
 async def _pending_dates(max_days: int) -> list[date]:
-    """最近 max_days 内「有新闻但无 done 解读」的日期（新→旧）。"""
+    """最近 max_days 内「有新闻但无 done 解读」的日期（新→旧）。
+
+    失败重试限制：failed 且 retry_count >= _MAX_RETRY 的日期不再重试
+    （LLM 持续失败时避免每次同步都重跑同样的失败日）。
+    """
     async with async_session() as session:
         latest = (await session.execute(select(func.max(PolicyNews.news_date)))).scalar()
         if latest is None:
@@ -113,12 +136,23 @@ async def _pending_dates(max_days: int) -> list[date]:
             select(PolicyAnalysis.news_date).where(
                 PolicyAnalysis.news_date >= start, PolicyAnalysis.status == "done")
         )).scalars())
-    return sorted(news_dates - done_dates, reverse=True)
+        # failed 但重试次数已耗尽 → 视为完成（不再重试）
+        exhausted = set((await session.execute(
+            select(PolicyAnalysis.news_date).where(
+                PolicyAnalysis.news_date >= start,
+                PolicyAnalysis.status == "failed",
+                PolicyAnalysis.retry_count >= _max_retry(),
+            )
+        )).scalars())
+    return sorted(news_dates - done_dates - exhausted, reverse=True)
 
 
 async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
                                progress_cb=None) -> dict:
     """对「有新闻但无解读」的日期调用 LLM 补齐解读。
+
+    边跑边写：每个日期处理完立即 upsert，中途进程重启也不丢已完成部分，
+    前端可实时看到进度（policy/status 的 ai_done/ai_pending 计数）。
 
     Args:
         backfill_days: 回填窗口（天）
@@ -130,35 +164,53 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
         return {"days": 0, "done": 0, "failed": 0}
     logger.info("AI 政策解读待处理 %d 天: %s ... %s", len(pending), pending[-1], pending[0])
 
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    sem = asyncio.Semaphore(_concurrency())
 
     async def process(d: date) -> dict:
         async with sem:
+            # 读取该日已有的重试次数（若此前 failed）
+            try:
+                async with async_session() as session:
+                    prev = (await session.execute(
+                        select(PolicyAnalysis.retry_count).where(PolicyAnalysis.news_date == d)
+                    )).scalar()
+            except Exception:
+                prev = None
+            retry = (prev or 0) + 1
             try:
                 parsed = await analyze_one_day(d)
-                return {"news_date": d, "status": "done", **parsed, "error": None}
+                return {"news_date": d, "status": "done", **parsed, "error": None,
+                        "retry_count": retry}
             except Exception as e:
-                logger.warning("AI 解读 %s 失败: %s", d, e)
+                logger.warning("AI 解读 %s 失败(第%d次): %s", d, retry, e)
                 return {"news_date": d, "status": "failed", "summary": None,
                         "policy_tone": None, "key_items": None, "sectors": None,
                         "topics": None, "keywords": None, "market_impact": None,
-                        "error": str(e)[:500]}
+                        "error": str(e)[:500], "retry_count": retry}
 
-    rows = []
+    done = 0
+    failed = 0
     for i, d in enumerate(pending):
         if progress_cb:
             progress_cb(i + 1, len(pending), d.isoformat())
-        rows.append(await process(d))
+        row = await process(d)
+        # 单日即时 upsert：失败日期写 failed 供下次重试，成功日期立即可查
+        await bulk_upsert(
+            PolicyAnalysis, [row], ["news_date"], batch=50,
+            update_cols=["status", "summary", "policy_tone", "key_items", "sectors",
+                         "topics", "keywords", "market_impact", "error", "retry_count"],
+        )
+        if row["status"] == "done":
+            done += 1
+        else:
+            failed += 1
+        if (i + 1) % 20 == 0:
+            logger.info("AI 政策解读进度 %d/%d (done=%d failed=%d)",
+                        i + 1, len(pending), done, failed)
 
-    written = await bulk_upsert(
-        PolicyAnalysis, rows, ["news_date"], batch=50,
-        update_cols=["status", "summary", "policy_tone", "key_items", "sectors",
-                     "topics", "keywords", "market_impact", "error"],
-    )
-    done = sum(1 for r in rows if r["status"] == "done")
-    failed = len(rows) - done
-    logger.info("AI 政策解读完成: 处理 %d 天, 成功 %d, 失败 %d, 写入 %d", len(rows), done, failed, written)
-    return {"days": len(rows), "done": done, "failed": failed}
+    logger.info("AI 政策解读完成: 处理 %d 天, 成功 %d, 失败 %d",
+                len(pending), done, failed)
+    return {"days": len(pending), "done": done, "failed": failed}
 
 
 async def run_policy_ai_task(backfill_days: int = AI_BACKFILL_DAYS) -> None:

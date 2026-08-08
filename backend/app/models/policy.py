@@ -51,6 +51,7 @@ class PolicyAnalysis(Base):
     keywords: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="关键词")
     market_impact: Mapped[str | None] = mapped_column(Text, nullable=True, comment="对市场的影响判断")
     error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="失败原因")
+    retry_count: Mapped[int] = mapped_column(default=0, comment="AI 解读失败重试次数")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=True, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=True, default=datetime.now, onupdate=datetime.now)
 

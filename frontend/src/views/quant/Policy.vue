@@ -23,6 +23,9 @@
       <template #extra>
         <div class="policy-toolbar">
           <el-button size="small" @click="loadAll" :loading="loading">刷新</el-button>
+          <el-select v-model="aiWindow" size="small" style="width: 110px">
+            <el-option v-for="w in aiWindows" :key="w.value" :value="w.value" :label="w.label" />
+          </el-select>
           <el-button size="small" type="warning" @click="doAiSync" :loading="aiSyncing">
             {{ aiSyncing ? 'AI解读中...' : 'AI 解读' }}
           </el-button>
@@ -33,6 +36,9 @@
       </template>
 
       <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
+      <div v-if="aiProgress" class="ai-progress">
+        AI 解读进度：{{ aiProgress.done }} / {{ aiProgress.pending }} 天完成（失败 {{ aiProgress.failed }}）...
+      </div>
 
       <!-- 数据状态 -->
       <div v-if="status" class="policy-status">
@@ -50,13 +56,17 @@
         </div>
         <div class="policy-status-item">
           <div class="policy-status-label">AI 已解读</div>
-          <div class="policy-status-value">{{ status.ai_done || 0 }}<span class="policy-status-sub"> 天</span></div>
+          <div class="policy-status-value">{{ status.ai_done || 0 }}<span class="policy-status-sub"> / {{ status.ai_total || 0 }} 天</span></div>
         </div>
         <div class="policy-status-item">
           <div class="policy-status-label">AI 失败</div>
           <div class="policy-status-value" :class="{ 'is-error': (status.ai_failed || 0) > 0 }">
             {{ status.ai_failed || 0 }}
           </div>
+        </div>
+        <div class="policy-status-item">
+          <div class="policy-status-label">待解读</div>
+          <div class="policy-status-value">{{ status.ai_pending || 0 }}<span class="policy-status-sub"> 天</span></div>
         </div>
         <div class="policy-status-item">
           <div class="policy-status-label">最早一期</div>
@@ -181,7 +191,7 @@
 
 <script setup>
 defineOptions({ name: 'QuantPolicy' })
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
@@ -201,6 +211,7 @@ const loading = ref(false)
 const syncing = ref(false)
 const aiSyncing = ref(false)
 const syncMessage = ref('')
+const aiProgress = ref(null)
 const status = ref(null)
 const items = ref([])
 const total = ref(0)
@@ -210,6 +221,17 @@ const keyword = ref('')
 const dateRange = ref([])
 const expandedId = ref(null)
 const aiDetail = ref(null)
+
+// AI 解读回填窗口（对应后端 backfill_days）
+const aiWindow = ref(30)
+const aiWindows = [
+  { value: 7, label: '近7天' },
+  { value: 30, label: '近30天' },
+  { value: 90, label: '近90天' },
+  { value: 180, label: '近180天' },
+  { value: 365, label: '近一年' },
+]
+let aiPollTimer = null
 
 // 主题热度
 const topicRange = ref('30D')
@@ -225,6 +247,12 @@ const topicRank = ref([])
 async function loadStatus() {
   const r = await getPolicyStatus()
   status.value = r
+  // 有待解读任务时展示实时进度
+  if (r?.ai_pending && r.ai_pending > 0 && !aiSyncing.value) {
+    aiProgress.value = { pending: r.ai_pending, done: r.ai_done || 0, failed: r.ai_failed || 0 }
+  } else {
+    aiProgress.value = null
+  }
 }
 
 async function loadList() {
@@ -290,15 +318,43 @@ async function doSync() {
   }
 }
 
+function stopAiPoll() {
+  if (aiPollTimer) {
+    clearInterval(aiPollTimer)
+    aiPollTimer = null
+  }
+}
+
 async function doAiSync() {
   aiSyncing.value = true
   try {
-    const r = await syncPolicyAi(30)
+    const r = await syncPolicyAi(aiWindow.value)
     ElMessage.success(r?.message || 'AI 解读已提交')
-    setTimeout(() => loadStatus(), 5000)
+    // 提交后立即轮询进度直到 done+failed == pending
+    const poll = async () => {
+      try {
+        const s = await getPolicyStatus()
+        status.value = s
+        const pending = s?.ai_pending || 0
+        const done = s?.ai_done || 0
+        const failed = s?.ai_failed || 0
+        aiProgress.value = { pending, done, failed }
+        if (pending === 0) {
+          stopAiPoll()
+          aiSyncing.value = false
+          ElMessage.success('AI 解读完成')
+          loadTopics()
+        }
+      } catch {
+        stopAiPoll()
+        aiSyncing.value = false
+      }
+    }
+    stopAiPoll()
+    await poll()
+    aiPollTimer = setInterval(poll, 10000)
   } catch (e) {
     ElMessage.error('AI 解读提交失败')
-  } finally {
     aiSyncing.value = false
   }
 }
@@ -316,7 +372,7 @@ async function loadTopics() {
       end: end.toISOString().slice(0, 10),
     })
     topicItems.value = r?.items || []
-    topicRank.value = r?.start_rank || []
+    topicRank.value = r?.topic_rank || []
   } finally {
     topicsLoading.value = false
   }
@@ -352,6 +408,7 @@ const topicChart = computed(() => ({
 
 watch(topicRange, loadTopics)
 onMounted(loadAll)
+onBeforeUnmount(stopAiPoll)
 </script>
 
 <style scoped>
@@ -363,6 +420,12 @@ onMounted(loadAll)
 .sync-message {
   margin-bottom: 12px;
   color: var(--el-color-success);
+  font-size: 13px;
+}
+
+.ai-progress {
+  margin-bottom: 12px;
+  color: var(--el-color-warning);
   font-size: 13px;
 }
 
