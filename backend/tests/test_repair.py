@@ -12,6 +12,7 @@ from app.services.data.repair import (
     _compute_years_from_missing,
     _db_rows_to_df,
     _rebuild_one_stock,
+    _recompute_targets,
 )
 
 
@@ -53,6 +54,37 @@ def test_compute_years_from_missing():
     assert date.today() - timedelta(days=365 * years) <= date(2020, 8, 1)
     assert _compute_years_from_missing([]) == 1
     assert _compute_years_from_missing(["bad-date"]) == 1
+
+
+def test_recompute_targets_reuses_first_validation():
+    """日历未重建：直接复用首轮校验 repair_codes，不二次全量扫描。"""
+    report = {
+        "checks": {
+            "fields": {"repair_codes": ["sz000001", "sh600000"]},
+            "coverage": {"repair_codes": ["sz300001", "sh600000"]},
+        }
+    }
+    targets = _recompute_targets(report, calendar_rebuilt=False,
+                                 index_codes={"sh000001"}, code_range={})
+    # 并集 + 去重排序；指数目录不进入目标
+    assert targets == ["sh600000", "sz000001", "sz300001"]
+
+
+def test_recompute_targets_no_repair_codes():
+    """无差异时目标为空（不重建任何 bin）。"""
+    report = {"checks": {"fields": {"repair_codes": []}, "coverage": {"repair_codes": []}}}
+    assert _recompute_targets(report, False, set(), {}) == []
+
+
+def test_recompute_targets_calendar_rebuilt_full_rebuild():
+    """日历重建：全部股票（除指数）都是目标，无需扫描确认。"""
+    report = {"checks": {"fields": {"repair_codes": []}, "coverage": {"repair_codes": []}}}
+    code_range = {"sz000001": ["2020-01-01", "2026-01-01"],
+                  "sh600000": ["2020-01-01", "2026-01-01"],
+                  "sh000001": ["2020-01-01", "2026-01-01"]}
+    targets = _recompute_targets(report, calendar_rebuilt=True,
+                                 index_codes={"sh000001"}, code_range=code_range)
+    assert sorted(targets) == ["sh600000", "sz000001"]
 
 
 def test_rebuild_stock_bin_from_pg(tmp_path):

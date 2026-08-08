@@ -15,6 +15,7 @@
         <div class="kpi-sub">
           {{ daysSinceUpdate }} 天前更新
           <el-tag v-if="dataNotToday" size="small" type="warning" class="ml-2">今日数据未发布</el-tag>
+          <el-tag v-else-if="todayHalted" size="small" type="info" class="ml-2">今日休市（非交易日）</el-tag>
         </div>
       </div>
       <div class="kpi-card">
@@ -698,8 +699,22 @@ const daysSinceUpdate = computed(() => {
   return diff
 })
 
-// 今日是交易日但 baostock 数据未发布/未拉到（latest_date 落后于今天）→ 提示而非异常
+// 今日是否交易日（后端查 trade_calendar；null=未知，回退旧行为按日期判断）
+const todayIsTradingDay = ref(null)
+
+// 今日是交易日但 baostock 数据未发布/未拉到（latest_date 落后于今天）→ 提示而非异常；
+// 非交易日（周末/节假日）属正常，不提示"未发布"
 const dataNotToday = computed(() => {
+  if (!currentStatus.value.latest_date) return false
+  if (todayIsTradingDay.value === false) return false
+  const latest = new Date(currentStatus.value.latest_date + 'T00:00:00')
+  const now = new Date()
+  return latest.toDateString() < now.toDateString()
+})
+
+// 今日非交易日：latest_date 停在最近交易日，属正常休市
+const todayHalted = computed(() => {
+  if (todayIsTradingDay.value !== false) return false
   if (!currentStatus.value.latest_date) return false
   const latest = new Date(currentStatus.value.latest_date + 'T00:00:00')
   const now = new Date()
@@ -745,6 +760,7 @@ async function loadStatus() {
   try {
     const data = await getQuantDataStatus()
     statusList.value = data?.items || []
+    todayIsTradingDay.value = data?.today_is_trading_day ?? null
     // syncing 状态由进度轮询统一管理；检测到外部（如定时任务）触发的 syncing 时启动
     const cur = statusList.value[0]
     if (cur && cur.status === 'syncing' && !progressPolling.isPolling.value && !syncing.value) {

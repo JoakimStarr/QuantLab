@@ -329,6 +329,17 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
                 stmt = pg_insert(TradeCalendar.__table__).values(chunk)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["trade_date"])
                 await session.execute(stmt)
+            # trade_calendar 只保留与 stock_daily 数据窗口重叠的日期：
+            # 历次更大窗口回填会把更早的历史交易日也累积进日历（幂等累积），
+            # 数据未覆盖时会被校验误判成"缺 N 天需 baostock"。需要更早
+            # 历史时按更大 years 回填会重新插入，此处只清理、不影响后续扩展。
+            min_sd = (
+                await session.execute(select(func.min(StockDaily.trade_date)))
+            ).scalar()
+            if min_sd is not None:
+                await session.execute(
+                    TradeCalendar.__table__.delete().where(TradeCalendar.trade_date < min_sd)
+                )
         await session.commit()
 
 

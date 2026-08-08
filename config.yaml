@@ -10,13 +10,16 @@ ai_provider:
   force_json_output: true
   primary:
     base_url: https://opencode.ai/zen/v1/
-    max_tokens: 8192
+    # deepseek-v4-flash-free 是推理模型：reasoning 内容先吃预算，8192 会被推理耗尽
+    # 导致正式输出为空（曾实测 reasoning 24k+ tokens）。32768 留足推理+回答空间。
+    max_tokens: 32768
     model: deepseek-v4-flash-free
     provider: opencodezen
     temperature: 0.3
-    timeout_seconds: 60
+    # 推理模型长思维链单次调用可达数分钟，60s 太紧（曾实测 ~50-60s 仍算超时）
+    timeout_seconds: 180
   retry_times: 1
-  route_budget_seconds: 120
+  route_budget_seconds: 360
   tertiary:
     base_url: https://api.siliconflow.cn/v1
     max_tokens: 2048
@@ -175,7 +178,7 @@ task:
   task_timeout_seconds: 300
   timeouts:
     automl: 600
-    llm: 300
+    llm: 1800
     llm_hard_limit_seconds: 7200
     optimize: 600
     symbolic: 1800

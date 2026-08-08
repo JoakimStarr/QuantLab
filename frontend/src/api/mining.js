@@ -24,3 +24,8 @@ export function listMiningTasks(params) {
 export function getMiningTask(id) {
   return request.get('/mining/tasks/' + id)
 }
+
+// 任务挖掘候选（含未通过的）
+export function getMiningCandidates(id) {
+  return request.get('/mining/tasks/' + id + '/candidates')
+}

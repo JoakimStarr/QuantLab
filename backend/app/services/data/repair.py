@@ -16,11 +16,10 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import async_session
-from app.core.executor import run_io_cpu
 from app.models.baostock import StockDaily
 
 from app.services.data.data_clean import format_date_series
-from app.services.data.validation import check_coverage, check_fields, run_validation
+from app.services.data.validation import run_validation
 
 logger = logging.getLogger(__name__)
 
@@ -67,32 +66,44 @@ def _rebuild_one_stock(code_upper: str, rows: list, calendar: list, qlib_dir: st
     _sync_stock_bin(feat_dir, out, calendar, BIN_FIELDS, overwrite=True)
 
 
-async def _fetch_stock_rows_bulk(codes: list) -> dict:
-    """一次查询多只股票的全部 stock_daily 行，按 code 分组（大写）。
+# stock_daily 行批量拉取分批大小：控制单批内存（全市场约 5000 只 × 2500 天）
+_FETCH_BATCH = 400
+# bin 重建并发批大小：一批内并发写盘（线程池 16 workers），批间同步进度
+_REBUILD_CONCURRENCY = 64
 
-    消除逐只查询的 N+1 DB 往返（全市场 ~5000 只）。
+
+async def _fetch_stock_rows_bulk(codes: list) -> dict:
+    """分批拉取目标股票的全部 stock_daily 行，按 code 分组（大写）。
+
+    消除逐只查询的 N+1 DB 往返（全市场 ~5000 只），同时按批（_FETCH_BATCH）
+    拉取，避免全量行一次性进内存（全市场约 1350 万行，分批后峰值内存有界）。
     """
-    if not codes:
-        return {}
-    stmt = (
-        select(*StockDaily.__table__.columns)
-        .where(StockDaily.code.in_([c.upper() for c in codes]))
-        .order_by(StockDaily.code, StockDaily.trade_date)
-    )
-    async with async_session() as session:
-        rows = [dict(r) for r in (await session.execute(stmt)).mappings().all()]
     grouped: dict[str, list] = {}
-    for r in rows:
-        grouped.setdefault(r["code"], []).append(r)
+    if not codes:
+        return grouped
+    codes_upper = [c.upper() for c in codes]
+    for start in range(0, len(codes_upper), _FETCH_BATCH):
+        batch = codes_upper[start:start + _FETCH_BATCH]
+        stmt = (
+            select(*StockDaily.__table__.columns)
+            .where(StockDaily.code.in_(batch))
+            .order_by(StockDaily.code, StockDaily.trade_date)
+        )
+        async with async_session() as session:
+            rows = [dict(r) for r in (await session.execute(stmt)).mappings().all()]
+        for r in rows:
+            grouped.setdefault(r["code"], []).append(r)
     return grouped
 
 
 async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> dict:
-    """对目标股票从 PG 重建 bin（一次批量查询 + 写盘走全局线程池并行）。
+    """对目标股票从 PG 重建 bin（分批拉取 + 并发写盘）。
 
-    Returns:
+    返回:
         dict: {"ok": 重建成功数, "failed": 失败数, "skipped": 无 DB 记录跳过数}
     """
+    from concurrent.futures import as_completed
+
     from app.services.data.baostock_backfill import _get_write_pool
     from app.services.data.sync_progress import update_progress
 
@@ -102,23 +113,36 @@ async def _rebuild_bins_from_pg(codes: list, qlib_dir: str, calendar: list) -> d
     ex = _get_write_pool()
     ok = failed = skipped = 0
     total = len(codes)
-    for i, code_upper in enumerate(codes):
-        rows = grouped.get(code_upper.upper())
-        if not rows:
-            # stock_daily 无此代码（指数目录 / 从未入库）→ 无法从 PG 重建。
-            # 记录 warning 而非静默跳过，否则用户会误以为"补齐没生效"。
-            skipped += 1
-            logger.warning("跳过重建 %s: stock_daily 无记录（可能为指数或数据缺失）", code_upper)
-            continue
-        try:
+    done = 0
+    # 批量并发：一次提交 _REBUILD_CONCURRENCY 只，全部完成后算本批结果，
+    # 再提交下一批——写盘期间互相重叠，而不是逐只 submit-等待串行化。
+    for start in range(0, len(codes), _REBUILD_CONCURRENCY):
+        batch = codes[start:start + _REBUILD_CONCURRENCY]
+        futures: dict = {}
+        for code_upper in batch:
+            rows = grouped.get(code_upper.upper())
+            if not rows:
+                # stock_daily 无此代码（指数目录 / 从未入库）→ 无法从 PG 重建。
+                # 记录 warning 而非静默跳过，否则用户会误以为"补齐没生效"。
+                skipped += 1
+                logger.warning("跳过重建 %s: stock_daily 无记录（可能为指数或数据缺失）", code_upper)
+                continue
             fut = ex.submit(_rebuild_one_stock, code_upper, rows, list(calendar), qlib_dir)
-            fut.result()
-            ok += 1
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            logger.warning("重建 %s bin 失败: %s", code_upper, e)
-        update_progress(pct=30 + int(35 * (i + 1) / total),
-                        status="running", message=f"从数据库重建 bin {i + 1}/{total}...")
+            futures[fut] = code_upper
+        for fut in as_completed(futures):
+            code_upper = futures[fut]
+            done += 1
+            try:
+                fut.result()
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                failed += 1
+                logger.warning("重建 %s bin 失败: %s", code_upper, e)
+            update_progress(
+                pct=30 + int(35 * done / total),
+                status="running",
+                message=f"从数据库重建 bin {done}/{total}...",
+            )
     return {"ok": ok, "failed": failed, "skipped": skipped}
 
 
@@ -131,6 +155,24 @@ def _compute_years_from_missing(samples: list) -> int:
     except ValueError:
         return 1
     return max(1, (date.today() - earliest).days // 365 + 1)
+
+
+def _recompute_targets(report: dict, calendar_rebuilt: bool,
+                       index_codes: set, code_range: dict) -> list:
+    """计算需重建 bin 的目标股票，避免补齐时二次全市场扫描。
+
+    - calendar_rebuilt=False：直接复用首次校验（run_validation）两个检查的
+      repair_codes 并集——校验与补齐之间没有任何数据变更，结论等价。
+    - calendar_rebuilt=True：日历已重建（day.txt 变了），全部 bin 长度必然
+      对不上新日历，无需扫描即可判定全市场为目标。
+
+    code_range 为 _load_existing_ranges 返回（小写代码 → [min,max]）。
+    """
+    if calendar_rebuilt:
+        return sorted(c for c in code_range if c not in index_codes)
+    fields_codes = set(report["checks"]["fields"].get("repair_codes") or [])
+    coverage_codes = set(report["checks"]["coverage"].get("repair_codes") or [])
+    return sorted((fields_codes | coverage_codes) - set(index_codes))
 
 
 async def run_repair(include_baostock: bool = False, universe: str = "all") -> dict:
@@ -162,23 +204,22 @@ async def run_repair(include_baostock: bool = False, universe: str = "all") -> d
         steps = []
 
         # 1. 日历重建（DB 权威，不耗 baostock）
-        if drift.get("missing_calendar_days"):
+        calendar_rebuilt = bool(drift.get("missing_calendar_days"))
+        if calendar_rebuilt:
             update_progress(pct=15, status="running", message="重建 day.txt（来自 stock_daily）...")
             await rebuild_calendar_from_db(qlib_dir)
             steps.append("calendar")
 
-        # 2. 针对新日历重新计算 bin 差异目标（剔除指数目录：无 stock_daily 数据，
-        #    无法从 PG 重建，不应进入 targets 造成"重建了但还报缺失"的假象）
+        # 2. 修复目标（不二次全量扫描）：日历未重建时复用首轮校验的 repair_codes；
+        #    日历已重建时 bin 长度必然对不上新 day.txt → 全市场都是目标
+        #    （剔除指数目录：无 stock_daily 数据，无法从 PG 重建，不应进入
+        #    targets 造成"重建了但还报缺失"的假象）
         from app.services.data.index_registry import load_index_codes
 
         index_codes = await load_index_codes()
         calendar = _get_calendar(qlib_dir)
         code_range = await _load_existing_ranges(qlib_dir, calendar)
-        fields2 = await run_io_cpu(check_fields, qlib_dir, calendar, index_codes, code_range)
-        coverage2 = await check_coverage(qlib_dir, calendar, index_codes, code_range)
-        targets = sorted(
-            (set(fields2["repair_codes"]) | set(coverage2["repair_codes"])) - index_codes
-        )
+        targets = _recompute_targets(report, calendar_rebuilt, index_codes, code_range)
         if targets:
             result = await _rebuild_bins_from_pg(targets, qlib_dir, calendar)
             step = f"bins({result['ok']}ok/{result['failed']}failed"

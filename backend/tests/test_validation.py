@@ -75,6 +75,40 @@ def test_calendar_diff_empty():
     assert diff["pg_missing_dates"] == []
 
 
+def test_calendar_diff_window_outside_not_a_gap():
+    """早于数据起点的历史交易日历不判缺口（历次更大窗口回填累积的残留）。"""
+    full = {f"2024-01-{i:02d}" for i in range(1, 11)}
+    # 数据窗口内缺 2024-01-03（日历有、数据无 → 真缺口）
+    stock_daily = full - {"2024-01-03"}
+    day_txt = full
+    # 日历还挂着 2000 年（早于数据起点）的历史交易日
+    trade_cal = full | {"2000-06-01", "2000-06-02"}
+
+    diff = _calendar_diff(day_txt, stock_daily, trade_cal)
+    # 数据起点之后的缺失仍报缺口
+    assert diff["pg_missing_dates"] == ["2024-01-03"]
+    # 更早的日期只作信息报告，不算缺口
+    assert diff["outside_calendar"] == ["2000-06-01", "2000-06-02"]
+    assert diff["missing_in_day_txt"] == []
+
+
+def test_calendar_diff_beyond_data_stays_gap():
+    """比数据更新鲜的日历日（如尚未发布的交易日）仍保留为缺口候选，
+    由 check_calendar 的发布时间点规则进一步区分，不在此抹掉。"""
+    stock_daily = {f"2024-01-{i:02d}" for i in range(1, 11)}
+    trade_cal = set(stock_daily) | {"2024-01-11"}
+    diff = _calendar_diff(set(stock_daily), stock_daily, trade_cal)
+    assert diff["pg_missing_dates"] == ["2024-01-11"]
+    assert diff["outside_calendar"] == []
+
+
+def test_calendar_diff_all_outside_when_no_data():
+    """stock_daily 为空（从未回填）→ 全部日历都属历史信息，不算缺口。"""
+    diff = _calendar_diff(set(), set(), {"2000-06-01", "2000-06-02"})
+    assert diff["pg_missing_dates"] == []
+    assert diff["outside_calendar"] == ["2000-06-01", "2000-06-02"]
+
+
 # ----------------------------------------------- 今日未发布日期的过滤
 def test_exclude_pending_today():
     from datetime import datetime

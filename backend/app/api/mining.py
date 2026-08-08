@@ -140,6 +140,21 @@ async def get_task_api(task_id: int, db=Depends(get_db)):
     return ApiResponse(ok=True, data=_task_dict(r))
 
 
+@router.get("/tasks/{task_id}/candidates")
+async def get_task_candidates_api(task_id: int, db=Depends(get_db)):
+    """查询任务挖掘出的候选因子（含未通过的，按轮次排序）。
+
+    挖掘过程的候选（含沙箱拒绝/评价未过的原因）都会记录在 mining_candidate 表，
+    供复盘"挖过什么、被哪一关拒绝"。
+    """
+    r = await db.get(MiningTask, task_id)
+    if r is None:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "任务不存在", "status": 404})
+    from app.services.mining.candidate_store import list_candidates
+    items = await list_candidates(task_id)
+    return ApiResponse(ok=True, data={"items": items, "total": len(items)})
+
+
 async def _run_llm_task(task_id: int, n: int, universe: str = None):
     """LLM 挖掘任务执行器（独立子进程）。"""
     _spawn(task_id, "llm", {"n_candidates": n, "n_rounds": 1, "universe": universe})

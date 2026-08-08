@@ -22,11 +22,15 @@ from app.models.baostock import StockDaily, TradeCalendar
 from app.models.stock_data_status import StockDataStatus
 # bin 格式常量（4 字节 float32 start_index 头）单一来源，避免多份定义漂移
 from app.services.data.eod_incremental import QLIB_BIN_HEADER_SIZE
+from app.services.data.baostock_backfill import BIN_FIELDS
 
 logger = logging.getLogger(__name__)
 
 # 样本列表最大条数（避免响应过大）
 MAX_SAMPLES = 20
+
+# check_fields 并行扫描的线程数（逐股独立读盘，IO 密集，线程够用）
+_CHECK_WORKERS = 8
 
 
 def _clip(items, n=MAX_SAMPLES):
@@ -43,6 +47,61 @@ def _status_from_counts(error=0, warn=0):
 
 
 # ---------------------------------------------------------------- fields
+def _check_stock_entry(name: str, feat_root: str, expected_size: int,
+                       calendar: list, db_spans: dict | None) -> dict | None:
+    """扫描单只股票 bin（线程池 worker）：缺失字段 / 长度异常 / close 质量。
+
+    在 check_fields 的并行批处理中调用；每股独立，天然可并行读盘。
+
+    Returns:
+        None（非股票目录）；否则 {name, missing, bad_size, suspicious, reason}
+        - missing / bad_size 非空 → 需重建这些字段
+        - suspicious=True 且 close 全 NaN/首尾重复 → 需全字段重建
+    """
+    import numpy as np
+
+    stock_dir = os.path.join(feat_root, name)
+    missing = [f for f in BIN_FIELDS if not os.path.exists(os.path.join(stock_dir, f"{f}.day.bin"))]
+    bad_size = []
+    suspicious = False
+    reason = ""
+    if not missing:
+        for f in BIN_FIELDS:
+            p = os.path.join(stock_dir, f"{f}.day.bin")
+            if os.path.getsize(p) != expected_size:
+                bad_size.append(f)
+        # close 质量检查（顺序读，峰值内存约 2MB）
+        close_path = os.path.join(stock_dir, "close.day.bin")
+        try:
+            raw = np.fromfile(close_path, dtype="<f4")
+            if raw.size > 0:
+                values = raw[1:]  # 去掉 start_index 头
+                finite = int(np.count_nonzero(np.isfinite(values)))
+                # NaN 占比以"该股实际上市区间内的交易日数"为分母，而不是整条日历：
+                # 新股上市只有几天，整日历占比天然 <1% 会被误判为损坏；用
+                # stock_daily 的 [min_date, max_date] 求期望交易日数，正常股
+                # ratio≈1，只有写入 bug（全 NaN/整段错位）才会 ≈0。
+                expected_days = None
+                if db_spans and name in db_spans:
+                    lo, hi = db_spans[name]
+                    expected_days = sum(1 for d in calendar if lo <= d <= hi)
+                denom = expected_days if (expected_days or 0) >= 1 else len(values)
+                ratio = finite / max(denom, 1)
+                duplicated = (
+                    len(values) >= 10
+                    and bool(np.array_equal(values[:5], values[-5:]))
+                )
+                if duplicated or ratio < 0.05:
+                    suspicious = True
+                    reason = f"finite={ratio:.0%}, dup={duplicated}, exp={expected_days or '-'}"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取 close bin 失败 %s: %s", close_path, e)
+            suspicious = True
+            reason = f"read_error: {str(e)[:60]}"
+    return {"name": name, "missing": missing, "bad_size": bad_size,
+            "suspicious": suspicious, "reason": reason}
+
+
 def check_fields(provider_uri: str, calendar: list,
                  index_codes: set = frozenset(), db_spans: dict | None = None) -> dict:
     """扫描 features/ 目录，检查每只股票 bin 字段完整性与文件长度。
@@ -68,10 +127,12 @@ def check_fields(provider_uri: str, calendar: list,
             missing_field_files, missing_field_samples: ["sh600000: close"],
             bad_size_stocks, bad_size_samples, suspicious_bin_stocks,
             suspicious_samples, repair_codes,  # 需要从 PG 重建 bin 的股票
+            repair_fields,  # {代码: [缺失/异常字段]}，值为 None 表示整只重建
         }
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     feat_root = os.path.join(provider_uri, "features")
-    from app.services.data.baostock_backfill import BIN_FIELDS
 
     if not os.path.isdir(feat_root):
         return {
@@ -80,9 +141,26 @@ def check_fields(provider_uri: str, calendar: list,
             "missing_field_samples": [], "bad_size_stocks": 0,
             "bad_size_samples": [], "suspicious_bin_stocks": 0,
             "suspicious_samples": [], "repair_codes": [],
+            "repair_fields": {},
         }
 
     expected_size = QLIB_BIN_HEADER_SIZE + 4 * len(calendar)
+    names = sorted(
+        n for n in os.listdir(feat_root)
+        if n not in index_codes and os.path.isdir(os.path.join(feat_root, n))
+    )
+    # 逐只检查相互独立 → 并行读盘；汇总按名称排序，样本确定性等同顺序扫描
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=_CHECK_WORKERS) as ex:
+        for r in ex.map(
+            _check_stock_entry, names,
+            [feat_root] * len(names), [expected_size] * len(names),
+            [calendar] * len(names), [db_spans] * len(names),
+        ):
+            if r:
+                results.append(r)
+    results.sort(key=lambda r: r["name"])
+
     missing_field_files = 0
     missing_field_samples = []
     bad_size_stocks = 0
@@ -90,77 +168,39 @@ def check_fields(provider_uri: str, calendar: list,
     suspicious_bin_stocks = 0
     suspicious_samples = []
     repair_codes = set()
-    stocks_checked = 0
-
-    for name in sorted(os.listdir(feat_root)):
-        if name in index_codes:
-            continue
-        stock_dir = os.path.join(feat_root, name)
-        if not os.path.isdir(stock_dir):
-            continue
-        stocks_checked += 1
-        missing = [f for f in BIN_FIELDS if not os.path.exists(os.path.join(stock_dir, f"{f}.day.bin"))]
-        if missing:
-            missing_field_files += len(missing)
-            for f in missing:
+    repair_fields: dict[str, list | None] = {}
+    for r in results:
+        name = r["name"]
+        if r["missing"]:
+            missing_field_files += len(r["missing"])
+            for f in r["missing"]:
                 if len(missing_field_samples) < MAX_SAMPLES:
                     missing_field_samples.append(f"{name}: {f}")
             repair_codes.add(name)
+            repair_fields[name] = r["missing"]
             continue
-
-        bad_size = []
-        for f in BIN_FIELDS:
-            p = os.path.join(stock_dir, f"{f}.day.bin")
-            if os.path.getsize(p) != expected_size:
-                bad_size.append(f)
-        if bad_size:
+        if r["bad_size"]:
             bad_size_stocks += 1
             if len(bad_size_samples) < MAX_SAMPLES:
-                bad_size_samples.append(f"{name}: {','.join(bad_size[:5])}")
+                bad_size_samples.append(f"{name}: {','.join(r['bad_size'][:5])}")
             repair_codes.add(name)
-
-        # 仅对 close 数组做质量检查（顺序读，峰值内存约 2MB）
-        close_path = os.path.join(stock_dir, "close.day.bin")
-        try:
-            import numpy as np
-            raw = np.fromfile(close_path, dtype="<f4")
-            if raw.size > 0:
-                values = raw[1:]  # 去掉 start_index 头
-                finite = int(np.count_nonzero(np.isfinite(values)))
-                # NaN 占比以"该股实际上市区间内的交易日数"为分母，而不是整条日历：
-                # 新股上市只有几天，整日历占比天然 <1% 会被误判为损坏；用
-                # stock_daily 的 [min_date, max_date] 求期望交易日数，正常股
-                # ratio≈1，只有写入 bug（全 NaN/整段错位）才会 ≈0。
-                expected_days = None
-                if db_spans and name in db_spans:
-                    lo, hi = db_spans[name]
-                    expected_days = sum(1 for d in calendar if lo <= d <= hi)
-                denom = expected_days if (expected_days or 0) >= 1 else len(values)
-                ratio = finite / max(denom, 1)
-                duplicated = (
-                    len(values) >= 10
-                    and bool(np.array_equal(values[:5], values[-5:]))
-                )
-                if duplicated or ratio < 0.05:
-                    suspicious_bin_stocks += 1
-                    if len(suspicious_samples) < MAX_SAMPLES:
-                        suspicious_samples.append(
-                            f"{name} (finite={ratio:.0%}, dup={duplicated}, exp={expected_days or '-'})"
-                        )
-                    # 全 NaN / 首尾重复 = 写入 bug，需要重建
-                    if duplicated or ratio < 0.01:
-                        repair_codes.add(name)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("读取 close bin 失败 %s: %s", close_path, e)
+            repair_fields[name] = r["bad_size"]
+        if r["suspicious"]:
+            suspicious_bin_stocks += 1
+            if len(suspicious_samples) < MAX_SAMPLES:
+                suspicious_samples.append(f"{name} ({r['reason']})")
+            # 全 NaN / 首尾重复 / 读取失败 = 写入 bug，整只重建
+            repair_codes.add(name)
+            repair_fields[name] = None  # None = 全部字段
 
     message = (
-        f"扫描 {stocks_checked} 只股票，缺失字段文件 {missing_field_files} 个，"
+        f"扫描 {len(results)} 只股票，缺失字段文件 {missing_field_files} 个，"
         f"长度异常 {bad_size_stocks} 只，疑似损坏 {suspicious_bin_stocks} 只"
     )
     return {
         "status": _status_from_counts(error=missing_field_files + bad_size_stocks, warn=suspicious_bin_stocks),
         "message": message,
-        "stocks_checked": stocks_checked,
+        "stocks_checked": len(results),
         "missing_field_files": missing_field_files,
         "missing_field_samples": missing_field_samples,
         "bad_size_stocks": bad_size_stocks,
@@ -168,6 +208,7 @@ def check_fields(provider_uri: str, calendar: list,
         "suspicious_bin_stocks": suspicious_bin_stocks,
         "suspicious_samples": suspicious_samples,
         "repair_codes": sorted(repair_codes),
+        "repair_fields": repair_fields,
     }
 
 
@@ -232,16 +273,31 @@ def _exclude_pending_today(missing_dates: list, now: "datetime | None" = None) -
 def _calendar_diff(day_txt: set, stock_daily: set, trade_cal: set) -> dict:
     """纯函数：三套日期集合的差异。
 
+    只把"不早于 stock_daily 数据起点"的交易日历拿去比对缺口：更早的日期
+    是历次更大窗口回填时累积的历史交易日（如 2000 年的日历还挂着，但数据
+    只回填了 10 年），数据未覆盖不构成缺口；需要更早历史时由更大 years 的
+    回填重新收录。比数据更新鲜的日历日（如"今天尚未发布"或真缺口）仍保留
+    参与判定，由 check_calendar 的发布时间点规则进一步区分。
+
     Returns:
         dict: 计数 + 样本（'YYYY-MM-DD' 字符串列表）
     """
-    missing_in_day_txt = sorted(stock_daily - day_txt)
-    missing_in_stock_daily = sorted(day_txt - stock_daily)
-    pg_missing_dates = sorted(trade_cal - stock_daily)
+    sd = set(stock_daily)
+    sd_lo = min(sd) if sd else None
+    if sd_lo is None:
+        window_cal = set()
+        outside_calendar = set(trade_cal)
+    else:
+        window_cal = {d for d in trade_cal if d >= sd_lo}
+        outside_calendar = trade_cal - window_cal
+    missing_in_day_txt = sorted(sd - day_txt)
+    missing_in_stock_daily = sorted(day_txt - sd)
+    pg_missing_dates = sorted(window_cal - sd)
     return {
         "missing_in_day_txt": missing_in_day_txt,
         "missing_in_stock_daily": missing_in_stock_daily,
         "pg_missing_dates": pg_missing_dates,
+        "outside_calendar": sorted(outside_calendar),
     }
 
 
@@ -265,6 +321,8 @@ async def check_calendar(provider_uri: str) -> dict:
     # （day.txt 由回填写入时已含今天，但 stock_daily 要收盘后才有数据）
     pg_missing_dates = _exclude_pending_today(diff["pg_missing_dates"])
     missing_in_stock_daily = _exclude_pending_today(missing_in_stock_daily)
+    # 早于数据起点的历史日历（更早年份未回填）不参与缺口判定，仅作信息报告
+    outside_calendar = diff["outside_calendar"]
 
     status = _status_from_counts(
         error=len(missing_in_day_txt) + len(missing_in_stock_daily),
@@ -273,6 +331,8 @@ async def check_calendar(provider_uri: str) -> dict:
     message = (
         f"day.txt {len(day_txt)} 天 / stock_daily {len(stock_daily_dates)} 天 / "
         f"baostock 日历 {len(trade_cal)} 天"
+        + (f"，日历早于数据起点 {len(outside_calendar)} 天（更早历史未回填，不算缺口）"
+           if outside_calendar else "")
         + (f"，day.txt 缺 {len(missing_in_day_txt)} 天" if missing_in_day_txt else "")
         + (f"，stock_daily 缺 {len(missing_in_stock_daily)} 天" if missing_in_stock_daily else "")
         + (f"，PG 缺 {len(pg_missing_dates)} 个交易日（需 baostock）" if pg_missing_dates else "")
@@ -287,10 +347,12 @@ async def check_calendar(provider_uri: str) -> dict:
             "missing_in_day_txt": len(missing_in_day_txt),
             "missing_in_stock_daily": len(missing_in_stock_daily),
             "pg_missing_dates": len(pg_missing_dates),
+            "outside_calendar_count": len(outside_calendar),
         },
         "missing_in_day_txt_samples": _clip(missing_in_day_txt),
         "missing_in_stock_daily_samples": _clip(missing_in_stock_daily),
         "pg_missing_date_samples": _clip(pg_missing_dates),
+        "outside_calendar_samples": _clip(outside_calendar),
     }
 
 
@@ -545,8 +607,21 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     qlib_result = await check_qlib(provider_uri, universe)
     macro_result = await run_io_cpu(check_macro, provider_uri, calendar, index_codes, fin_codes)
 
-    # 回填中：字段/覆盖/qlib/宏观结果不可信，统一降级为 warn
+    # 日历错位（day.txt ↔ stock_daily 不一致）：fields/coverage/qlib/macro 全部
+    # 以 day.txt 为长度参照，参照本身错位时它们的结论不可信 → 统一降级为 warn，
+    # 并提示先「一键补齐」（补齐第 1 步即按 stock_daily 重建 day.txt）。
+    calendar_counts = calendar_result["counts"]
+    calendar_misaligned = bool(
+        calendar_counts["missing_in_day_txt"] or calendar_counts["missing_in_stock_daily"]
+    )
+    check_suspect = sync_state["syncing"] or calendar_misaligned
     if sync_state["syncing"]:
+        degrade_note = "（回填进行中，结果可能不完整）"
+    elif calendar_misaligned:
+        degrade_note = "（日历未对齐：day.txt 与 stock_daily 不一致，先「一键补齐」再判）"
+    else:
+        degrade_note = ""
+    if check_suspect:
         _all_results = {
             "fields": fields_result, "coverage": coverage_result,
             "qlib": qlib_result, "macro": macro_result,
@@ -555,9 +630,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
             result = _all_results[key]
             if result["status"] == "error":
                 result["status"] = "warn"
-                result["message"] += "（回填进行中，结果可能不完整）"
+                result["message"] += degrade_note
 
-    calendar_counts = calendar_result["counts"]
     drift = {
         "needs_repair": bool(
             calendar_counts["missing_in_day_txt"]
@@ -594,6 +668,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     )
     if sync_state["syncing"]:
         summary = "回填进行中，校验结果不完整"
+    elif calendar_misaligned:
+        summary = "日历未对齐（day.txt 与 stock_daily 不一致），建议先「一键补齐」"
 
     # 数据对齐摘要：bin ↔ day.txt ↔ stock_daily ↔ 宏观字段 长度一致性，
     # 对齐正常则因子可直接计算（补齐的作用就是修复对齐错位）。
@@ -611,6 +687,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     checks_summary = "数据对齐正常，因子可直接计算" if not align_issues else "数据对齐待修复：" + "；".join(align_issues[:4])
     if sync_state["syncing"]:
         checks_summary = "回填进行中，数据对齐状态待定"
+    elif calendar_misaligned:
+        checks_summary = "日历未对齐：day.txt 与 stock_daily 不一致（先「一键补齐」）"
 
     return {
         "ok": all_ok and not sync_state["syncing"],

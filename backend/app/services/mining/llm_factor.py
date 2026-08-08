@@ -194,21 +194,37 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
         ]
         candidates = await _call_llm(messages)
         await _update_task(task_id, candidates_generated=len(candidates))
+        # 候选即刻落库（status=generated）：LLM 已产出即可复盘，后续阶段幂等更新
+        from app.services.mining.candidate_store import upsert_candidates
+        await upsert_candidates(task_id, [
+            {"name": c.get("name"), "expression": (c.get("expression") or "").strip(),
+             "description": c.get("description", ""), "status": "generated"}
+            for c in candidates
+        ], round_no=1)
 
         # Phase 1: 沙箱校验（主线程，快）
         valid = []
+        rejected = []
         for c in candidates:
             name = (c.get("name") or "").strip()
             expr = (c.get("expression") or "").strip()
             desc = c.get("description", "")
             if not name or not expr:
+                rejected.append({"name": name, "expression": expr, "description": desc,
+                                 "reason": "表达式或名称为空"})
                 continue
             try:
                 validate_expression(expr)
             except ExpressionValidationError as e:
                 logger.info("因子 %s 沙箱拒绝: %s", name, e)
+                rejected.append({"name": name, "expression": expr, "description": desc,
+                                 "reason": f"沙箱拒绝: {e}"})
                 continue
             valid.append({"name": name, "expression": expr, "description": desc})
+        if rejected:
+            await upsert_candidates(task_id, [
+                {**r, "status": "rejected"} for r in rejected
+            ], round_no=1)
 
         if not valid:
             await _update_task(task_id, status="done", candidates_passed=0,
@@ -247,9 +263,13 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
         # Phase 3: 筛选通过验证的因子（使用 valid_ic 作为主筛选指标）
         passed = []  # [(candidate, metrics), ...]
         best_ic = 0.0
+        evaluated = []  # 候选评价记录（落库用）
         for v, result in zip(valid, eval_results):
             if isinstance(result, Exception):
                 logger.warning("因子 %s 评价失败: %s", v["name"], result)
+                evaluated.append({"name": v["name"], "expression": v["expression"],
+                                  "description": v.get("description", ""),
+                                  "status": "rejected", "reason": f"评价异常: {str(result)[:200]}"})
                 continue
             # BH 校正后显著性（无 p 值视为未通过多重检验保护，但保留兜底路径）
             sig = result.get("significance") or {}
@@ -261,12 +281,23 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
             valid_ic = result.get("valid_ic")
             if result.get("passed") and valid_ic is not None and abs(valid_ic) >= ic_threshold and bh_ok:
                 passed.append((v, result))
+                evaluated.append({"name": v["name"], "expression": v["expression"],
+                                  "description": v.get("description", ""),
+                                  "status": "passed", "ic": valid_ic,
+                                  "rank_ic": result.get("rank_ic"),
+                                  "icir": result.get("icir")})
                 if abs(valid_ic) > abs(best_ic):
                     best_ic = valid_ic
             else:
                 reasons = result.get("fail_reasons", [])
                 logger.info("因子 %s 未通过验证: valid_ic=%s, 原因: %s",
                             v["name"], valid_ic, "; ".join(reasons[:3]))
+                # 未通过给具体原因落库
+                evaluated.append({"name": v["name"], "expression": v["expression"],
+                                  "description": v.get("description", ""),
+                                  "status": "rejected", "ic": valid_ic,
+                                  "rank_ic": result.get("rank_ic"),
+                                  "reason": f"valid_ic={valid_ic}；" + "; ".join(reasons[:3])})
                 # 不做全样本 IC 兜底：多维验证未通过说明因子不稳健（稳定性/显著性/
                 # 衰减/多样性不过关），全样本 IC 达标反而是过拟合信号，放行会污染因子库
 
@@ -298,6 +329,10 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
             for factor, (_, metrics) in zip(factors, passed):
                 await update_factor_metrics(factor["id"], metrics)
                 passed_ids.append(factor["id"])
+
+        # 批量落库候选评价结果（幂等更新；通过者补 factor 关联可后续查 factor_id）
+        if evaluated:
+            await upsert_candidates(task_id, evaluated, round_no=1)
 
         await _update_task(
             task_id, status="done", candidates_passed=len(passed_ids),
@@ -524,6 +559,14 @@ async def iterative_mine_factors(
             ]
             candidates = await _call_llm(messages)
             generated_total += len(candidates)
+            # 候选即刻落库（status=generated），后续阶段按状态幂等更新
+            if task_id is not None:
+                from app.services.mining.candidate_store import upsert_candidates
+                await upsert_candidates(task_id, [
+                    {"name": c.get("name"), "expression": (c.get("expression") or "").strip(),
+                     "description": c.get("description", ""), "status": "generated"}
+                    for c in candidates
+                ], round_no=round_idx + 1)
 
             # 沙箱校验 + 去重
             valid_exprs = []
@@ -552,6 +595,7 @@ async def iterative_mine_factors(
             # IC 评价（并行：所有有效因子一次性提交到进程池，使用多维验证）
             round_results = []
             best_ic = 0.0
+            iter_evaluated = []  # 落库记录：通过者+未通过者（含原因）
             if valid_exprs:
                 # 多样性检测序列懒加载一次（复用已有因子库）
                 if existing_ic_series is None:
@@ -580,6 +624,10 @@ async def iterative_mine_factors(
                 for v, ic_result in zip(valid_exprs, eval_results):
                     if isinstance(ic_result, Exception):
                         logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
+                        iter_evaluated.append({"name": v["name"], "expression": v["expression"],
+                                               "description": v.get("description", ""),
+                                               "status": "rejected",
+                                               "reason": f"评价异常: {str(ic_result)[:200]}"})
                         continue
                     # BH 校正后显著性约束
                     sig = ic_result.get("significance") or {}
@@ -587,14 +635,26 @@ async def iterative_mine_factors(
                     bh_ok = p_adj_val is None or p_adj_val < significance_alpha
                     # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
                     valid_ic = ic_result.get("valid_ic")
-                    if not (ic_result.get("passed") and valid_ic is not None
-                            and abs(valid_ic) >= ic_threshold and bh_ok):
+                    passed_ok = (ic_result.get("passed") and valid_ic is not None
+                                 and abs(valid_ic) >= ic_threshold)
+                    if not passed_ok or not bh_ok:
                         if not bh_ok:
                             logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
+                            iter_evaluated.append({
+                                "name": v["name"], "expression": v["expression"],
+                                "description": v.get("description", ""),
+                                "status": "rejected", "ic": ic_result.get("valid_ic"),
+                                "reason": f"未通过 BH 多重检验校正 (p_adj={p_adj_val:.4f})"})
                         else:
+                            reasons = (ic_result.get("fail_reasons") or [])
                             logger.info("因子 %s 未通过多维验证: valid_ic=%s, 原因: %s",
-                                        v["name"], valid_ic,
-                                        "; ".join((ic_result.get("fail_reasons") or [])[:3]))
+                                        v["name"], valid_ic, "; ".join(reasons[:3]))
+                            iter_evaluated.append({
+                                "name": v["name"], "expression": v["expression"],
+                                "description": v.get("description", ""),
+                                "status": "rejected", "ic": valid_ic,
+                                "rank_ic": ic_result.get("rank_ic"),
+                                "reason": f"valid_ic={valid_ic}；" + "; ".join(reasons[:3])})
                         # 不做全样本 IC 兜底（理由同单轮挖掘）：未过验证即不稳健
                         continue
                     round_results.append({
@@ -654,6 +714,26 @@ async def iterative_mine_factors(
                 "rejected": rejected,
             })
             improvement_curve.append(best_ic)
+
+            # 本轮候选落库：rejected（沙箱/重复）→ rejected；评价未过 → rejected（含原因）；
+            # 评价通过 → passed
+            if task_id is not None:
+                from app.services.mining.candidate_store import upsert_candidates
+                round_upserts = []
+                for r in rejected:
+                    round_upserts.append({
+                        "name": r.get("name", ""), "expression": r.get("expression", ""),
+                        "description": r.get("description", ""),
+                        "status": "rejected", "reason": r.get("reason", "")})
+                for r in iter_evaluated:
+                    round_upserts.append(r)
+                for f in round_results:
+                    round_upserts.append({
+                        "name": f["name"], "expression": f["expression"],
+                        "description": f.get("description", ""),
+                        "status": "passed", "ic": f.get("ic"), "rank_ic": f.get("rank_ic"),
+                        "icir": f.get("icir")})
+                await upsert_candidates(task_id, round_upserts, round_no=round_idx + 1)
 
             if task_id is not None:
                 await _update_task(task_id, candidates_generated=generated_total,

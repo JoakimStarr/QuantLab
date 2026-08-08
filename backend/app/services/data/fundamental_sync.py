@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.fundamental import FinancialIndicator
+from app.services.data.broadcast_state import broadcast_up_to_date, mark_broadcast
 from app.services.data.data_clean import to_float as _to_float
 from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _get_calendar, _write_bin
@@ -212,16 +213,26 @@ async def _load_all_series() -> dict:
     return out
 
 
-async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None) -> int:
+async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None,
+                                      force: bool = False) -> int:
     """把每只股票的财报序列按 PIT forward-fill 写入各自 bin 字段。
 
     与宏观不同：财报数值逐股不同，必须每股各自广播（features/{code}/{field}.day.bin）。
+
+    跳过优化：财报源数据（行数/最新报告期）与日历均未变时指纹一致，跳过
+    全市场重写；调用方校验发现财报字段缺失/错位时可 force=True 强制。
     Returns: 写入的（股票 × 字段）数。
     """
     qlib_dir = provider_uri or settings.qlib_provider_path
     calendar = _get_calendar(qlib_dir)
     if not calendar:
         logger.warning("日历为空，无法广播财报字段")
+        return 0
+    fp = {"cal_len": len(calendar), "cal_end": calendar[-1]}
+    fp.update(await _financial_fingerprint())
+    if not force and await asyncio.to_thread(broadcast_up_to_date, qlib_dir, "fundamental", fp):
+        logger.info("财报字段无变化（最新报告期 %s，行数 %s），跳过广播",
+                    fp.get("max_report"), fp.get("count"))
         return 0
     cal_dates = pd.to_datetime(calendar)
 
@@ -251,8 +262,17 @@ async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None) -> in
             written += 1
         if progress_cb and (i % 50 == 0 or i == total - 1):
             progress_cb(i + 1, total, f"广播财报字段 {i + 1}/{total}（{code}）...")
+    await asyncio.to_thread(mark_broadcast, qlib_dir, "fundamental", fp)
     logger.info("财报广播完成: %d 股票 × 字段", written)
     return written
+
+
+async def _financial_fingerprint() -> dict:
+    """financial_indicator 表聚合指纹：行数 + 最新报告期。"""
+    async with async_session() as session:
+        count = (await session.execute(select(func.count()).select_from(FinancialIndicator))).scalar() or 0
+        max_d = (await session.execute(select(func.max(FinancialIndicator.report_date)))).scalar()
+    return {"count": count, "max_report": max_d.strftime("%Y-%m-%d") if max_d else None}
 
 
 # ------------------------------------------------------------ 主流程

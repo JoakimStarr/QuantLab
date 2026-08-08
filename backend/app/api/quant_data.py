@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.baostock import TradeCalendar
 from app.models.stock_data_status import StockDataStatus
 from app.schemas.common import ApiResponse
 
@@ -92,7 +93,19 @@ async def data_status_api(db=Depends(get_db)):
         "last_error": r.last_error,
         "qlib_dir": r.qlib_dir,
     } for r in rows]
-    return ApiResponse(ok=True, data={"items": items, "total": total})
+    # 今日是否交易日：查 trade_calendar（只收录交易日）；
+    # 日历没有当天记录时（如最近未同步）回退到工作日推断（周一~周五）。周末/法定假日=非交易日。
+    today = datetime.now().date()
+    cal_row = await db.execute(
+        select(TradeCalendar.trade_date).where(TradeCalendar.trade_date == today)
+    )
+    today_is_trading_day = cal_row.first() is not None
+    if not today_is_trading_day:
+        today_is_trading_day = today.weekday() < 5
+    return ApiResponse(ok=True, data={
+        "items": items, "total": total,
+        "today_is_trading_day": today_is_trading_day,
+    })
 
 
 async def _detect_stale_sync(db) -> int:

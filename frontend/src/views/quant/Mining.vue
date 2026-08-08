@@ -108,7 +108,50 @@
             </a>
           </template>
 
-          <el-table :data="tasks" v-loading="loading" size="default">
+          <el-table :data="tasks" v-loading="loading" size="default" @expand-change="onExpandChange">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="task-detail">
+                  <!-- 失败原因 -->
+                  <div v-if="row.status === 'failed' && row.error" class="detail-error">
+                    <span class="detail-error__label">失败原因:</span>
+                    <span class="detail-error__text">{{ row.error }}</span>
+                  </div>
+                  <!-- 候选列表 -->
+                  <div v-if="candidatesMap[row.id]" class="detail-grid">
+                    <table class="cand-table">
+                      <thead>
+                        <tr>
+                          <th class="cand-col-round">轮</th>
+                          <th class="cand-col-name">名称</th>
+                          <th class="cand-col-expr">表达式</th>
+                          <th class="cand-col-status">结果</th>
+                          <th class="cand-col-ic">IC</th>
+                          <th class="cand-col-reason">原因</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="c in candidatesMap[row.id]" :key="c.id">
+                          <td class="cand-col-round">{{ c.round }}</td>
+                          <td class="cand-col-name">{{ c.name || '--' }}</td>
+                          <td class="cand-col-expr cell-mono">{{ c.expression }}</td>
+                          <td class="cand-col-status">
+                            <span class="badge" :class="candBadgeClass(c.status)">{{ candLabel(c.status) }}</span>
+                          </td>
+                          <td class="cand-col-ic cell-mono" :class="{ 'cell-ic-positive': c.ic != null && Number(c.ic) > 0 }">
+                            {{ c.ic != null ? Number(c.ic).toFixed(3) : '--' }}
+                          </td>
+                          <td class="cand-col-reason cell-meta" :title="candReason(c)">{{ candReason(c) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div v-if="!candidatesMap[row.id].length" class="detail-empty">该任务暂无候选记录</div>
+                  </div>
+                  <div v-else class="detail-empty">候选加载中...</div>
+                </div>
+              </template>
+            </el-table-column>
+
             <el-table-column label="类型" min-width="90">
               <template #default="{ row }">
                 <span class="badge" :class="typeBadgeClass(row.type)">{{ typeLabel(row.type) }}</span>
@@ -221,7 +264,7 @@ import { MagicStick, Operation, ChatLineSquare, Connection, VideoPlay, Refresh }
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { usePolling } from '@/composables/usePolling'
-import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask } from '@/api/mining'
+import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates } from '@/api/mining'
 import { getAiStatus } from '@/api/auth'
 import { listFactors } from '@/api/factor'
 
@@ -286,6 +329,33 @@ const form = reactive(defaultForm())
 const tasks = ref([])
 const loading = ref(false)
 const submitting = ref(false)
+
+// 候选列表缓存：task_id -> [candidate]，懒加载避免列表查询打满
+const candidatesMap = reactive({})
+
+// 候选状态标签/徽章
+const candLabel = (s) =>
+  ({ generated: '待评价', rejected: '拒绝', evaluated: '未达标', passed: '通过' })[s] || s
+const candBadgeClass = (s) =>
+  ({
+    passed: 'badge--success',
+    evaluated: 'badge--warning',
+    rejected: 'badge--danger',
+    generated: 'badge--muted',
+  })[s] || 'badge--muted'
+const candReason = (c) => c.reason || (c.fail_reasons || [])[0] || '--'
+
+// 展开行时懒加载该任务候选（缓存避免重复请求）
+async function onExpandChange(row, expandedRows) {
+  if (!expandedRows.includes(row)) return
+  if (candidatesMap[row.id]) return
+  try {
+    const data = await getMiningCandidates(row.id)
+    candidatesMap[row.id] = data?.items || []
+  } catch (e) {
+    candidatesMap[row.id] = []
+  }
+}
 
 // 文本因子挖掘对话框
 const textDialog = reactive({
@@ -828,5 +898,90 @@ onBeforeUnmount(() => {
   .mining-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* 展开详情：失败原因 + 候选列表 */
+.task-detail {
+  padding: 8px 16px 16px;
+}
+.detail-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(var(--danger-rgb), 0.25);
+  border-radius: var(--radius-md);
+  background: rgba(var(--danger-rgb), 0.06);
+}
+.detail-error__label {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--danger);
+  font-weight: var(--font-weight-medium);
+}
+.detail-error__text {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.5;
+}
+.detail-empty {
+  padding: 16px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.cand-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.cand-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-tertiary);
+  font-weight: var(--font-weight-medium);
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+.cand-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+.cand-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+.cand-col-round {
+  width: 40px;
+  text-align: center;
+}
+.cand-col-name {
+  min-width: 90px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cand-col-expr {
+  min-width: 220px;
+  word-break: break-all;
+}
+.cand-col-status {
+  width: 60px;
+  white-space: nowrap;
+}
+.cand-col-ic {
+  width: 70px;
+  white-space: nowrap;
+}
+.cand-col-reason {
+  min-width: 180px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
