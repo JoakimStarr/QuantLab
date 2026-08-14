@@ -348,7 +348,8 @@ const candReason = (c) => c.reason || (c.fail_reasons || [])[0] || '--'
 // 展开行时懒加载该任务候选（缓存避免重复请求）
 async function onExpandChange(row, expandedRows) {
   if (!expandedRows.includes(row)) return
-  if (candidatesMap[row.id]) return
+  // 空数组 [] 也是 truthy：只有真正缓存到候选才跳过拉取，否则每次展开重试
+  if (candidatesMap[row.id]?.length) return
   try {
     const data = await getMiningCandidates(row.id)
     candidatesMap[row.id] = data?.items || []

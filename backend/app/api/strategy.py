@@ -1,7 +1,8 @@
 """策略 API：CRUD、回测执行、结果查询。"""
 import logging
+from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, Query
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
@@ -13,7 +14,6 @@ from app.services.strategy.manager import (
     get_strategy,
     list_backtest_results,
     list_strategies,
-    run_strategy_backtest,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,50 +92,9 @@ async def archive_strategy_api(strategy_id: int):
     return ApiResponse(ok=True, data={"id": strategy_id, "status": "archived"})
 
 
-async def _run_backtest_task(strategy_id: int, start: str, end: str, backend: str = "qlib",
-                             capital: float = None, trade_unit: int = None,
-                             deal_price: str = None, slippage_bps: float = None,
-                             cost_buy: float = None, cost_sell: float = None,
-                             min_cost: float = None, universe: str = None,
-                             asset_class: str = "stock"):
-    try:
-        await run_strategy_backtest(
-            strategy_id, start, end, backend=backend, capital=capital,
-            trade_unit=trade_unit, deal_price=deal_price, slippage_bps=slippage_bps,
-            cost_buy=cost_buy, cost_sell=cost_sell, min_cost=min_cost,
-            universe=universe, asset_class=asset_class,
-        )
-        backtest_status.set_completed(strategy_id)
-        # 成功回测后把策略状态重置为 active（之前失败写入的 backtest_failed 需清除，
-        # 否则一次失败后即使后续回测成功，状态也永远显示失败）
-        from app.core.database import async_session
-        from app.models.strategy import Strategy
-        async with async_session() as session:
-            r = await session.get(Strategy, strategy_id)
-            if r and r.status != "active":
-                r.status = "active"
-                # 清除失败标记（保留描述正文）
-                if r.description and "[回测失败]" in r.description:
-                    r.description = r.description.split("\n[回测失败]")[0].strip()
-                await session.commit()
-    except Exception as e:
-        logger.exception("策略回测失败 strategy_id=%s", strategy_id)
-        backtest_status.set_failed(strategy_id, str(e))
-        # 更新策略状态为失败
-        from app.core.database import async_session
-        from app.models.strategy import Strategy
-        async with async_session() as session:
-            r = await session.get(Strategy, strategy_id)
-            if r:
-                r.status = "backtest_failed"
-                r.description = (r.description or "") + f"\n[回测失败] {str(e)[:200]}"
-                await session.commit()
-
-
 @router.post("/{strategy_id}/backtest")
 async def run_backtest_api(
     strategy_id: int,
-    background_tasks: BackgroundTasks,
     start_date: str = Query(None),
     end_date: str = Query(None),
     backend: str = Query("qlib", description="回测后端: qlib(默认,工业级A股约束) / vbt(矢量化,快速扫描)"),
@@ -149,7 +108,7 @@ async def run_backtest_api(
     universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
     asset_class: str = Query("stock", description="标的类别: stock=A股(T+1/整手/涨跌停) / etf=ETF(T+0语义/无整手/涨跌停放宽)"),
 ):
-    """触发策略回测（后台执行）。"""
+    """触发策略回测（独立 worker 子进程执行，不占 web 进程）。"""
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装，无法回测", 503)
@@ -180,35 +139,82 @@ async def run_backtest_api(
     strategy = await get_strategy(strategy_id)
     if strategy is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
+    from app.services.strategy.strategy_worker import is_task_running, spawn_strategy_worker
+    if is_task_running("backtest", strategy_id):
+        return ApiResponse(ok=True, data={
+            "message": f"策略 {strategy_id} 回测正在执行中，请勿重复提交",
+            "strategy_id": strategy_id, "running": True,
+        })
     backtest_status.set_running(strategy_id)
     from app.core.audit_log import audit
 
     audit(
         "backtest_submit",
         resource=f"strategy:{strategy_id}",
-        detail=f"提交策略回测（{backend} 后端）",
+        detail=f"提交策略回测（{backend} 后端，独立子进程执行）",
         backend=backend,
         start_date=start_date,
         end_date=end_date,
         universe=universe,
         asset_class=asset_class,
     )
-    background_tasks.add_task(
-        _run_backtest_task, strategy_id, start_date, end_date, backend, initial_capital,
-        trade_unit, deal_price, slippage_bps, cost_buy, cost_sell, min_cost, universe,
-        asset_class,
-    )
+    spawn_strategy_worker("backtest", strategy_id, {
+        "start": start_date, "end": end_date, "backend": backend,
+        "initial_capital": initial_capital, "trade_unit": trade_unit,
+        "deal_price": deal_price, "slippage_bps": slippage_bps,
+        "cost_buy": cost_buy, "cost_sell": cost_sell, "min_cost": min_cost,
+        "universe": universe, "asset_class": asset_class,
+    })
     return ApiResponse(ok=True, data={
-        "message": f"策略 {strategy_id} 回测已提交（后台执行）",
-        "strategy_id": strategy_id,
+        "message": f"策略 {strategy_id} 回测已提交（独立进程执行）",
+        "strategy_id": strategy_id, "running": True,
     })
 
 
 @router.get("/{strategy_id}/backtest-status")
 async def get_backtest_status_api(strategy_id: int):
-    """获取策略回测状态。"""
+    """获取策略回测状态。
+
+    回测在独立子进程（strategy_worker）执行，内存 backtest_status 只在提交时
+    置 running；子进程结束后内存不会自动更新，这里用 pid 存活 + DB 推导对账：
+    - worker 存活 → running
+    - worker 已退出且内存仍 running → 查策略状态推导 completed/failed
+    - web 重启内存丢失但 worker 存活 → 补 running
+    """
+    from app.services.strategy.strategy_worker import is_task_running
+
     status = backtest_status.get_status(strategy_id)
+    if status.get("status") != "running":
+        # web 重启后内存丢失：worker 还在跑则补为 running
+        if is_task_running("backtest", strategy_id):
+            backtest_status.set_running(strategy_id)
+            status = backtest_status.get_status(strategy_id)
+        return ApiResponse(ok=True, data={"strategy_id": strategy_id, **status})
+
+    if is_task_running("backtest", strategy_id):
+        return ApiResponse(ok=True, data={"strategy_id": strategy_id, **status})
+
+    # worker 已退出，内存还是 running → 从 DB 推导结果
+    strategy = await get_strategy(strategy_id)
+    if strategy and strategy.get("status") == "backtest_failed":
+        error = _extract_backtest_error(strategy.get("description"))
+        backtest_status.set_failed(strategy_id, error or "回测失败")
+        status = backtest_status.get_status(strategy_id)
+    else:
+        backtest_status.set_completed(strategy_id)
+        status = backtest_status.get_status(strategy_id)
     return ApiResponse(ok=True, data={"strategy_id": strategy_id, **status})
+
+
+def _extract_backtest_error(description: str | None) -> str | None:
+    """从策略描述中提取 "[回测失败] xxx" 片段。"""
+    if not description:
+        return None
+    marker = "[回测失败] "
+    idx = description.rfind(marker)
+    if idx == -1:
+        return None
+    return description[idx + len(marker):].strip() or None
 
 
 @router.get("/{strategy_id}/backtest-results")

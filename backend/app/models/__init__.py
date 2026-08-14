@@ -1,24 +1,27 @@
-from .user import User
-from .stock_data_status import StockDataStatus
-from .stock_index import StockIndex
-from .factor import Factor
-from .strategy import Strategy
 from .backtest_result import BacktestResult
-from .mining_task import MiningTask
-from .mining_candidate import MiningCandidate
-from .sync_history import SyncHistory
-from .task_result import TaskResult
-from .rule_backtest_history import RuleBacktestHistory
-from .fundamental import FinancialIndicator
-from .macro import MacroIndicator
-from .policy import PolicyNews
 from .baostock import (
-    StockDaily,
+    EtfDaily,
     StockBasic,
+    StockDaily,
     StockIndustry,
     TradeCalendar,
-    EtfDaily,
 )
+from .classic_backtest_history import ClassicBacktestHistory
+from .data_sync_schedule import DataSyncSchedule
+from .factor import Factor
+from .fundamental import FinancialIndicator
+from .macro import MacroIndicator
+from .mining_candidate import MiningCandidate
+from .mining_task import MiningTask
+from .policy import PolicyNews
+from .rule_backtest_history import RuleBacktestHistory
+from .stock_data_status import StockDataStatus
+from .stock_index import StockIndex
+from .strategy import Strategy
+from .sync_history import SyncHistory
+from .sync_schedule import SyncSchedule
+from .task_result import TaskResult
+from .user import User
 
 __all__ = [
     "User",
@@ -32,6 +35,7 @@ __all__ = [
     "SyncHistory",
     "TaskResult",
     "RuleBacktestHistory",
+    "ClassicBacktestHistory",
     "FinancialIndicator",
     "MacroIndicator",
     "PolicyNews",
@@ -40,4 +44,6 @@ __all__ = [
     "StockIndustry",
     "TradeCalendar",
     "EtfDaily",
+    "SyncSchedule",
+    "DataSyncSchedule",
 ]

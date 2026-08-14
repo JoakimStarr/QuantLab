@@ -154,8 +154,9 @@ class MiningSettings(SettingsBaseModel):
             "eval_timeout_seconds": 300,
             "ic_threshold": 0.03,
             "eval_horizon": 5,
-            "significance_alpha": 0.05,
-            "stability_threshold": 0.5,
+            "significance_alpha": 0.10,
+            "stability_threshold": 0.35,
+            "bh_alpha": 0.20,
             "positive_ratio_threshold": 0.55,
             "decay_threshold": -0.01,
             "diversity_threshold": 0.8,
@@ -292,6 +293,9 @@ class Settings(BaseSettings):
     glm_api_key: str = ""
     siliconflow_api_key: str = ""
     opencodezen_api_key: str = ""
+    # 全球宏观数据源（FRED / EIA 官方 API，免费注册）
+    fred_api_key: str = ""
+    eia_api_key: str = ""
 
     # -- 安全配置（从环境变量加载，不在 yaml 中） --
     security: SecuritySettings = SecuritySettings()

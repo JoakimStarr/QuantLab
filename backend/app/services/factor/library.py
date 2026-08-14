@@ -75,6 +75,16 @@ async def add_factors_batch(factors: list[dict], skip_validation: bool = False) 
         for f in factors:
             validate_expression(f["expression"])
     async with async_session() as session:
+        # 幂等：跳过已存在的表达式（uq_factor_expression 唯一约束，跨类别也会冲突）。
+        # 覆盖 ETF 因子集重复导入、挖掘批量入库与手动新增撞表达式等场景。
+        exprs = [f["expression"] for f in factors]
+        existing = set(
+            (await session.execute(
+                select(Factor.expression).where(Factor.expression.in_(exprs))
+            )).scalars().all()
+        )
+        factors = [f for f in factors if f["expression"] not in existing]
+
         objs = []
         for f in factors:
             obj = Factor(
@@ -84,6 +94,8 @@ async def add_factors_batch(factors: list[dict], skip_validation: bool = False) 
                 source_task_id=f.get("source_task_id"),
             )
             objs.append(obj)
+        if not objs:
+            return []
         session.add_all(objs)
         await session.commit()
         # expire_on_commit=False，commit 后 id 已由 flush 填充

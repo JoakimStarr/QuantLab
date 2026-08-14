@@ -48,11 +48,11 @@ async def qlib_status_api():
                 earliest_date = lines[0]
                 calendar_count = len(lines)
 
-        # 磁盘占用：qlib 数据目录大小 + 所在文件系统剩余空间（rglob 较慢，放线程池避免阻塞事件循环）
+        # 磁盘占用：qlib 数据目录大小 + 所在文件系统剩余空间
+        # （os.walk 全量扫描约数秒，用 5 分钟 TTL 缓存避免每次刷新都重扫）
         try:
-            def _dir_bytes(p: Path) -> int:
-                return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-            dir_size = await run_in_threadpool(_dir_bytes, Path(provider_uri))
+            from app.services.data.disk_usage import get_dir_size_bytes
+            dir_size = await run_in_threadpool(get_dir_size_bytes, Path(provider_uri))
             du = await run_in_threadpool(shutil.disk_usage, str(Path(provider_uri)))
             disk_usage = {
                 "dir_size_bytes": dir_size,

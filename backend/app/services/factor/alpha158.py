@@ -315,6 +315,7 @@ async def batch_evaluate_alpha158(
                 "message": "无 Alpha158 因子"}
 
     expr_map = {r.id: r.expression for r in targets}
+    name_map = {r.id: r.name for r in targets}
     total = len(targets)
 
     # 3. 预加载共用数据（关键优化！避免 N 次重复 IO）
@@ -376,6 +377,7 @@ async def batch_evaluate_alpha158(
         """单协程从 queue 取结果写 DB（避免并发 commit 抢占连接池）。"""
         nonlocal_success = 0
         nonlocal_failed = 0
+        failures = []
         while True:
             item = await queue.get()
             if item is None:  # 哨兵：全部完成
@@ -386,12 +388,22 @@ async def batch_evaluate_alpha158(
                 if err:
                     logger.warning("Alpha158 id=%d 评价失败: %s", fid, err)
                     nonlocal_failed += 1
+                    failures.append({
+                        "factor_id": fid,
+                        "name": name_map.get(fid, f"#{fid}"),
+                        "error": err,
+                    })
                 else:
                     await _update_single_factor_metrics(fid, metrics)
                     nonlocal_success += 1
             except Exception as e:
                 logger.warning("Alpha158 id=%d 写入 DB 异常: %s", fid, e)
                 nonlocal_failed += 1
+                failures.append({
+                    "factor_id": fid,
+                    "name": name_map.get(fid, f"#{fid}"),
+                    "error": str(e)[:200],
+                })
             finally:
                 queue.task_done()
                 # 触发进度回调（每次完成都触发，前端实时看到每个因子）
@@ -409,7 +421,7 @@ async def batch_evaluate_alpha158(
                             progress_callback(done, total, message)
                     except Exception:
                         pass
-        return nonlocal_success, nonlocal_failed
+        return nonlocal_success, nonlocal_failed, failures
 
     # 启动单 DB writer 协程
     writer_task = asyncio.create_task(_db_writer())
@@ -425,7 +437,7 @@ async def batch_evaluate_alpha158(
 
     # 等待 queue 排空后发哨兵结束 writer
     await queue.put(None)
-    success, failed = await writer_task
+    success, failed, failures = await writer_task
 
     logger.info("Alpha158 批量评价完成: %d 成功, %d 失败", success, failed)
     return {
@@ -433,6 +445,7 @@ async def batch_evaluate_alpha158(
         "evaluated": success,
         "failed": failed,
         "total": total,
+        "failures": failures,
         "message": f"批量评价完成 {success}/{total}",
     }
 
@@ -576,11 +589,16 @@ async def backfill_alpha158_metrics(
 
     evaluated = eval_result.get("evaluated", 0)
     failed = eval_result.get("failed", 0)
+    failures = eval_result.get("failures", [])
     logger.info("补算完成: %d/%d 成功", evaluated, len(targets))
     return {
         "ok": True,
         "evaluated": evaluated,
         "eval_failed": failed,
         "total": len(targets),
-        "message": f"补算完成 {evaluated}/{len(targets)}",
+        "failures": failures,
+        "message": (
+            f"补算完成 {evaluated}/{len(targets)}"
+            + (f"，失败 {failed} 个" if failed else "")
+        ),
     }

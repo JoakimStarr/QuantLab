@@ -2,16 +2,37 @@
 import json
 import asyncio
 import logging
+import time
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from sqlalchemy import select
 from app.core.database import async_session
 from app.models.factor import Factor
 from app.services.quant.factor_eval import (
-    load_factor_values, load_label, compute_ic, compute_decay
+    load_factor_values, load_label, compute_ic, compute_decay, compute_daily_ic_series
 )
 
 logger = logging.getLogger(__name__)
+
+# 跨请求 TTL 缓存：对比结果是 CPU/IO 重活，同一组因子短时间内重复对比直接复用
+_compare_cache: dict = {}
+_COMPARE_CACHE_TTL = 300  # 秒
+
+
+def _cache_get(key):
+    item = _compare_cache.get(key)
+    if item and time.time() - item["ts"] < _COMPARE_CACHE_TTL:
+        return item["data"]
+    return None
+
+
+def _cache_set(key, data):
+    _compare_cache[key] = {"ts": time.time(), "data": data}
+    if len(_compare_cache) > 64:
+        # 简单淘汰最旧的 32 条，避免缓存无限膨胀
+        for k in list(_compare_cache)[:32]:
+            _compare_cache.pop(k, None)
 
 
 async def compare_factors(factor_ids: list[int], start: str, end: str) -> dict:
@@ -40,87 +61,105 @@ async def compare_factors(factor_ids: list[int], start: str, end: str) -> dict:
     return factor_data
 
 
+def _compute_one(f, label_df, start: str, end: str) -> dict:
+    """计算单个因子的 IC 指标 + 衰减 + IC 时序（供线程池并行调用）。"""
+    try:
+        try:
+            factor_df = load_factor_values(f.expression, start, end)
+        except FileNotFoundError as e:
+            # AutoML bundle 丢失：跳过该因子但记录错误，避免整体 500
+            logger.warning("因子 %s 加载失败（AutoML 模型缺失）: %s", f.name, e)
+            return {
+                "result": {
+                    "id": f.id, "name": f.name, "expression": f.expression,
+                    "category": f.category,
+                    "error": f"AutoML 模型不可用: {e}",
+                },
+                "ic_timeseries": [], "decay_data": [],
+            }
+        ic_metrics = compute_ic(factor_df, label_df)
+
+        # 衰减曲线
+        decay = json.loads(f.decay) if f.decay else None
+        if not decay:
+            try:
+                decay = compute_decay(factor_df, label_df, max_lag=10)
+            except Exception:
+                decay = {}
+
+        result = {
+            "id": f.id,
+            "name": f.name,
+            "expression": f.expression,
+            "category": f.category,
+            "ic": ic_metrics.get("ic"),
+            "rank_ic": ic_metrics.get("rank_ic"),
+            "icir": ic_metrics.get("icir"),
+            "ir": ic_metrics.get("ir"),
+            "n_days": ic_metrics.get("n_days"),
+            "decay": decay,
+        }
+
+        # 衰减对比数据
+        decay_data = [
+            {"lag": int(lag), "factor_id": f.id, "ic": ic_val}
+            for lag, ic_val in (decay or {}).items()
+            if ic_val is not None
+        ]
+
+        # IC 时序（每日 IC，向量化计算）
+        daily_ic = compute_daily_ic_series(factor_df, label_df)
+        ic_timeseries = [
+            {"date": str(date.date()), "factor_id": f.id, "ic": round(float(v), 4)}
+            for date, v in daily_ic.items()
+        ]
+        return {"result": result, "ic_timeseries": ic_timeseries, "decay_data": decay_data}
+    except Exception as e:
+        logger.warning("因子 %s 对比失败: %s", f.name, e)
+        return {
+            "result": {
+                "id": f.id, "name": f.name, "expression": f.expression,
+                "error": str(e),
+            },
+            "ic_timeseries": [], "decay_data": [],
+        }
+
+
 def _compute_comparison_sync(factors, start: str, end: str) -> dict:
     """同步计算因子对比（在线程池中调用）"""
     from app.services.quant.qlib_init import init_qlib
     init_qlib()
 
+    key = (tuple(sorted(f.id for f in factors)), start, end)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
     results = []
     decay_data = []
     ic_timeseries = []
 
-    for f in factors:
-        try:
-            try:
-                factor_df = load_factor_values(f.expression, start, end)
-            except FileNotFoundError as e:
-                # AutoML bundle 丢失：跳过该因子但记录错误，避免整体 500
-                logger.warning("因子 %s 加载失败（AutoML 模型缺失）: %s", f.name, e)
-                results.append({
-                    "id": f.id, "name": f.name, "expression": f.expression,
-                    "category": f.category,
-                    "error": f"AutoML 模型不可用: {e}",
-                })
-                continue
-            label_df = load_label(start, end)
-            ic_metrics = compute_ic(factor_df, label_df)
+    # 标签对所有因子相同，只加载一次（旧实现每因子循环内重复加载 N 次）
+    label_df = load_label(start, end)
 
-            # 衰减曲线
-            decay = json.loads(f.decay) if f.decay else None
-            if not decay:
-                try:
-                    decay = compute_decay(factor_df, label_df, max_lag=10)
-                except Exception:
-                    decay = {}
+    # 因子间并行计算（qlib C 扩展释放 GIL，4 并发参照 alpha158 已验证的并发上限）
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_compute_one, f, label_df, start, end) for f in factors]
+        for fut in futures:
+            out = fut.result()
+            results.append(out["result"])
+            ic_timeseries.extend(out["ic_timeseries"])
+            decay_data.extend(out["decay_data"])
 
-            results.append({
-                "id": f.id,
-                "name": f.name,
-                "expression": f.expression,
-                "category": f.category,
-                "ic": ic_metrics.get("ic"),
-                "rank_ic": ic_metrics.get("rank_ic"),
-                "icir": ic_metrics.get("icir"),
-                "ir": ic_metrics.get("ir"),
-                "n_days": ic_metrics.get("n_days"),
-                "decay": decay,
-            })
-
-            # 衰减对比数据
-            for lag, ic_val in (decay or {}).items():
-                if ic_val is not None:
-                    decay_data.append({"lag": int(lag), "factor_id": f.id, "ic": ic_val})
-
-            # IC 时序（每日 IC）
-            merged = factor_df.join(label_df, how="inner").dropna()
-            if not merged.empty:
-                daily_ic = merged.groupby(level="datetime").apply(
-                    lambda g: g["factor"].corr(g["label"]) if len(g) >= 2 else np.nan,
-                    include_groups=False,
-                ).dropna()
-                for date, ic_val in daily_ic.items():
-                    ic_timeseries.append({
-                        "date": str(date.date()),
-                        "factor_id": f.id,
-                        "ic": round(float(ic_val), 4),
-                    })
-
-        except Exception as e:
-            logger.warning("因子 %s 对比失败: %s", f.name, e)
-            results.append({
-                "id": f.id,
-                "name": f.name,
-                "expression": f.expression,
-                "error": str(e),
-            })
-
-    return {
+    data = {
         "factors": results,
         "decay_comparison": decay_data,
         "ic_timeseries": ic_timeseries,
         "start": start,
         "end": end,
     }
+    _cache_set(key, data)
+    return data
 
 
 async def get_factor_decay(factor_id: int, max_lag: int = 20) -> dict:

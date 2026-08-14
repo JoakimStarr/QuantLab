@@ -381,6 +381,7 @@ _TASK_LABEL = {
     "etf": "ETF 同步",
     "macro": "宏观同步",
     "eastmoney": "宏观同步",
+    "global_macro": "全球宏观同步",
     "fundamental": "财报同步",
     "full": "一键全同步",
 }

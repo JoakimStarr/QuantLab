@@ -126,6 +126,17 @@ async def _run(args: argparse.Namespace) -> None:
         logger.info("宏观同步完成: %s", result)
         return
 
+    if args.kind == "global_macro":
+        # 全球宏观同步走 FRED/CFTC/EIA，不连 baostock，不需要爬取锁，可与回填并行。
+        # run_global_macro_sync_task 自管进度：fetch-only 不写全局进度（避免覆盖回填），
+        # broadcast 模式（数据校验/补齐阶段）才写进度。
+        from app.services.data.global_macro_sync import run_global_macro_sync_task
+
+        logger.info("global_macro worker 启动 pid=%s broadcast=%s", os.getpid(), args.broadcast)
+        result = await run_global_macro_sync_task(broadcast=args.broadcast)
+        logger.info("全球宏观同步完成: %s", result)
+        return
+
     if args.kind == "policy":
         # 政策风向（新闻联播文字稿）只存库不写 bin，不需要爬取锁，可与回填并行。
         from app.services.data.policy_sync import run_policy_sync_task
@@ -286,7 +297,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="QuantLab 数据同步独立 worker")
     parser.add_argument(
         "--kind",
-        choices=["backfill", "eod", "repair", "indices", "fundamental", "macro", "etf", "policy", "policy_ai", "full"],
+        choices=["backfill", "eod", "repair", "indices", "fundamental", "macro", "global_macro", "etf", "policy", "policy_ai", "full"],
         default="backfill",
     )
     parser.add_argument("--universe", default="csi300")

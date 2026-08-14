@@ -13,7 +13,9 @@ const generateUUID = generateId
 
 const request = axios.create({
   baseURL: '/api/v1',
-  timeout: 30000,
+  // 批量/长耗时任务（因子补算、参数扫描、AI 解释、深度分析等）常超 30s，
+  // 默认放宽到 3 分钟，避免被误报为"网络连接失败/请求超时"。
+  timeout: 180000,
   paramsSerializer: { indexes: null },
 })
 
@@ -58,13 +60,13 @@ request.interceptors.response.use(
 
     // 网络错误（无响应）
     if (isNetworkError(error)) {
-      ElMessage.error('网络连接失败，请检查网络后重试')
+      ElMessage.error('服务器未响应，请检查网络或稍后重试')
       return Promise.reject(error)
     }
 
     // 超时
     if (isTimeoutError(error)) {
-      ElMessage.error('请求超时，请稍后重试')
+      ElMessage.error('服务器处理时间较长，请稍后查看结果页或刷新重试')
       return Promise.reject(error)
     }
 

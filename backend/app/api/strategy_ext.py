@@ -5,7 +5,7 @@ import json
 import logging
 
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, Body, Query
+from fastapi import APIRouter, Body, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -50,13 +50,12 @@ async def list_backtest_statuses_api():
 @router.post("/{strategy_id}/param-sweep")
 async def param_sweep_api(
     strategy_id: int,
-    background_tasks: BackgroundTasks,
     topk_list: list[int] = Query([10, 20, 30, 50], description="topk 参数列表"),
     rebalance_list: list[str] = Query(["day", "week"], description="调仓频率列表"),
     start_date: str = Query(None),
     end_date: str = Query(None),
 ):
-    """参数扫描（添加8: 参数扫描）"""
+    """参数扫描（独立 worker 子进程执行，结果写 task_result 表）。"""
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -66,7 +65,14 @@ async def param_sweep_api(
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
 
-    # 创建持久化任务记录（替代 settings 单例内存存储）
+    from app.services.strategy.strategy_worker import is_task_running, spawn_strategy_worker
+    if is_task_running("param-sweep", strategy_id):
+        return ApiResponse(ok=True, data={
+            "message": f"策略 {strategy_id} 参数扫描正在执行中，请勿重复提交",
+            "strategy_id": strategy_id, "running": True,
+        })
+
+    # 创建持久化任务记录（前端轮询 task_result 获取结果/状态）
     async with async_session() as session:
         tr = TaskResult(strategy_id=strategy_id, task_type="param-sweep", status="running")
         session.add(tr)
@@ -74,29 +80,15 @@ async def param_sweep_api(
         await session.refresh(tr)
         task_result_id = tr.id
 
-    async def _sweep_task():
-        from app.services.strategy.param_sweep import run_param_sweep
-        try:
-            results = await run_param_sweep(strategy_id, topk_list, rebalance_list, start, end)
-            async with async_session() as session:
-                r = await session.get(TaskResult, task_result_id)
-                if r:
-                    r.status = "done"
-                    r.payload = json.dumps(results, default=str)
-                    await session.commit()
-        except Exception as e:
-            logger.exception("参数扫描失败")
-            async with async_session() as session:
-                r = await session.get(TaskResult, task_result_id)
-                if r:
-                    r.status = "failed"
-                    r.error = str(e)[:500]
-                    await session.commit()
-
-    background_tasks.add_task(_sweep_task)
+    spawn_strategy_worker("param-sweep", strategy_id, {
+        "task_result_id": task_result_id,
+        "topk_list": topk_list, "rebalance_list": rebalance_list,
+        "start": start, "end": end,
+    })
     return ApiResponse(ok=True, data={
-        "message": f"参数扫描已提交（{len(topk_list)} x {len(rebalance_list)} = {len(topk_list) * len(rebalance_list)} 组合）",
+        "message": f"参数扫描已提交（{len(topk_list)} x {len(rebalance_list)} = {len(topk_list) * len(rebalance_list)} 组合，独立进程执行）",
         "strategy_id": strategy_id,
+        "task_result_id": task_result_id,
         "topk_list": topk_list,
         "rebalance_list": rebalance_list,
     })
@@ -142,6 +134,7 @@ async def compare_backtests_api(
                     "benchmark_return", "excess_return"]
     for r in results:
         row = {"result_id": r["id"], "strategy_id": r["strategy_id"],
+               "name": r.get("name") or f"策略#{r['strategy_id']}",
                "start_date": r["start_date"], "end_date": r["end_date"]}
         for k in metrics_keys:
             row[k] = r.get(k)
@@ -276,7 +269,7 @@ async def monte_carlo_api(
     回答"这条回测曲线的指标是不是靠运气"。
     """
     from app.core.config import settings
-    from app.core.executor import run_cpu
+    from app.core.executor import run_io_cpu
     from app.services.quant.monte_carlo import (
         bootstrap_metric_ci,
         mc_cache_get,
@@ -316,7 +309,9 @@ async def monte_carlo_api(
     if cached is not None:
         return ApiResponse(ok=True, data=cached)
 
-    result = await run_cpu(
+    # 线程池执行（不用 run_cpu 进程池，避免 reload 关停时 atexit join 卡死）；
+    # bootstrap 为 numpy 计算，单线程可接受，且有 LRU 缓存兜底
+    result = await run_io_cpu(
         bootstrap_metric_ci,
         returns.to_numpy(),
         n_iter=n_iter,
@@ -335,7 +330,6 @@ async def monte_carlo_api(
 @router.post("/{strategy_id}/walk-forward")
 async def walk_forward_api(
     strategy_id: int,
-    background_tasks: BackgroundTasks,
     train_window: str = Query("730D", description="训练窗口（如 730D≈2年）"),
     test_window: str = Query("180D", description="测试窗口（如 180D≈6月）"),
     step: str = Query("180D", description="滚动步长"),
@@ -344,7 +338,7 @@ async def walk_forward_api(
     rebalance: str = Query("day", description="调仓频率 day/week/month"),
     universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
-    """Walk-forward 滚动回测：训练窗选最优 topk，测试窗做样本外验证，评估跨窗一致性。"""
+    """Walk-forward 滚动回测（独立 worker 子进程执行，结果写 task_result 表）。"""
     from app.services.quant.qlib_init import is_qlib_available
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -355,19 +349,15 @@ async def walk_forward_api(
     if s is None:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
 
+    # 快速校验：策略有有效因子才提交（worker 内会重新加载因子表达式）
     from app.services.strategy.manager import _load_factor_expressions
     factor_ids = json.loads(s.factor_ids) if s.factor_ids else []
     factor_meta = await _load_factor_expressions(factor_ids)
-    # AutoML 因子现在由 load_factor_values 支持，可参与回测
-    factor_exprs = {}
-    weights = {}
-    for fid in factor_ids:
-        meta = factor_meta.get(fid)
-        if not meta:
-            continue
-        factor_exprs[meta["name"]] = meta["expression"]
-        weights[meta["name"]] = meta.get("ic") or 0.0
-    if not factor_exprs:
+    has_valid_expr = any(
+        meta and not (meta.get("expression") or "").startswith(("AutoML(", "TextSentiment("))
+        for meta in factor_meta.values()
+    )
+    if not has_valid_expr:
         raise AppError("VALIDATION_ERROR", "策略无有效因子", 422)
 
     topk_candidates = topk_list or [10, 20, 30, 50]
@@ -376,10 +366,15 @@ async def walk_forward_api(
     period = settings.quant.get("default_backtest_period", {})
     start = period.get("start", "2020-01-01")
     end = period.get("end", "2024-12-31")
-    combination_method = s.combination_method
-    benchmark = s.benchmark
 
-    # 创建持久化任务记录（替代 settings 单例内存存储）
+    from app.services.strategy.strategy_worker import is_task_running, spawn_strategy_worker
+    if is_task_running("walk-forward", strategy_id):
+        return ApiResponse(ok=True, data={
+            "message": f"策略 {strategy_id} Walk-forward 正在执行中，请勿重复提交",
+            "strategy_id": strategy_id, "running": True,
+        })
+
+    # 创建持久化任务记录（前端轮询 task_result 获取结果/状态）
     async with async_session() as session:
         tr = TaskResult(strategy_id=strategy_id, task_type="walk-forward", status="running")
         session.add(tr)
@@ -387,40 +382,16 @@ async def walk_forward_api(
         await session.refresh(tr)
         task_result_id = tr.id
 
-    async def _wf_task():
-        try:
-            import asyncio
-
-            from app.services.quant.walk_forward import build_score_df_from_exprs, run_walk_forward
-            loop = asyncio.get_running_loop()
-            score_df = await loop.run_in_executor(
-                None, build_score_df_from_exprs,
-                factor_exprs, weights, combination_method, start, end, universe,
-            )
-            result = await loop.run_in_executor(
-                None, run_walk_forward,
-                score_df, None, train_window, test_window, step,
-                topk_candidates, n_drop, rebalance, 0.0013, 0.0023, benchmark,
-            )
-            async with async_session() as session:
-                r = await session.get(TaskResult, task_result_id)
-                if r:
-                    r.status = "done"
-                    r.payload = json.dumps(result, default=str)
-                    await session.commit()
-        except Exception as e:
-            logger.exception("walk-forward 回测失败 strategy_id=%s", strategy_id)
-            async with async_session() as session:
-                r = await session.get(TaskResult, task_result_id)
-                if r:
-                    r.status = "failed"
-                    r.error = str(e)[:500]
-                    await session.commit()
-
-    background_tasks.add_task(_wf_task)
+    spawn_strategy_worker("walk-forward", strategy_id, {
+        "task_result_id": task_result_id,
+        "train_window": train_window, "test_window": test_window, "step": step,
+        "topk_list": topk_candidates, "n_drop": n_drop, "rebalance": rebalance,
+        "universe": universe, "start": start, "end": end,
+    })
     return ApiResponse(ok=True, data={
-        "message": "Walk-forward 滚动回测已提交（后台执行）",
+        "message": "Walk-forward 滚动回测已提交（独立进程执行）",
         "strategy_id": strategy_id,
+        "task_result_id": task_result_id,
         "train_window": train_window,
         "test_window": test_window,
         "step": step,

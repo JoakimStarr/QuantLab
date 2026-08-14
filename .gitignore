@@ -48,6 +48,9 @@ data/backup/
 # 第三方 quant-wiki 文档（嵌套 git 仓库，可重克隆，不纳入版本控制）
 docs/quant-wiki/
 
+# 量化书籍参考（qunat_book 约 489MB PDF，git clone 而来，不纳入版本控制）
+docs/book/
+
 # Python 缓存
 __pycache__/
 *.py[cod]

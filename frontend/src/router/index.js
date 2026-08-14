@@ -192,4 +192,10 @@ router.beforeEach(async (to, from, next) => {
   next()
 })
 
+// 每个页面在浏览器标签页（tab）标题中带上页面标题
+router.afterEach((to) => {
+  const pageTitle = to.meta?.title || to.name || ''
+  document.title = pageTitle ? `${pageTitle} · QuantLab 量化策略研究平台` : 'QuantLab · 量化策略研究平台'
+})
+
 export default router

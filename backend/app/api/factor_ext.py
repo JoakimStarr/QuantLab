@@ -345,7 +345,7 @@ async def deep_analysis_api(
     import time
     from app.core.config import settings
     from app.services.quant.qlib_init import is_qlib_available
-    from app.core.executor import run_cpu
+    from app.core.executor import run_io_cpu
     from app.services.quant.factor_eval import deep_analyze_factor
 
     if not await is_qlib_available():
@@ -366,9 +366,10 @@ async def deep_analysis_api(
     if cached and (now - cached["ts"]) < _DEEP_CACHE_TTL:
         return ApiResponse(ok=True, data=cached["data"])
 
-    # CPU 密集任务走进程池：deep_analyze_factor 为模块级函数，参数均可 pickle
+    # 线程池执行：qlib C 扩展释放 GIL；不用 run_cpu（进程池）避免 reload 关停时
+    # atexit join 进程池导致服务卡死（与因子评价同源事故）
     try:
-        result = await run_cpu(
+        result = await run_io_cpu(
             deep_analyze_factor,
             factor["expression"], start, end, universe, horizon, n_groups, ic_window,
         )

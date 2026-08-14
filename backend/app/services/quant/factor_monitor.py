@@ -179,25 +179,3 @@ async def detect_all_factors_decay(db_session=None) -> dict:
         "decaying_factors": decaying_factors,
         "all_results": all_results,
     }
-
-
-async def run_decay_check():
-    """定时任务入口：检测所有因子衰减并推送 WebSocket 告警"""
-    from app.core.database import async_session
-    from app.core.websocket_manager import ws_manager
-
-    async with async_session() as session:
-        result = await detect_all_factors_decay(db_session=session)
-
-    if result["decaying"] > 0:
-        await ws_manager.broadcast(
-            "factor_decay_alert",
-            {
-                "decaying_count": result["decaying"],
-                "total": result["total"],
-                "decaying_factors": result["decaying_factors"][:20],
-            },
-        )
-        logger.warning("因子衰减告警推送: %d 个因子衰减", result["decaying"])
-
-    return result

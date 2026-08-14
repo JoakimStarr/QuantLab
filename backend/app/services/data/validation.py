@@ -470,8 +470,9 @@ def check_macro(provider_uri: str, calendar: list,
             是数据源固有缺口，bin 无法凭空生成，不应计为"缺失"误报；只有
             完全无财报数据的股票，其字段缺失才是真实缺口（需重新拉取）。
     """
-    from app.services.data.macro_sync import MACRO_INDICATORS, AKSHARE_INDICATORS
     from app.services.data.fundamental_sync import FIN_FIELD_NAMES
+    from app.services.data.global_macro_sync import GLOBAL_MACRO_INDICATORS
+    from app.services.data.macro_sync import MACRO_INDICATORS, AKSHARE_INDICATORS
 
     macro_fields = [
         fname
@@ -479,6 +480,9 @@ def check_macro(provider_uri: str, calendar: list,
     ] + [
         fname
         for cfg in AKSHARE_INDICATORS.values() for fname in cfg["fields"]
+    ] + [
+        fname
+        for cfg in GLOBAL_MACRO_INDICATORS.values() for fname in cfg["fields"]
     ]
     macro_fields += FIN_FIELD_NAMES
     macro_fields = sorted(set(macro_fields))

@@ -5,6 +5,11 @@ export function listFactors(params) {
   return request.get('/factors', { params })
 }
 
+// 表达式白名单（算子+字段），供编辑器自动补全（与后端校验共用同一数据源）
+export function getExpressionSchema() {
+  return request.get('/factors/expression-schema')
+}
+
 // 新增因子：{name, expression, category, description}，JSON body（表达式可能很长，避免塞 URL）
 export function addFactor(data) {
   return request.post('/factors', data)
@@ -29,9 +34,11 @@ export function seedEtfFactors() {
 
 // 补算因子的评价指标：传 factorIds 只重算所选因子，不传则补算缺指标的；
 // params 可含 start_date/end_date（评价区间）、universe（标的池）
+// 批量补算可能超过 axios 默认 30s（曾被误报为"网络连接失败/请求超时"），放宽到 10 分钟
 export function backfillAlpha158Metrics(factorIds, params = {}) {
   return request.post('/factors/backfill-alpha158-metrics', null, {
     params: { factor_ids: factorIds, ...params },
+    timeout: 600000,
   })
 }
 

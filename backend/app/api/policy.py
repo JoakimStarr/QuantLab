@@ -1,17 +1,27 @@
-"""政策风向 API：手动触发同步、查询列表（关键词/日期/翻页）、状态。"""
+"""政策风向 API：手动触发同步、查询列表（关键词/日期/翻页）、状态、AI 任务进度。"""
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, func, or_, select
 
 from app.core.database import get_db
-from app.schemas.common import ApiResponse
 from app.models.policy import PolicyAnalysis, PolicyNews
+from app.schemas.common import ApiResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/policy", tags=["policy"])
+
+
+def _parse_date(value: str | None, name: str) -> date | None:
+    """解析 YYYY-MM-DD 参数，格式非法返回 400（而不是 500）。"""
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{name} 日期格式非法: {value!r}，需要 YYYY-MM-DD") from None
 
 
 @router.post("/sync")
@@ -26,10 +36,32 @@ async def policy_sync_api():
 async def policy_ai_sync_api(
     backfill_days: int = Query(30, ge=1, le=365, description="AI 解读回填窗口（天）"),
 ):
-    """手动触发 AI 政策解读（对「有新闻无解读」的日期生成结构化解读，独立 worker 后台执行）。"""
+    """手动触发 AI 政策解读（对「有新闻无解读」的日期生成结构化解读，独立 worker 后台执行）。
+
+    返回 pending_count：本次窗口内待处理天数，前端据此判断任务是否已结束，
+    避免拿全历史口径的 status.ai_pending 当完成信号（那会导致轮询永不终止）。
+    """
+    from app.services.data.policy_ai import _pending_dates
+    pending = await _pending_dates(backfill_days)
+
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("policy_ai", "policy_ai", days=backfill_days)
-    return ApiResponse(ok=True, data={"message": f"AI 政策解读已提交（回填 {backfill_days} 天，后台执行）"})
+    return ApiResponse(ok=True, data={
+        "message": f"AI 政策解读已提交（回填 {backfill_days} 天，待处理 {len(pending)} 天，后台执行）",
+        "pending_count": len(pending),
+        "backfill_days": backfill_days,
+    })
+
+
+@router.get("/ai/progress")
+async def policy_ai_progress_api():
+    """AI 解读任务实时进度（worker 子进程写共享文件）。
+
+    返回 {status, total, done, failed, started_at, error?}，status ∈ running/done/failed；
+    无任务时返回 None。前端以终态（done/failed）作为本次任务完成的唯一信号。
+    """
+    from app.services.data.policy_ai_progress import get_progress
+    return ApiResponse(ok=True, data=get_progress())
 
 
 @router.get("/list")
@@ -44,9 +76,9 @@ async def policy_list_api(
     """政策风向列表：按播出日期倒序 + 关键词过滤（标题/正文/AI关键词）+ 分页。"""
     query = select(PolicyNews, PolicyAnalysis)
     if start:
-        query = query.where(PolicyNews.news_date >= datetime.strptime(start, "%Y-%m-%d").date())
+        query = query.where(PolicyNews.news_date >= _parse_date(start, "start"))
     if end:
-        query = query.where(PolicyNews.news_date <= datetime.strptime(end, "%Y-%m-%d").date())
+        query = query.where(PolicyNews.news_date <= _parse_date(end, "end"))
     if keyword:
         kw = f"%{keyword.strip()}%"
         query = query.where(or_(
@@ -86,7 +118,7 @@ async def policy_status_api(db=Depends(get_db)):
     ai_pending = 0
     if latest is not None:
         sub = (
-            select(PolicyNews.news_date.distinct())
+            select(PolicyNews.news_date.distinct().label("news_date"))
             .where(PolicyNews.news_date <= latest)
         ).subquery()
         done_sub = (
@@ -108,6 +140,24 @@ async def policy_status_api(db=Depends(get_db)):
     })
 
 
+@router.get("/schedule")
+async def policy_schedule_api():
+    """定时数据刷新配置（启用开关/每日时间/工作日限定/环节选择）。"""
+    from app.services.task.sync_schedule_service import get_schedule
+    return ApiResponse(ok=True, data=await get_schedule())
+
+
+@router.put("/schedule")
+async def policy_schedule_update_api(payload: dict):
+    """更新定时数据刷新配置（单行 upsert），返回落库后的配置。"""
+    from app.services.task.sync_schedule_service import save_schedule
+    try:
+        data = await save_schedule(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return ApiResponse(ok=True, data=data)
+
+
 @router.get("/ai/detail")
 async def policy_ai_detail_api(
     date: str = Query(..., description="播出日期 YYYY-MM-DD"),
@@ -115,7 +165,7 @@ async def policy_ai_detail_api(
 ):
     """某一天的 AI 政策解读（无解读返回 data=None）。"""
     a = (await db.execute(
-        select(PolicyAnalysis).where(PolicyAnalysis.news_date == datetime.strptime(date, "%Y-%m-%d").date())
+        select(PolicyAnalysis).where(PolicyAnalysis.news_date == _parse_date(date, "date"))
     )).scalar_one_or_none()
     if a is None:
         return ApiResponse(ok=True, data=None)
@@ -139,6 +189,17 @@ def _analysis_to_dict(a: PolicyAnalysis) -> dict:
     }
 
 
+@router.get("/sectors/performance")
+async def policy_sector_perf_api(
+    days: int = Query(14, ge=1, le=60, description="回看最近 N 个有 AI 解读的日期"),
+    db=Depends(get_db),
+):
+    """点名板块 × 市场表现：每天点名的板块（匹配到证监会行业后）T+1/T+3/T+5 成分股等权收益。"""
+    from app.services.data.policy_sector_perf import compute_sector_performance
+    data = await compute_sector_performance(days)
+    return ApiResponse(ok=True, data=data)
+
+
 @router.get("/ai/topics")
 async def ai_topics_api(
     start: str = Query(None, description="开始日期 YYYY-MM-DD"),
@@ -151,9 +212,9 @@ async def ai_topics_api(
     """
     query = select(PolicyAnalysis.news_date, PolicyAnalysis.topics).where(PolicyAnalysis.status == "done")
     if start:
-        query = query.where(PolicyAnalysis.news_date >= datetime.strptime(start, "%Y-%m-%d").date())
+        query = query.where(PolicyAnalysis.news_date >= _parse_date(start, "start"))
     if end:
-        query = query.where(PolicyAnalysis.news_date <= datetime.strptime(end, "%Y-%m-%d").date())
+        query = query.where(PolicyAnalysis.news_date <= _parse_date(end, "end"))
     rows = (await db.execute(query.order_by(PolicyAnalysis.news_date))).all()
     if not rows:
         return ApiResponse(ok=True, data={"items": [], "total": 0})

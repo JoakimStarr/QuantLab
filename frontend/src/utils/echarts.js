@@ -3,7 +3,7 @@
 // 登录页/非图表页不再下载约 200KB（gzip）的 ECharts。
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, PieChart, CandlestickChart, RadarChart } from 'echarts/charts'
+import { LineChart, BarChart, PieChart, CandlestickChart, RadarChart, HeatmapChart } from 'echarts/charts'
 import {
   GridComponent,
   TooltipComponent,
@@ -14,6 +14,7 @@ import {
   MarkLineComponent,
   MarkAreaComponent,
   MarkPointComponent,
+  VisualMapComponent,
 } from 'echarts/components'
 
 use([
@@ -23,6 +24,7 @@ use([
   PieChart,
   CandlestickChart,
   RadarChart,
+  HeatmapChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -32,4 +34,5 @@ use([
   MarkLineComponent,
   MarkAreaComponent,
   MarkPointComponent,
+  VisualMapComponent,
 ])

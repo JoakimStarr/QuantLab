@@ -96,14 +96,30 @@ export function syncExternalMarket() {
   return request.post('/quant/data/sync-external-market')
 }
 
-// 全市场数据校验（bin 字段/DB 字段/日历/覆盖 一致性）
-export function validateData(universe) {
-  return request.get('/quant/data/validate', { params: { universe } })
+// 全市场数据校验（独立 worker 子进程执行）：先触发，再轮询状态
+export function triggerValidate(universe) {
+  return request.post('/quant/data/validate', null, { params: { universe } })
+}
+// 校验状态：{status: running/done/failed/idle, report?, error?}
+export function getValidateStatus() {
+  return request.get('/quant/data/validate/status')
 }
 
 // 一键补齐：按校验差异修复 DB 与 qlib 不一致（include_baostock 允许从 baostock 补拉）
 export function repairData(params) {
   return request.post('/quant/data/repair', params)
+}
+
+// === 定时数据管理同步 ===
+
+// 读取定时同步配置（启用/时间/工作日/环节）
+export function getDataSyncSchedule() {
+  return request.get('/quant/data/schedule')
+}
+
+// 保存定时同步配置（单行 upsert）
+export function saveDataSyncSchedule(data) {
+  return request.put('/quant/data/schedule', data)
 }
 
 // === 因子相关 ===

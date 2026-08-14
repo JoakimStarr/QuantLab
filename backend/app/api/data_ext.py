@@ -297,6 +297,7 @@ async def sync_history_api(
         "finished_at": r.finished_at.strftime("%Y-%m-%dT%H:%M:%S+08:00") if r.finished_at else None,
         "duration_seconds": r.duration_seconds,
         "version": r.version,
+        "release_date": r.release_date,
         "latest_date": r.latest_date,
         "stock_count": r.stock_count,
         "row_count": r.row_count,
@@ -640,16 +641,44 @@ async def indices_api(db=Depends(get_db)):
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})
 
 
-@router.get("/validate")
-async def validate_api(universe: str = Query("all")):
-    """全市场数据校验：bin 字段完整性 + DB/qlib 字段与覆盖一致性 + 日历同步。
+@router.post("/validate")
+async def validate_trigger_api(universe: str = Query("all")):
+    """触发全市场数据校验（独立 worker 子进程执行，不占 web 进程）。
 
-    返回结构化报告（checks/calendar/drift），前端据此展示差异并决定是否修复。
+    校验扫描 5400+ 标的 bin 完整性/日历对齐/DB 覆盖，耗时数十秒到分钟。
+    改独立子进程后前端先 POST 提交，再轮询 /validate/status 直到 done。
     """
-    from app.services.data.validation import run_validation
+    from app.services.data.validation_worker import (
+        is_validation_running,
+        spawn_validation_worker,
+    )
+    if is_validation_running():
+        return ApiResponse(ok=True, data={
+            "status": "running",
+            "message": "数据校验正在执行中，请稍候",
+        })
+    spawn_validation_worker(universe)
+    return ApiResponse(ok=True, data={
+        "status": "running",
+        "message": "数据校验已提交（独立进程执行）",
+    })
 
-    report = await run_validation(provider_uri=settings.qlib_provider_path, universe=universe)
-    return ApiResponse(ok=True, data=report)
+
+@router.get("/validate/status")
+async def validate_status_api():
+    """查询校验状态与最新报告（前端轮询）。"""
+    from app.services.data.validation_worker import (
+        is_validation_running,
+        read_report,
+        read_status,
+    )
+    status = read_status()
+    if is_validation_running():
+        status = {**status, "status": "running"}
+        return ApiResponse(ok=True, data={**status, "report": None})
+    if status.get("status") == "done":
+        return ApiResponse(ok=True, data={**status, "report": read_report()})
+    return ApiResponse(ok=True, data={**status, "report": None})
 
 
 @router.post("/repair")
@@ -714,3 +743,21 @@ async def fundamental_sync_api(
                    + ("" if not broadcast else "，含 PIT 广播写 bin"),
         "broadcast": broadcast,
     })
+
+
+@router.get("/schedule")
+async def data_sync_schedule_api():
+    """定时数据管理同步配置（启用/时间/工作日/环节选择）。"""
+    from app.services.task.data_sync_schedule_service import get_schedule
+    return ApiResponse(ok=True, data=await get_schedule())
+
+
+@router.put("/schedule")
+async def data_sync_schedule_update_api(payload: dict):
+    """更新定时数据管理同步配置（单行 upsert），返回落库后的配置。"""
+    from app.services.task.data_sync_schedule_service import save_schedule
+    try:
+        data = await save_schedule(payload)
+    except ValueError as e:
+        raise AppError("VALIDATION_ERROR", str(e), 422) from None
+    return ApiResponse(ok=True, data=data)

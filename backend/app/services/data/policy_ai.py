@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 
 from app.core.database import async_session
 from app.models.policy import PolicyAnalysis, PolicyNews
+from app.services.data import policy_ai_progress
 from app.services.data.db_utils import bulk_upsert
 
 logger = logging.getLogger(__name__)
@@ -161,8 +162,10 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
     """
     pending = await _pending_dates(backfill_days)
     if not pending:
+        policy_ai_progress.finish(True, total=0)
         return {"days": 0, "done": 0, "failed": 0}
     logger.info("AI 政策解读待处理 %d 天: %s ... %s", len(pending), pending[-1], pending[0])
+    policy_ai_progress.start(len(pending))
 
     sem = asyncio.Semaphore(_concurrency())
 
@@ -190,24 +193,30 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
 
     done = 0
     failed = 0
-    for i, d in enumerate(pending):
-        if progress_cb:
-            progress_cb(i + 1, len(pending), d.isoformat())
-        row = await process(d)
-        # 单日即时 upsert：失败日期写 failed 供下次重试，成功日期立即可查
-        await bulk_upsert(
-            PolicyAnalysis, [row], ["news_date"], batch=50,
-            update_cols=["status", "summary", "policy_tone", "key_items", "sectors",
-                         "topics", "keywords", "market_impact", "error", "retry_count"],
-        )
-        if row["status"] == "done":
-            done += 1
-        else:
-            failed += 1
-        if (i + 1) % 20 == 0:
-            logger.info("AI 政策解读进度 %d/%d (done=%d failed=%d)",
-                        i + 1, len(pending), done, failed)
+    try:
+        for i, d in enumerate(pending):
+            if progress_cb:
+                progress_cb(i + 1, len(pending), d.isoformat())
+            row = await process(d)
+            # 单日即时 upsert：失败日期写 failed 供下次重试，成功日期立即可查
+            await bulk_upsert(
+                PolicyAnalysis, [row], ["news_date"], batch=50,
+                update_cols=["status", "summary", "policy_tone", "key_items", "sectors",
+                             "topics", "keywords", "market_impact", "error", "retry_count"],
+            )
+            if row["status"] == "done":
+                done += 1
+            else:
+                failed += 1
+            policy_ai_progress.update(done, failed, len(pending))
+            if (i + 1) % 20 == 0:
+                logger.info("AI 政策解读进度 %d/%d (done=%d failed=%d)",
+                            i + 1, len(pending), done, failed)
+    except Exception:
+        policy_ai_progress.finish(False, error="policy_ai 任务异常退出")
+        raise
 
+    policy_ai_progress.finish(True, done=done, failed=failed, total=len(pending))
     logger.info("AI 政策解读完成: 处理 %d 天, 成功 %d, 失败 %d",
                 len(pending), done, failed)
     return {"days": len(pending), "done": done, "failed": failed}

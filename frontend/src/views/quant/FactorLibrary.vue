@@ -22,8 +22,18 @@
         <div class="factor-overview__label">衰减因子</div>
       </div>
       <div class="factor-overview__item">
-        <div class="factor-overview__num">{{ avgIc.toFixed(2) }}</div>
-        <div class="factor-overview__label">平均 IC</div>
+        <el-tooltip placement="bottom" :show-after="200">
+          <template #content>
+            <div>仅统计 active 且已评价的因子</div>
+            <div v-if="avgIcDetail.labels.length">按类别均值：</div>
+            <div v-for="(label, i) in avgIcDetail.labels" :key="label">
+              {{ label }}：{{ avgIcDetail.means[i].toFixed(3) }}
+            </div>
+            <div>共 {{ avgIcDetail.count }} 个因子</div>
+          </template>
+          <div class="factor-overview__num">{{ avgIc.toFixed(3) }}</div>
+        </el-tooltip>
+        <div class="factor-overview__label">平均 IC（active）</div>
       </div>
       <div class="factor-overview__cats">
         <span v-for="c in categoryCounts" :key="c.key" class="factor-overview__cat" :title="`${c.label} ${c.count}`">
@@ -198,8 +208,40 @@
       </div>
     </el-dialog>
 
-    <!-- AI 因子解释弹窗：完整详细解读 + 重新解释 + 继续追问 -->
-    <el-dialog v-model="showAiExplain" :title="`因子解读 · ${aiFactor?.name ?? ''}`" width="680px" destroy-on-close>
+    <!-- AI 因子解释弹窗：完整详细解读 + 重新解释 + 继续追问（支持 md / 折叠 / 放大） -->
+    <el-dialog
+      v-model="showAiExplain"
+      width="960px"
+      destroy-on-close
+      class="ai-explain-dialog"
+      :fullscreen="aiExplainFullscreen"
+      :style="{ maxWidth: aiExplainFullscreen ? undefined : 'min(960px, 94vw)' }"
+    >
+      <template #header>
+        <div class="ai-explain-header">
+          <span class="ai-explain-header__title">因子解读 · {{ aiFactor?.name ?? '' }}</span>
+          <el-select
+            v-if="aiExplainFullscreen"
+            v-model="aiChatWidth"
+            size="small"
+            class="ai-explain-header__split"
+            :disabled="!aiDetail || aiDetailLoading"
+            @change="applyAiChatLayout"
+          >
+            <el-option label="左右分栏显示" :value="'split'" />
+            <el-option label="上下排列（全宽）" :value="'stack'" />
+          </el-select>
+          <el-tooltip :content="aiExplainFullscreen ? '还原窗口' : '放大窗口'" :show-after="150">
+            <el-button
+              size="small"
+              text
+              circle
+              :icon="aiExplainFullscreen ? FullScreen : Expand"
+              @click="toggleAiExplainFullscreen"
+            />
+          </el-tooltip>
+        </div>
+      </template>
       <!-- 表达式上下文 -->
       <div class="ai-ctx">
         <span class="ai-ctx__label">表达式</span>
@@ -214,21 +256,31 @@
         </template>
 
         <template v-else-if="aiDetail">
-          <div class="ai-explain__summary">{{ aiDetail.explanation?.summary }}</div>
-          <div class="ai-explain__section">
-            <div class="ai-explain__label">它怎么构造</div>
-            <div class="ai-explain__text">{{ aiDetail.explanation?.logic }}</div>
+          <div class="ai-explain__summary">
+            <div class="ai-explain__markdown" v-html="renderMarkdown(aiDetail.explanation?.summary)"></div>
           </div>
-          <div class="ai-explain__section">
-            <div class="ai-explain__label">为什么可能有效</div>
-            <div class="ai-explain__text">{{ aiDetail.explanation?.rationale }}</div>
-          </div>
-          <div v-if="aiDetail.explanation?.caveats?.length" class="ai-explain__section">
-            <div class="ai-explain__label">使用时注意</div>
-            <ul class="ai-explain__caveats">
-              <li v-for="(c, i) in aiDetail.explanation.caveats" :key="i">{{ c }}</li>
-            </ul>
-          </div>
+          <el-collapse v-model="aiOpenSections" class="ai-explain__collapse">
+            <el-collapse-item name="logic">
+              <template #title>
+                <span class="ai-explain__label">它怎么构造</span>
+              </template>
+              <div class="ai-explain__text ai-explain__markdown" v-html="renderMarkdown(aiDetail.explanation?.logic)"></div>
+            </el-collapse-item>
+            <el-collapse-item name="rationale">
+              <template #title>
+                <span class="ai-explain__label">为什么可能有效</span>
+              </template>
+              <div class="ai-explain__text ai-explain__markdown" v-html="renderMarkdown(aiDetail.explanation?.rationale)"></div>
+            </el-collapse-item>
+            <el-collapse-item v-if="aiDetail.explanation?.caveats?.length" name="caveats">
+              <template #title>
+                <span class="ai-explain__label">使用时注意</span>
+              </template>
+              <ul class="ai-explain__caveats">
+                <li v-for="(c, i) in aiDetail.explanation.caveats" :key="i" class="ai-explain__markdown" v-html="renderMarkdown(c)"></li>
+              </ul>
+            </el-collapse-item>
+          </el-collapse>
           <div class="ai-explain__meta">
             <span v-if="aiDetail.explanation?.generated_at"
               >生成于 {{ timeAgo(aiDetail.explanation.generated_at) }}</span
@@ -248,27 +300,32 @@
 
       <!-- 追问对话区 -->
       <template v-if="aiDetail && !aiDetailLoading">
-        <div class="ai-chat" ref="aiChatRef">
-          <div v-if="!aiChatMessages.length" class="ai-chat__empty">
-            想深入了解这个因子？直接问它，比如「适合什么股票池？」「和动量类因子有什么区别？」
+        <div class="ai-chat-wrap" :class="{ 'ai-chat-wrap--split': aiChatWidth === 'split' }">
+          <div class="ai-chat" ref="aiChatRef">
+            <div class="ai-chat__scroll">
+              <div v-if="!aiChatMessages.length" class="ai-chat__empty">
+                想深入了解这个因子？直接问它，比如「适合什么股票池？」「和动量类因子有什么区别？」
+              </div>
+              <div v-for="(m, i) in aiChatMessages" :key="i" class="ai-chat__msg" :class="'ai-chat__msg--' + m.role">
+                <div v-if="m.role === 'assistant'" class="ai-chat__bubble ai-chat__bubble--md ai-explain__markdown" v-html="renderMarkdown(m.content)"></div>
+                <div v-else class="ai-chat__bubble">{{ m.content }}</div>
+              </div>
+              <div v-if="aiChatting" class="ai-chat__msg ai-chat__msg--assistant">
+                <div class="ai-chat__bubble ai-chat__bubble--typing">思考中…</div>
+              </div>
+            </div>
           </div>
-          <div v-for="(m, i) in aiChatMessages" :key="i" class="ai-chat__msg" :class="'ai-chat__msg--' + m.role">
-            <div class="ai-chat__bubble">{{ m.content }}</div>
+          <div class="ai-chat__input">
+            <el-input
+              v-model="aiQuestion"
+              placeholder="继续追问，例如：适合什么股票池？"
+              :disabled="aiChatting"
+              @keyup.enter="onSendChat"
+            />
+            <el-button type="primary" :loading="aiChatting" :disabled="!aiQuestion.trim()" @click="onSendChat"
+              >发送</el-button
+            >
           </div>
-          <div v-if="aiChatting" class="ai-chat__msg ai-chat__msg--assistant">
-            <div class="ai-chat__bubble ai-chat__bubble--typing">思考中…</div>
-          </div>
-        </div>
-        <div class="ai-chat__input">
-          <el-input
-            v-model="aiQuestion"
-            placeholder="继续追问，例如：适合什么股票池？"
-            :disabled="aiChatting"
-            @keyup.enter="onSendChat"
-          />
-          <el-button type="primary" :loading="aiChatting" :disabled="!aiQuestion.trim()" @click="onSendChat"
-            >发送</el-button
-          >
         </div>
       </template>
 
@@ -284,14 +341,9 @@
           <el-input v-model="addForm.name" placeholder="如 momentum_20d" maxlength="100" show-word-limit />
         </el-form-item>
         <el-form-item label="表达式" prop="expression">
-          <el-input
-            v-model="addForm.expression"
-            type="textarea"
-            :rows="4"
-            placeholder="qlib 表达式，如 $close / Ref($close, 20) - 1"
-          />
+          <QlibExprEditor v-model="addForm.expression" />
           <div class="add-expr-hint">
-            支持字段 $close/$open/$volume/$pe_ttm… 与算子 Mean/Std/Ref/Rank…（负数 Ref = 未来数据会被拒绝）
+            输入 $ 或算子名可自动补全（如 $close / Ref($close, 20) - 1）；负数 Ref = 未来数据会被拒绝
             <a class="add-expr-link" @click.prevent="openQlibDocs">QLib 表达式学习文档 →</a>
           </div>
         </el-form-item>
@@ -339,11 +391,13 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElCheckbox } from 'element-plus/es/components/checkbox/index'
 import { ElButton } from 'element-plus/es/components/button/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
-import { Plus, Refresh, Download, Warning, MagicStick, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Download, Warning, MagicStick, Search, Expand, FullScreen } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { fmt, numClass } from '@/utils/format'
+import { renderMarkdown } from '@/utils/markdown'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import QlibExprEditor from '@/components/quant/QlibExprEditor.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { useFactorStore } from '@/stores/factor'
@@ -388,6 +442,7 @@ async function loadUniverses() {
   }
 }
 const backfillingMetrics = ref(false)
+const evaluatingId = ref(null)
 const backfillPeriod = ref([])
 const aiExplaining = ref(false)
 const decayChecking = ref(false)
@@ -395,6 +450,9 @@ const decayMap = ref({}) // factor_id -> is_decaying
 
 // === AI 因子解释弹窗 ===
 const showAiExplain = ref(false)
+const aiExplainFullscreen = ref(false)
+const aiChatWidth = ref(localStorage.getItem('factor_ai_chat_layout') || 'stack')
+const aiOpenSections = ref(['logic', 'rationale', 'caveats'])
 const aiFactor = ref(null)
 const aiDetail = ref(null)
 const aiDetailLoading = ref(false)
@@ -534,7 +592,21 @@ async function onBackfillMetrics() {
     const params = { start_date: start || undefined, end_date: end || undefined }
     if (evalUniverse.value) params.universe = evalUniverse.value
     const data = await backfillAlpha158Metrics(ids, params)
-    ElMessage.success(data?.message || `重算完成 ${data?.evaluated || 0}/${data?.total || 0}`)
+    const total = data?.total ?? ids.length
+    const failed = Number(data?.eval_failed ?? data?.failed ?? 0)
+    const okCount = Number(data?.evaluated ?? 0)
+    if (failed > 0) {
+      const failures = data?.failures || []
+      const brief = failures
+        .slice(0, 5)
+        .map((f) => `${f.name || f.factor_id}: ${f.error || '未知原因'}`)
+        .join('；')
+      ElMessage.warning(
+        `补算完成 ${okCount}/${total}，失败 ${failed} 个` + (brief ? `（${brief}${failures.length > 5 ? '…' : ''}）` : '')
+      )
+    } else {
+      ElMessage.success(data?.message || `补算完成 ${okCount}/${total}`)
+    }
     factorStore.invalidate()
     await loadFactors()
   } catch {
@@ -636,10 +708,27 @@ async function onSendChat() {
   }
 }
 
+function toggleAiExplainFullscreen() {
+  aiExplainFullscreen.value = !aiExplainFullscreen.value
+  nextTick(() => scrollAiChat())
+}
+
+function applyAiChatLayout() {
+  localStorage.setItem('factor_ai_chat_layout', aiChatWidth.value)
+  nextTick(() => scrollAiChat())
+}
+
 function scrollAiChat() {
   nextTick(() => {
     const el = aiChatRef.value
-    if (el) el.scrollTop = el.scrollHeight
+    if (el) {
+      el.scrollTop = el.scrollHeight
+      const inner = el.querySelector('.ai-chat__scroll')
+      if (inner) {
+        inner.scrollTop = inner.scrollHeight
+        el.scrollTop = inner.scrollHeight
+      }
+    }
   })
 }
 
@@ -732,10 +821,29 @@ function onColumnSort({ key, order }) {
 
 // 概览条：衰减数量 / 平均 IC / 各类别计数
 const decayCount = computed(() => Object.values(decayMap.value).filter(Boolean).length)
+// 平均 IC：仅统计 active 且已评价的因子（旧口径混入 disabled/未评价会失真）
+const activeIcFactors = computed(() =>
+  factors.value.filter((f) => f.status === 'active' && f.ic != null && !Number.isNaN(Number(f.ic)))
+)
 const avgIc = computed(() => {
-  const vals = factors.value.map((f) => Number(f.ic)).filter((v) => !Number.isNaN(v))
+  const vals = activeIcFactors.value.map((f) => Number(f.ic))
   if (!vals.length) return 0
   return vals.reduce((a, b) => a + b, 0) / vals.length
+})
+// 平均 IC 明细：统计数量 + 各类别均值（tooltip 展示）
+const avgIcDetail = computed(() => {
+  const groups = {}
+  activeIcFactors.value.forEach((f) => {
+    const k = f.category || 'other'
+    ;(groups[k] = groups[k] || []).push(Number(f.ic))
+  })
+  const entries = Object.entries(groups)
+    .map(([k, vals]) => ({
+      label: categoryMap[k]?.label || k,
+      mean: vals.reduce((a, b) => a + b, 0) / vals.length,
+    }))
+    .sort((a, b) => b.mean - a.mean)
+  return { count: activeIcFactors.value.length, labels: entries.map((e) => e.label), means: entries.map((e) => e.mean) }
 })
 const categoryCounts = computed(() => {
   const order = ['builtin', 'llm', 'symbolic', 'text', 'automl', 'alpha158']
@@ -1097,7 +1205,12 @@ const columns = computed(() => [
     align: 'center',
     cellRenderer: ({ rowData }) => {
       return h('div', { style: 'display:flex;gap:4px;justify-content:center' }, [
-        h(ElButton, { link: true, type: 'primary', size: 'small', onClick: () => onEvaluate(rowData) }, () => '评价'),
+        h(ElButton, {
+          link: true, type: 'primary', size: 'small',
+          loading: evaluatingId.value === rowData.id,
+          disabled: evaluatingId.value !== null && evaluatingId.value !== rowData.id,
+          onClick: () => onEvaluate(rowData),
+        }, () => '评价'),
         h(ElButton, { link: true, type: 'success', size: 'small', onClick: () => onQuantile(rowData) }, () => '分层'),
         h(
           ElButton,
@@ -1177,9 +1290,34 @@ async function syncData() {
   }
 }
 
-// 操作占位提示
-function onEvaluate() {
-  ElMessage.info('评价功能开发中')
+// 单因子评价：复用补算链路同步计算该因子指标，成功/失败都有明确提示
+async function onEvaluate(row) {
+  evaluatingId.value = row.id
+  try {
+    const params = {}
+    if (evalUniverse.value) params.universe = evalUniverse.value
+    const [start, end] = backfillPeriod.value || []
+    if (start) params.start_date = start
+    if (end) params.end_date = end
+    const data = await backfillAlpha158Metrics([row.id], params)
+    const total = data?.total ?? 1
+    const failed = Number(data?.eval_failed ?? data?.failed ?? 0)
+    const okCount = Number(data?.evaluated ?? 0)
+    if (failed > 0) {
+      const brief = (data?.failures || [])
+        .map((f) => `${f.name || f.factor_id}: ${f.error || '未知原因'}`)
+        .join('；')
+      ElMessage.warning(`${row.name} 补算失败 ${failed}/${total}${brief ? `（${brief}）` : ''}`)
+    } else {
+      ElMessage.success(`${row.name} 补算完成 ${okCount}/${total}`)
+    }
+    factorStore.invalidate()
+    await loadFactors()
+  } catch (e) {
+    ElMessage.error(`${row.name} 补算失败：${e?.response?.data?.detail || e?.message || '未知原因'}`)
+  } finally {
+    evaluatingId.value = null
+  }
 }
 function onDisable(row) {
   disableDialog.value = { visible: true, target: row }
@@ -1383,6 +1521,42 @@ onMounted(() => {
 }
 
 // AI 因子解释弹窗
+.ai-explain-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding-right: 8px;
+
+  &__title {
+    flex: 1;
+    min-width: 0;
+    font-size: 15px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__split {
+    width: 132px;
+  }
+}
+
+// 全屏：让弹窗内容填满、滚动交给 body，避免内容超高被裁剪
+.ai-explain-dialog {
+  :deep(.el-dialog__body) {
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+}
+.ai-explain-dialog:fullscreen,
+.ai-explain-dialog.is-fullscreen {
+  :deep(.el-dialog__body) {
+    max-height: calc(100vh - 120px);
+  }
+}
 .ai-ctx {
   display: flex;
   align-items: center;
@@ -1420,6 +1594,98 @@ onMounted(() => {
   background: rgba(var(--primary-rgb), 0.08);
   border-radius: var(--radius-md);
 }
+.ai-explain__collapse {
+  border-top: none;
+  border-bottom: none;
+
+  :deep(.el-collapse-item__header) {
+    height: 32px;
+    background: transparent;
+    border-bottom: 1px dashed var(--border);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--primary);
+  }
+  :deep(.el-collapse-item__wrap) {
+    background: transparent;
+    border-bottom: none;
+  }
+  :deep(.el-collapse-item__content) {
+    padding-bottom: 12px;
+  }
+}
+.ai-explain__markdown {
+  line-height: 1.7;
+
+  p {
+    margin: 0 0 8px;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  ul,
+  ol {
+    padding-left: 20px;
+    margin: 0 0 8px;
+  }
+  li {
+    margin-bottom: 4px;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    margin: 12px 0 8px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.4;
+  }
+  h1 { font-size: 18px; }
+  h2 { font-size: 16px; }
+  h3 { font-size: 15px; }
+  h4, h5, h6 { font-size: 14px; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: rgba(var(--primary-rgb), 0.12);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  blockquote {
+    margin: 0 0 8px;
+    padding: 4px 12px;
+    border-left: 3px solid rgba(var(--primary-rgb), 0.4);
+    background: var(--bg-tertiary);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    color: var(--text-secondary);
+  }
+  table {
+    border-collapse: collapse;
+    margin: 0 0 8px;
+    width: 100%;
+    font-size: var(--font-size-sm);
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    text-align: left;
+  }
+  th {
+    background: var(--bg-tertiary);
+    font-weight: var(--font-weight-semibold);
+  }
+  a {
+    color: var(--primary);
+  }
+  pre.hljs {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+  }
+  pre.hljs code {
+    background: transparent;
+    padding: 0;
+  }
+}
 .ai-explain__section {
   display: flex;
   flex-direction: column;
@@ -1455,10 +1721,33 @@ onMounted(() => {
 }
 
 // 追问对话区
-.ai-chat {
+.ai-chat-wrap {
   margin-top: 8px;
-  max-height: 260px;
+
+  &--split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+
+    .ai-chat {
+      margin-top: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 8px;
+    }
+    .ai-chat__input {
+      margin-top: 0;
+      align-self: end;
+    }
+  }
+}
+.ai-chat {
+  max-height: 300px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.ai-chat__scroll {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1500,6 +1789,11 @@ onMounted(() => {
   background: var(--bg-tertiary);
   color: var(--text-primary);
   border-top-left-radius: 2px;
+}
+.ai-chat__bubble--md {
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
 }
 .ai-chat__bubble--typing {
   color: var(--text-tertiary);

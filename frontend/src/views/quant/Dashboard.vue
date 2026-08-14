@@ -255,7 +255,32 @@ async function loadMacroSnapshot() {
     const res = await getMacroIndicators()
     const items = res?.items ?? []
     // 每个 indicator-field_name 保留最新两条，用于计算环比变化
-    const labelMap = { pmi: '制造业PMI', pmi_nm: '非制造业PMI', cpi: 'CPI同比', ppi: 'PPI同比', gdp: 'GDP同比' }
+    const labelMap = {
+      pmi: '制造业PMI', pmi_nm: '非制造业PMI', cpi: 'CPI同比', ppi: 'PPI同比', gdp: 'GDP同比',
+      lpr1y: 'LPR1年期', lpr5y: 'LPR5年期',
+      trsy2y: '中债2年收益率', trsy5y: '中债5年收益率', trsy10y: '中债10年收益率', trsy30y: '中债30年收益率',
+      trsy_spread_10y2y: '中债期限利差10Y-2Y',
+      us_trsy2y: '美债2年收益率', us_trsy10y: '美债10年收益率', us_trsy_spread: '美债期限利差10Y-2Y',
+      shibor_on: 'Shibor隔夜', shibor_1w: 'Shibor1周', shibor_3m: 'Shibor3月', shibor_1y: 'Shibor1年',
+      fr001: '回购定盘利率隔夜', fr007: '回购定盘利率7天', fr014: '回购定盘利率14天',
+      fdr001: '银银间回购定盘利率隔夜', fdr007: '银银间回购定盘利率7天', fdr014: '银银间回购定盘利率14天',
+      m0_yoy: 'M0同比', m1_yoy: 'M1同比', m2_yoy: 'M2同比',
+      new_loan: '新增人民币贷款', new_loan_yoy: '新增人民币贷款同比',
+      social_finance: '社融增量', sf_rmb_loan: '社融人民币贷款',
+      sh_idx_close: '上证指数收盘', sh_idx_vol: '上证成交量',
+      pe_mid_ttm: '全A市盈率TTM中位数', pe_mid_lyr: '全A市盈率静态中位数',
+      pe_tt_quant_10y: '全A市盈率十年分位', pe_tt_quant_hist: '全A市盈率历史分位',
+      pb_sh: '上证平均市净率', pb_sh_mid: '上证市净率中位数', pe_sh: '上证平均市盈率',
+      div_yield_sh: '上证A股股息率', congestion: 'A股市场拥挤度',
+      hs300_pe_ttm: '沪深300滚动市盈率', hs300_pe_std: '沪深300静态市盈率',
+      margin_balance: '沪市两融余额', margin_balance_sz: '深市两融余额',
+      hsgt_buy: '北向买入', hsgt_sell: '北向卖出', hsgt_inflow: '北向流入', hsgt_net_buy: '北向净买入',
+      hsgt_cum_net: '北向累计净买入', hsgt_hold_mv: '北向持股市值',
+      usdcny_mid: '美元兑人民币中间价',
+      ivix: 'iVIX波动率指数',
+      if_close: 'IF主力收盘', if_hold: 'IF主力持仓', ic_close: 'IC主力收盘', ic_hold: 'IC主力持仓', tf_close: 'TF主力收盘',
+      commodity_idx: '大宗商品价格指数', copper_close: '沪铜收盘', crude_close: '原油SC收盘', au_close: '沪金AU收盘',
+    }
     const series = {}
     for (const it of items) {
       const k = `${it.indicator}-${it.field_name}`

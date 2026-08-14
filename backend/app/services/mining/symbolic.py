@@ -423,9 +423,9 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
                 continue
             candidates.append((expr, metrics))
 
-        # BH 多重检验校正
+        # BH 多重检验校正（FDR 用独立 bh_alpha，与 llm_factor 一致，避免大候选集堵死）
         from app.services.quant.factor_validator import bh_corrected_pvalues
-        significance_alpha = settings.mining.get("llm", {}).get("significance_alpha", 0.05)
+        bh_alpha = settings.mining.get("llm", {}).get("bh_alpha", 0.20)
         p_vals = [m.get("significance", {}).get("p_value") if m else None for _, m in candidates]
         p_adj = bh_corrected_pvalues(p_vals)
         for (_, m), pa in zip(candidates, p_adj):
@@ -440,7 +440,7 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
                 continue
             sig = metrics.get("significance") or {}
             p_adj_val = sig.get("p_adj")
-            bh_ok = p_adj_val is None or p_adj_val < significance_alpha
+            bh_ok = p_adj_val is None or p_adj_val < bh_alpha
             # 使用 valid_ic 作为主筛选指标；不做全样本 IC 兜底（稳定性/显著性等未过
             # 说明因子不稳健，全样本 IC 达标属过拟合信号）
             valid_ic_val = metrics.get("valid_ic")

@@ -88,34 +88,145 @@
         <div class="source-actions">
           <el-button @click="loadPreview()" size="small">预览数据</el-button>
           <el-button @click="loadAll" :loading="loading" size="small">刷新</el-button>
+        </div>
+      </div>
+
+      <!-- 下载通道分组：每个通道独立按钮 + 数据源徽标 -->
+      <div class="download-panel">
+        <!-- 一键全同步：主入口 -->
+        <div class="download-row download-row--main">
+          <div class="download-row__info">
+            <div class="download-row__title">
+              一键全同步
+              <span class="badge badge-info">baostock + akshare + 东财</span>
+            </div>
+            <div class="download-row__desc">A股回填 → 指数 → ETF → 宏观 → 财报 → 外盘，后台顺序执行</div>
+          </div>
           <div class="sync-years-group">
-            <span class="sync-years-label">同步</span>
+            <span class="sync-years-label">回填</span>
             <el-input-number v-model="syncYears" :min="1" :max="30" size="small" style="width: 88px" />
             <span class="sync-years-label">年</span>
-            <el-button type="primary" @click="startFullSync" :loading="syncing" :disabled="!qlib.available || syncing">
+            <el-checkbox v-model="refreshMisc" size="small">刷新基础资料/行业</el-checkbox>
+            <el-button
+              type="primary"
+              @click="startFullSync"
+              :loading="syncing"
+              :disabled="!qlib.available || syncing"
+            >
               {{ syncing ? '同步中...' : '开始同步' }}
             </el-button>
-            <el-checkbox v-model="refreshMisc" size="small">刷新基础资料/行业</el-checkbox>
           </div>
-          <el-dropdown trigger="click" @command="onSyncMaintenance" :disabled="!qlib.available || syncing">
-            <el-button :loading="anySyncing" :disabled="!qlib.available || syncing">
-              {{ anySyncing ? '同步中...' : '同步维护' }}
-              <el-icon style="margin-left: 4px"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="eod">增量同步（EOD）</el-dropdown-item>
-                <el-dropdown-item command="indices">指数同步</el-dropdown-item>
-                <el-dropdown-item divided command="etf_baostock">ETF 增量（baostock）</el-dropdown-item>
-                <el-dropdown-item command="etf_tencent">ETF 腾讯对齐（qfq）</el-dropdown-item>
-                <el-dropdown-item divided command="fundamental">财报同步</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
-            {{ integrityChecking ? '校验中...' : '数据校验' }}
-          </el-button>
         </div>
+
+        <!-- A股行情通道 -->
+        <div class="download-row">
+          <div class="download-row__info">
+            <div class="download-row__title">A股行情</div>
+            <div class="download-row__desc">增量补齐最新交易日，baostock 为主源、akshare 兜底</div>
+          </div>
+          <div class="download-row__actions">
+            <el-button size="small" @click="openEodDialog('baostock')" :disabled="!qlib.available || syncing">
+              增量 EOD（baostock）
+            </el-button>
+            <el-button size="small" @click="openEodDialog('akshare')" :disabled="!qlib.available || syncing">
+              EOD 兜底（akshare）
+            </el-button>
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              @click="doSmartSync"
+              :loading="smartChecking"
+              :disabled="!qlib.available || syncing || smartChecking"
+            >
+              {{ smartChecking ? '检测中...' : '智能下载' }}
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 指数 / ETF 通道 -->
+        <div class="download-row">
+          <div class="download-row__info">
+            <div class="download-row__title">指数 / ETF</div>
+            <div class="download-row__desc">指数主源 baostock（akshare 兜底）；ETF 支持 baostock 增量或腾讯 qfq 对齐</div>
+          </div>
+          <div class="download-row__actions">
+            <el-button
+              size="small"
+              @click="doSyncIndices"
+              :loading="indexSyncing"
+              :disabled="!qlib.available || syncing"
+            >
+              指数同步
+            </el-button>
+            <el-button
+              size="small"
+              @click="doSyncEtf('baostock')"
+              :loading="etfSyncing"
+              :disabled="!qlib.available || syncing"
+            >
+              ETF 增量（baostock）
+            </el-button>
+            <el-button
+              size="small"
+              @click="doSyncEtf('tencent')"
+              :loading="etfSyncing"
+              :disabled="!qlib.available || syncing"
+            >
+              ETF 腾讯 qfq 对齐
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 宏观 / 财报 通道 -->
+        <div class="download-row">
+          <div class="download-row__info">
+            <div class="download-row__title">宏观 / 财报</div>
+            <div class="download-row__desc">宏观走东财 datacenter + akshare 注册表；财报逐股增量</div>
+          </div>
+          <div class="download-row__actions">
+            <el-button
+              size="small"
+              @click="doSyncMacro"
+              :loading="macroSyncing"
+              :disabled="!qlib.available || syncing"
+            >
+              宏观同步
+            </el-button>
+            <el-button
+              size="small"
+              @click="doSyncFundamental"
+              :loading="fundamentalSyncing"
+              :disabled="!qlib.available || syncing"
+            >
+              财报同步
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 维护工具 -->
+        <div class="download-row download-row--maintenance">
+          <div class="download-row__info">
+            <div class="download-row__title">维护工具</div>
+            <div class="download-row__desc">校验 bin/DB 一致性，可一键补齐或配置定时同步</div>
+          </div>
+          <div class="download-row__actions">
+            <el-button type="info" @click="doIntegrityCheck" :loading="integrityChecking" :disabled="!qlib.available">
+              {{ integrityChecking ? '校验中...' : '数据校验' }}
+            </el-button>
+            <el-button size="small" @click="openScheduleDialog" :class="{ 'schedule-enabled': dataSchedule.enabled }">
+              定时同步
+            </el-button>
+          </div>
+        </div>
+      </div>
+      <div v-if="dataSchedule.enabled" class="schedule-banner">
+        定时同步已开启：每日 {{ dataSchedule.run_time }} {{ dataSchedule.workdays_only ? '（仅工作日）' : '' }}
+        <template v-if="dataSchedule.include_full"> · 一键全同步</template>
+        <template v-if="dataSchedule.include_eod"> · EOD</template>
+        <template v-if="dataSchedule.include_indices"> · 指数</template>
+        <template v-if="dataSchedule.include_etf"> · ETF</template>
+        <template v-if="dataSchedule.include_fundamental"> · 财报</template>
       </div>
     </SectionCard>
 
@@ -434,6 +545,69 @@
       </template>
     </el-dialog>
 
+    <!-- 定时数据管理同步设置 -->
+    <el-dialog v-model="scheduleDialogVisible" title="定时数据同步" width="480px" :close-on-click-modal="false">
+      <div class="schedule-form">
+        <el-form label-width="110px" label-position="left">
+          <el-form-item label="启用定时同步">
+            <el-switch v-model="scheduleForm.enabled" />
+            <span class="schedule-hint">开启后每天到点自动同步，无需手动点击</span>
+          </el-form-item>
+          <el-form-item label="每日时间">
+            <el-time-select
+              v-model="scheduleForm.run_time"
+              start="00:00"
+              step="00:05"
+              end="23:55"
+              placeholder="选择时间"
+              style="width: 140px"
+            />
+          </el-form-item>
+          <el-form-item label="仅工作日">
+            <el-switch v-model="scheduleForm.workdays_only" />
+            <span class="schedule-hint">周一至周五执行，周末跳过</span>
+          </el-form-item>
+          <el-form-item label="同步环节">
+            <div class="schedule-scopes">
+              <el-checkbox v-model="scheduleForm.include_full">一键全同步</el-checkbox>
+              <el-checkbox v-model="scheduleForm.include_eod">增量 EOD</el-checkbox>
+              <el-checkbox v-model="scheduleForm.include_indices">指数</el-checkbox>
+              <el-checkbox v-model="scheduleForm.include_etf">ETF</el-checkbox>
+              <el-checkbox v-model="scheduleForm.include_fundamental">财报</el-checkbox>
+            </div>
+          </el-form-item>
+          <el-form-item v-if="scheduleForm.include_full" label="回填年数">
+            <el-input-number v-model="scheduleForm.years" :min="1" :max="30" style="width: 120px" />
+            <span class="schedule-hint">一键全同步已含指数/ETF/宏观/财报/外盘</span>
+          </el-form-item>
+          <el-form-item v-if="scheduleForm.include_eod" label="EOD 参数">
+            <div class="schedule-scopes">
+              <el-select v-model="scheduleForm.universe" style="width: 110px">
+                <el-option label="沪深300" value="csi300" />
+                <el-option label="中证500" value="csi500" />
+                <el-option label="全部A股" value="all" />
+              </el-select>
+              <el-select v-model="scheduleForm.eod_days" style="width: 90px">
+                <el-option v-for="d in [1, 3, 5, 10, 20]" :key="d" :value="d" :label="`近${d}天`" />
+              </el-select>
+            </div>
+          </el-form-item>
+          <el-form-item v-if="scheduleForm.include_etf" label="ETF 回看">
+            <el-select v-model="scheduleForm.etf_days" style="width: 120px">
+              <el-option v-for="d in [7, 30, 90, 180, 365, 730]" :key="d" :value="d" :label="`近${Math.round(d / 30.4)}个月`" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="scheduleForm.include_full && scheduleForm.include_eod" class="schedule-note">
+            <span class="schedule-warn">提示：一键全同步已含增量 EOD 所需数据，勾选增量 EOD 将重复拉取</span>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="scheduleDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="doSaveSchedule" :loading="scheduleSaving">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 数据完整性校验弹窗 -->
     <el-dialog
       v-model="showIntegrityDialog"
@@ -623,7 +797,7 @@ defineOptions({ name: 'QuantData' })
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled, ArrowDown } from '@element-plus/icons-vue'
+import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
@@ -642,12 +816,16 @@ import {
   getIndices,
   syncEtfData,
   getSyncProgress,
-  validateData,
+  triggerValidate,
+  getValidateStatus,
   repairData,
   getExternalMarket,
   syncExternalMarket,
   syncFundamental,
+  getDataSyncSchedule,
+  saveDataSyncSchedule,
 } from '@/api/quant'
+import { syncMacro } from '@/api/macro'
 
 const statusList = ref([])
 const route = useRoute()
@@ -667,10 +845,14 @@ const eodSyncing = ref(false)
 const eodResult = ref(null)
 const eodForm = reactive({ source: 'baostock', universe: 'csi300', days: 5, overwrite: false })
 const syncYears = ref(5)
+// 智能下载：缺失交易日 ≤ 该值时走增量 EOD，否则走一键补齐
+const SMART_EOD_DAYS = 30
 const refreshMisc = ref(false) // 一键全同步时是否顺带刷新基础资料/行业（默认关，日常不需要）
 const indexSyncing = ref(false)
 const etfSyncing = ref(false)
 const fundamentalSyncing = ref(false)
+const macroSyncing = ref(false)
+const smartChecking = ref(false)
 const externalMarket = ref({ synced_at: null, items: {} })
 const externalSyncing = ref(false)
 const integrityChecking = ref(false)
@@ -682,6 +864,49 @@ const showRepairDialog = ref(false)
 const repairItems = ref([])
 const showRepairProgressDialog = ref(false)
 const currentStatus = computed(() => statusList.value[0] || {})
+
+// ==== 定时数据管理同步 ====
+const dataSchedule = ref({ enabled: false, run_time: '18:00', workdays_only: true })
+const scheduleDialogVisible = ref(false)
+const scheduleSaving = ref(false)
+const scheduleForm = ref({ ...dataSchedule.value })
+
+async function loadDataSchedule() {
+  const s = await getDataSyncSchedule()
+  dataSchedule.value = { ...dataSchedule.value, ...(s || {}) }
+}
+
+function openScheduleDialog() {
+  scheduleForm.value = {
+    enabled: dataSchedule.value.enabled,
+    run_time: dataSchedule.value.run_time,
+    workdays_only: dataSchedule.value.workdays_only,
+    include_full: dataSchedule.value.include_full,
+    include_eod: dataSchedule.value.include_eod,
+    include_indices: dataSchedule.value.include_indices,
+    include_etf: dataSchedule.value.include_etf,
+    include_fundamental: dataSchedule.value.include_fundamental,
+    years: dataSchedule.value.years ?? 5,
+    universe: dataSchedule.value.universe ?? 'all',
+    eod_days: dataSchedule.value.eod_days ?? 5,
+    etf_days: dataSchedule.value.etf_days ?? 30,
+  }
+  scheduleDialogVisible.value = true
+}
+
+async function doSaveSchedule() {
+  scheduleSaving.value = true
+  try {
+    const s = await saveDataSyncSchedule({ ...scheduleForm.value })
+    dataSchedule.value = { ...dataSchedule.value, ...(s || {}) }
+    ElMessage.success('定时同步设置已保存')
+    scheduleDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error('保存失败')
+  } finally {
+    scheduleSaving.value = false
+  }
+}
 
 // 数据损坏检测：latest_date 被置空且 last_error 标记数据损坏时为 true
 // （兼容旧版 smart_sync 路径写入的状态；baostock 回填失败时 status=failed + last_error 由 sync_runner 标记）
@@ -808,7 +1033,7 @@ async function loadIndices() {
 
 async function loadAll() {
   loading.value = true
-  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadSyncStats(), loadIndices()])
+  await Promise.all([loadStatus(), loadQlib(), loadSyncHistory(), loadSyncStats(), loadIndices(), loadDataSchedule()])
   loading.value = false
 }
 
@@ -987,18 +1212,83 @@ async function doSyncFundamental() {
   )
 }
 
-// 「同步维护」下拉是否任一子任务在跑（用于按钮 loading 态；全同步运行中也显示同步中）
-const anySyncing = computed(
-  () => syncing.value || eodSyncing.value || indexSyncing.value || etfSyncing.value || fundamentalSyncing.value
-)
+// 宏观指标同步（东财 datacenter + akshare 注册表，写 PG + 广播 bin）
+async function doSyncMacro() {
+  await submitSyncTask(
+    macroSyncing,
+    syncMacro,
+    '宏观同步已提交（东财 + akshare，后台执行）',
+    '宏观同步提交失败'
+  )
+}
 
-// 同步维护下拉分发
-function onSyncMaintenance(cmd) {
-  if (cmd === 'eod') showEodDialog.value = true
-  else if (cmd === 'indices') doSyncIndices()
-  else if (cmd === 'etf_baostock') doSyncEtf('baostock')
-  else if (cmd === 'etf_tencent') doSyncEtf('tencent')
-  else if (cmd === 'fundamental') doSyncFundamental()
+// 打开增量 EOD 对话框并预设数据源（baostock 主源 / akshare 兜底）
+function openEodDialog(source = 'baostock') {
+  eodForm.source = source
+  showEodDialog.value = true
+}
+
+// 智能下载：先触发数据完整性校验探测缺口，再自动选择最优通道
+//   - 无缺口/最新 → 提示已最新，不重复拉取
+//   - 小缺口（仅缺最近少量交易日）→ 增量 EOD（baostock，含自动回退 akshare）
+//   - 大缺口或 bin 损坏 → 一键补齐（DB 权威重建 + baostock 补缺）
+async function doSmartSync() {
+  if (smartChecking.value) return
+  smartChecking.value = true
+  ElMessage.info('正在检测数据缺口，请稍候...')
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  try {
+    await triggerValidate()
+    let status = null
+    for (let i = 0; i < 120; i++) {
+      await sleep(2000)
+      status = await getValidateStatus()
+      if (status?.status === 'done') break
+      if (status?.status === 'failed') throw new Error(status?.error || '校验失败')
+      if (status?.status === 'idle') {
+        if (i > 10) throw new Error('校验未能启动，请重试')
+        continue
+      }
+    }
+    if (!status || status.status !== 'done') throw new Error('校验超时，请稍后重试')
+    const drift = status.report?.drift
+    const checks = status.report?.checks || {}
+    const missing = drift?.pg_missing_dates || 0
+    const corrupt = (drift?.stocks_with_gaps || 0) > 0 || (drift?.missing_field_files || 0) > 0
+
+    if (drift && !drift.needs_repair && !checks.fields?.bad_size_stocks) {
+      ElMessage.success('数据已是最新，无需同步')
+      return
+    }
+
+    if (!corrupt && missing > 0 && missing <= SMART_EOD_DAYS) {
+      ElMessage.info(`检测到缺 ${missing} 个交易日，执行增量 EOD 补齐`)
+      await eodSync('all', missing, false, 'baostock')
+      syncing.value = true
+      syncProgress.value = null
+      startProgressPolling()
+      return
+    }
+
+    ElMessage.warning('检测到较大缺口或数据损坏，执行一键补齐（后台重建 + baostock 补缺）')
+    const items = []
+    if (drift?.missing_calendar_days)
+      items.push({ key: 'calendar', level: 'warn', label: '日历缺失', desc: `day.txt 缺 ${drift.missing_calendar_days} 天` })
+    if (checks.fields?.bad_size_stocks)
+      items.push({ key: 'size', level: 'error', label: '长度异常', desc: `bin 长度异常 ${checks.fields.bad_size_stocks} 只` })
+    if (drift?.stocks_with_gaps)
+      items.push({ key: 'gaps', level: 'error', label: '疑似损坏', desc: `疑似损坏 ${drift.stocks_with_gaps} 只` })
+    if (missing)
+      items.push({ key: 'missing', level: 'warn', label: '缺交易日', desc: `缺 ${missing} 个交易日（需 baostock）` })
+    repairItems.value = items.length ? items : [{ key: 'misc', level: 'warn', label: '数据不一致', desc: 'bin 数据存在不一致' }]
+    showRepairDialog.value = true
+  } catch (e) {
+    if (e?.code !== 'SYNC_IN_PROGRESS' && e !== 'cancel') {
+      ElMessage.error('智能下载检测失败: ' + (e?.message || e))
+    }
+  } finally {
+    smartChecking.value = false
+  }
 }
 
 async function loadExternalMarket() {
@@ -1028,10 +1318,28 @@ async function doIntegrityCheck() {
   showIntegrityDialog.value = true
   integrityResult.value = null
   validationReport.value = null
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   try {
-    // 校验为只读操作：不重建 day.txt、不触发任何同步，避免与回填互相影响。
-    // day.txt 与数据库不一致时由「日历同步」检查项报告，可用「一键补齐」修复。
-    const data = await validateData()
+    // 校验在独立 worker 子进程执行：先触发，再轮询状态文件直到完成
+    await triggerValidate()
+    let status = null
+    let idleCount = 0
+    for (let i = 0; i < 120; i++) {
+      // 最多等 4 分钟（每次 2s）
+      await sleep(2000)
+      status = await getValidateStatus()
+      if (status?.status === 'done') break
+      if (status?.status === 'failed') throw new Error(status?.error || '校验失败')
+      if (status?.status === 'idle') {
+        idleCount += 1
+        if (idleCount > 5) throw new Error('校验未能启动，请重试')
+        continue
+      }
+    }
+    if (!status || status.status !== 'done') {
+      throw new Error('校验仍在进行（超过 4 分钟），请稍后点击「重新校验」查看结果')
+    }
+    const data = status.report
     validationReport.value = data
     // 用后端返回的 checks_summary（数据对齐状态）替代硬编码文案
     integrityResult.value = { ...data, calendar_sync: data?.checks_summary || '校验只读，未改动任何数据' }
@@ -1296,6 +1604,54 @@ watch(
 .source-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.download-panel {
+  margin-top: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.download-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-light);
+  &:last-child {
+    border-bottom: none;
+  }
+  &--main {
+    background: var(--primary-soft-faint, rgba(64, 158, 255, 0.04));
+  }
+  &--maintenance {
+    background: var(--bg-tertiary, #f5f7fa);
+  }
+}
+.download-row__info {
+  min-width: 0;
+}
+.download-row__title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.download-row__desc {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.download-row__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
@@ -1847,5 +2203,41 @@ watch(
   .el-icon {
     flex-shrink: 0;
   }
+}
+
+.schedule-enabled {
+  border-color: var(--el-color-primary) !important;
+  color: var(--el-color-primary) !important;
+}
+
+.schedule-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.schedule-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.schedule-warn {
+  font-size: 12px;
+  color: var(--el-color-warning);
+}
+
+.schedule-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.schedule-note .el-form-item__content {
+  line-height: 1.5;
 }
 </style>

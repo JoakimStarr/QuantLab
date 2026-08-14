@@ -32,7 +32,7 @@
         >
           <el-option v-for="item in allResults" :key="item.id" :label="formatResultLabel(item)" :value="item.id">
             <div class="result-option">
-              <span class="result-option__name">策略 #{{ item.strategy_id }}</span>
+              <span class="result-option__name">{{ item.name || `策略 #${item.strategy_id}` }}</span>
               <span class="result-option__meta">
                 <span v-if="item.start_date && item.end_date" class="meta-date"
                   >{{ item.start_date }}~{{ item.end_date }}</span
@@ -213,7 +213,7 @@ const selectedNames = computed(() => {
   return selectedIds.value
     .map((id) => {
       const item = allResults.value.find((r) => r.id === id)
-      return item ? `策略 #${item.strategy_id}` : `#${id}`
+      return item ? item.name || `策略 #${item.strategy_id}` : `#${id}`
     })
     .join('、')
 })
@@ -490,7 +490,7 @@ function toNavPoints(arr) {
 
 // 格式化回测结果选项标签（用于 el-select 已选 tag 展示）
 function formatResultLabel(item) {
-  const parts = [`#${item.id}`, `策略#${item.strategy_id}`]
+  const parts = [`#${item.id}`, item.name || `策略#${item.strategy_id}`]
   if (item.start_date && item.end_date) parts.push(`${item.start_date}~${item.end_date}`)
   if (item.annual_return != null) {
     parts.push(`年化${(Number(item.annual_return) * 100).toFixed(2)}%`)

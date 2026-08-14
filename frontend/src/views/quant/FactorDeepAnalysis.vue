@@ -156,7 +156,7 @@ const icTimeseries = computed(() => {
     }
   }
   const dates = d.dates || d.x || []
-  const ic = d.ic || d.values || d.y || []
+  const ic = d.ic_series || d.ic || d.values || d.y || []
   return { dates, ic: ic.map(Number) }
 })
 
@@ -178,7 +178,7 @@ const quantileReturns = computed(() => {
   const d = result.value?.quantile_returns
   if (!d) return { dates: [], groups: {}, longShort: [] }
   const dates = d.dates || d.x || []
-  const groups = d.group_nav || d.groups || d.quantiles || d.nav || {}
+  const groups = d.quantile_nav || d.group_nav || d.groups || d.quantiles || d.nav || {}
   const longShort = d.long_short_nav || d.long_short || d.ls_nav || []
   return { dates, groups, longShort: longShort.map(Number) }
 })
@@ -193,7 +193,7 @@ const turnoverCurve = computed(() => {
     }
   }
   const dates = d.dates || d.x || []
-  const turnover = d.turnover || d.values || d.y || []
+  const turnover = d.turnover_series || d.turnover || d.values || d.y || []
   return { dates, turnover: turnover.map(Number) }
 })
 
@@ -207,7 +207,7 @@ const decay = computed(() => {
     }
   }
   const lags = d.lags || d.lag || d.x || []
-  const ic = d.ic || d.values || d.y || []
+  const ic = d.ic_by_lag || d.ic || d.values || d.y || []
   return { lags: lags.map(Number), ic: ic.map(Number) }
 })
 
@@ -264,8 +264,8 @@ const statCards = computed(() => {
     {
       key: 'long_short_annual',
       label: '多空年化',
-      value: fmtNum(s.long_short_annual, 2, '%'),
-      cls: numClass(s.long_short_annual),
+      value: fmtNum(s.long_short_annual_return ?? s.long_short_annual, 2, '%'),
+      cls: numClass(s.long_short_annual_return ?? s.long_short_annual),
     },
   ]
 })

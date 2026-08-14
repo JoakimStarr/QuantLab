@@ -73,3 +73,8 @@ tenacity>=8.5.0
 
 # json-repair：修复 LLM 返回的损坏 JSON（单引号、尾逗号、markdown 代码块等）
 json-repair>=0.31.0
+
+# filelock 固定 <3.28：3.28+ 新增 audit-hook fork 安全检查，会与 numpy/OpenBLAS
+# 线程池冷启动的 os.fork 竞态，导致衰减检测等并发场景抛 "os.fork is unsafe" 错误
+# （pyqlib 依赖 filelock>=3.16，3.25.2 满足）
+filelock==3.25.2

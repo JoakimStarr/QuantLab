@@ -2,7 +2,7 @@
   <PageContainer narrow>
     <PageHeader
       title="宏观指标"
-      subtitle="东财 + akshare 宏观数据（PMI/CPI/PPI/GDP/国债/Shibor/汇率等），同步后广播为 qlib 因子字段"
+      subtitle="东财 + akshare 宏观（PMI/CPI/PPI/GDP/国债/Shibor/汇率等）+ FRED/CFTC/EIA 全球宏观，同步后广播为 qlib 因子字段"
     />
 
     <!-- 宏观指标：最新值 + 点击指标正面下方展开走势（按需加载） -->
@@ -13,6 +13,9 @@
           <el-button size="small" type="primary" @click="doSync" :loading="syncing">
             {{ syncing ? '同步中...' : '同步宏观数据' }}
           </el-button>
+          <el-button size="small" type="success" plain @click="doSyncGlobal" :loading="syncingGlobal">
+            {{ syncingGlobal ? '同步中...' : '同步全球宏观' }}
+          </el-button>
         </div>
       </template>
 
@@ -20,8 +23,19 @@
 
       <template v-if="snapshotItems.length">
         <div v-for="group in snapshotGroups" :key="group.label" class="snapshot-group">
-          <div class="snapshot-group-title">{{ group.label }}</div>
-          <div class="snapshot-grid">
+          <div
+            class="snapshot-group-title"
+            :class="{ 'snapshot-group-title--toggle': !group.core }"
+            @click="!group.core && toggleGroup(group.label)"
+          >
+            <el-icon v-if="!group.core" class="snapshot-group-caret">
+              <CaretBottom v-if="expandedGroups.has(group.label)" />
+              <CaretRight v-else />
+            </el-icon>
+            {{ group.label }}
+            <span v-if="!group.core" class="snapshot-group-count">{{ group.options.length }}</span>
+          </div>
+          <div v-show="group.core || expandedGroups.has(group.label)" class="snapshot-grid">
             <!-- 指标卡固定尺寸；点击后在其所在行下方展开占满整行的走势面板（结构化布局，天然不错位） -->
             <template v-for="opt in group.options" :key="opt.key">
               <div
@@ -98,13 +112,13 @@
 defineOptions({ name: 'QuantMacro' })
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { CaretTop, CaretBottom } from '@element-plus/icons-vue'
+import { CaretTop, CaretBottom, CaretRight } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
-import { syncMacro, getMacroIndicators, getMacroStatus, getMacroSnapshot } from '@/api/macro'
+import { syncMacro, syncGlobalMacro, getMacroIndicators, getMacroStatus, getMacroSnapshot } from '@/api/macro'
 import { chartTheme, echartPalette as C } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
 
@@ -120,6 +134,7 @@ const fieldOptions = [
     label: 'PMI',
     desc: '景气先行指标，< 50 经济收缩、> 50 扩张；见底回升常领先股市 1-3 个月。',
     group: '景气/价格',
+    core: true,
     markLine: 50,
     fields: [
       { field: 'pmi', name: '制造业PMI', color: C.blue },
@@ -132,6 +147,7 @@ const fieldOptions = [
     label: 'CPI同比(%)',
     desc: '通胀 > 3% → 央行可能加息 → 债市利空；< 1% 暗示通缩、降息空间打开。',
     group: '景气/价格',
+    core: true,
     fields: [{ field: 'cpi', name: 'CPI同比', color: C.purple }],
   },
   {
@@ -171,14 +187,6 @@ const fieldOptions = [
     desc: '收益率曲线形态；倒挂 → 衰退预警，陡峭化 → 复苏预期。',
     group: '利率',
     fields: [{ field: 'trsy_spread_10y2y', name: '利差10Y-2Y', color: C.cyan }],
-  },
-  {
-    key: 'us_trsy',
-    indicator: 'TREASURY',
-    label: '美债收益率',
-    desc: '全球资产定价之锚；上行 → 美元强、新兴市场承压、北向流出。',
-    group: '利率',
-    fields: [{ field: 'us_trsy10y', name: '美债10Y', color: C.forest }],
   },
   {
     key: 'shibor',
@@ -268,6 +276,7 @@ const fieldOptions = [
     label: '波指iVIX',
     desc: '市场恐慌情绪；> 30 警惕风险，< 20 过度乐观，底部反转领先大盘 1-2 周。',
     group: '风险/情绪',
+    core: true,
     fields: [{ field: 'ivix', name: '50ETF波动率指数', color: C.red }],
   },
   {
@@ -315,6 +324,7 @@ const fieldOptions = [
     label: '全A估值分位',
     desc: '全市场市盈率中位数 TTM + 历史分位；分位 > 0.8 偏贵、< 0.2 便宜，估值温度计。',
     group: '市场热度',
+    core: true,
     fields: [
       { field: 'pe_mid_ttm', name: '全A市盈率TTM(中位数)', color: C.blue },
       { field: 'pe_tt_quant_hist', name: '历史分位数', color: C.orangeAlt, axis: 'right' },
@@ -375,6 +385,7 @@ const fieldOptions = [
     label: '市场拥挤度',
     desc: 'A股拥挤度（乐咕，0~1）；数据发布滞后约 2 个月，高位拥挤 → 上涨空间透支。',
     group: '市场热度',
+    core: true,
     fields: [{ field: 'congestion', name: '拥挤度', color: C.red }],
   },
   // 货币/信贷
@@ -385,6 +396,7 @@ const fieldOptions = [
     cardTitle: 'M0/M1/M2同比',
     desc: 'M1-M2 增速差 → 资金活化程度；M1 增速快 → 股市可能上涨。',
     group: '货币/信贷',
+    core: true,
     cardFields: 3,
     fields: [
       { field: 'm0_yoy', name: 'M0同比', color: C.blue },
@@ -398,6 +410,7 @@ const fieldOptions = [
     label: '社会融资',
     desc: '新增社融超预期 → 流动性宽松 → 利好股市。',
     group: '货币/信贷',
+    core: true,
     fields: [
       { field: 'social_finance', name: '社融增量', color: C.blue },
       { field: 'sf_rmb_loan', name: '社融-人民币贷款', color: C.orangeAlt },
@@ -425,6 +438,77 @@ const fieldOptions = [
       { field: 'margin_balance_sz', name: '深市两融余额', color: C.orangeAlt, indicator: 'MARGIN_SZ' },
     ],
   },
+  // 全球宏观（FRED/CFTC/EIA 一手官方源，source=fred/cftc/eia）
+  {
+    key: 'us_rate',
+    indicator: 'FRED_RATES',
+    label: '美欧政策利率',
+    desc: '美联储/欧央行基准利率；加息收紧流动性利空风险资产，降息宽松利好成长股估值。',
+    group: '全球宏观',
+    core: true,
+    fields: [
+      { field: 'us_fed_rate', name: '美国联邦基金利率', color: C.blue },
+      { field: 'ecb_rate', name: '欧央行存款利率', color: C.orangeAlt },
+    ],
+  },
+  {
+    key: 'us_trsy',
+    indicator: 'TREASURY',
+    label: '美债收益率',
+    desc: '全球无风险利率锚；10Y 上行压制成长股估值，期限利差倒挂为衰退预警。',
+    group: '全球宏观',
+    core: true,
+    cardFields: 3,
+    fields: [
+      { field: 'us_trsy2y', name: '美债2Y', color: C.blue },
+      { field: 'us_trsy10y', name: '美债10Y', color: C.gold },
+      { field: 'us_trsy_spread', name: '利差10Y-2Y', color: C.cyan },
+    ],
+  },
+  {
+    key: 'us_inflation',
+    indicator: 'FRED_INFLATION',
+    label: '美国通胀/就业',
+    desc: 'CPI 高企 → 加息预期；失业率低位 → 薪资通胀压力，是美联储政策路径核心。',
+    group: '全球宏观',
+    core: true,
+    fields: [
+      { field: 'us_cpi_yoy', name: '美国CPI同比', color: C.purple },
+      { field: 'us_unrate', name: '美国失业率', color: C.teal },
+    ],
+  },
+  {
+    key: 'us_growth',
+    indicator: 'FRED_GROWTH',
+    label: '美国增长/PMI',
+    desc: 'ISM PMI > 50 扩张；非农超预期 → 经济过热、利率上行压力。',
+    group: '全球宏观',
+    fields: [
+      { field: 'us_ism_pmi', name: 'ISM制造业PMI', color: C.blue },
+      { field: 'us_nonfarm', name: '非农就业人数', color: C.grass },
+    ],
+  },
+  {
+    key: 'cot',
+    indicator: 'CFTC_COT',
+    label: '商品非商业净持仓',
+    desc: '投机盘多空力量；净多极端高位 → 拥挤、易反转。',
+    group: '全球宏观',
+    cardFields: 3,
+    fields: [
+      { field: 'gold_cot_net', name: '黄金净多', color: C.gold },
+      { field: 'copper_cot_net', name: '铜净多', color: C.orangeAlt },
+      { field: 'crude_cot_net', name: '原油净多', color: C.red },
+    ],
+  },
+  {
+    key: 'crude_stock',
+    indicator: 'EIA_CRUDE',
+    label: '美国原油库存',
+    desc: '库存高企 → 供给过剩、油价承压；去库 → 需求旺盛。',
+    group: '全球宏观',
+    fields: [{ field: 'us_crude_stock', name: '商业原油库存', color: C.teal }],
+  },
 ]
 
 // 时间范围（默认最近 5 年）
@@ -438,6 +522,7 @@ const timeOptions = [
 const timeRange = ref('5Y')
 const loading = ref(false)
 const syncing = ref(false)
+const syncingGlobal = ref(false)
 const seriesLoading = ref(false)
 const syncMessage = ref('')
 const seriesData = ref([])
@@ -449,6 +534,16 @@ const expandedCard = ref(null)
 // 悬浮面板距离所在分组顶部的偏移（由被点击卡片测量，滚动/缩放时重算）
 const expandedTop = ref(0)
 const activeCell = ref(null)
+
+// 折叠分组状态：默认全部收起，仅「核心看板」展开
+const expandedGroups = ref(new Set())
+
+function toggleGroup(label) {
+  const s = new Set(expandedGroups.value)
+  if (s.has(label)) s.delete(label)
+  else s.add(label)
+  expandedGroups.value = s
+}
 
 function isExpanded(card) {
   return card != null && expandedCard.value != null && expandedCard.value.key === card.key
@@ -503,10 +598,14 @@ async function reloadAll() {
 }
 
 // 快照卡片：按「指标 option」合并（如 PMI 的制造业/非制造业合成一张卡），再按分类分组展示
+// 结构：核心看板（core 卡平铺，始终展开）+ 其余分组（可折叠）
 const snapshotGroups = computed(() => {
-  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '市场热度', '货币/信贷']
+  const order = ['景气/价格', '利率', '商品/汇率', '风险/情绪', '市场热度', '货币/信贷', '全球宏观']
+  // 核心看板按策划顺序排列（景气 → 全球利率 → 估值 → 货币 → 风险）
+  const coreOrder = ['pmi', 'cpi', 'us_rate', 'us_trsy', 'us_inflation', 'marketPE', 'congestion', 'moneysupply', 'socialfinance', 'ivix']
   const byField = new Map(snapshotItems.value.map((it) => [it.field_name, it]))
   const byGroup = {}
+  const coreList = []
   for (const opt of fieldOptions) {
     const fields = (opt.fields ?? [])
       .map((f) => ({ ...f, item: byField.get(f.field) }))
@@ -517,8 +616,9 @@ const snapshotGroups = computed(() => {
     // 属于同一族（如中债所有期限）的卡片共用 seriesFields，点击任一张一起展开整族走势
     const seriesFields = fields
     const step = opt.cardFields || 2
+    const cards = []
     for (let i = 0; i < fields.length; i += step) {
-      ;(byGroup[g] = byGroup[g] || []).push({
+      cards.push({
         key: i === 0 ? opt.key : `${opt.key}_${i / step}`,
         label: opt.label,
         cardTitle: opt.cardTitle,
@@ -529,10 +629,15 @@ const snapshotGroups = computed(() => {
         seriesFields,
       })
     }
+    if (opt.core) coreList.push(...cards)
+    else for (const c of cards) (byGroup[g] = byGroup[g] || []).push(c)
   }
-  const groups = order.filter((g) => byGroup[g]).map((g) => ({ label: g, options: byGroup[g] }))
+  coreList.sort((a, b) => coreOrder.indexOf(a.key) - coreOrder.indexOf(b.key))
+  const groups = [{ label: '核心看板', core: true, options: coreList }]
+  const regular = order.filter((g) => byGroup[g]).map((g) => ({ label: g, core: false, options: byGroup[g] }))
   const rest = Object.keys(byGroup).filter((g) => !order.includes(g))
-  for (const g of rest) groups.push({ label: g, options: byGroup[g] })
+  for (const g of rest) regular.push({ label: g, core: false, options: byGroup[g] })
+  groups.push(...regular)
   return groups
 })
 
@@ -822,6 +927,24 @@ async function doSync() {
   }
 }
 
+async function doSyncGlobal() {
+  syncingGlobal.value = true
+  syncMessage.value = ''
+  try {
+    await syncGlobalMacro()
+    syncMessage.value = '已提交：全球宏观仅入库 PG（FRED/CFTC/EIA，需配置 FRED_API_KEY/EIA_API_KEY）。约 5 秒后自动刷新。'
+    ElMessage.success('全球宏观同步已提交（仅入库）')
+    setTimeout(() => {
+      loadStatus()
+      loadSeries()
+    }, 5000)
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('全球宏观同步提交失败: ' + (e?.message || e))
+  } finally {
+    syncingGlobal.value = false
+  }
+}
+
 onMounted(() => {
   loadStatus()
   window.addEventListener('resize', onPanelResize)
@@ -875,6 +998,33 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 10px;
+
+  &--toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+    padding: 6px 0;
+
+    &:hover {
+      color: var(--text-primary);
+    }
+  }
+}
+.snapshot-group-caret {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.snapshot-group-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border-radius: 8px;
+  padding: 0 7px;
+  line-height: 16px;
+  margin-left: 2px;
 }
 .snapshot-cell {
   padding: 12px 14px;

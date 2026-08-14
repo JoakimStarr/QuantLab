@@ -1,13 +1,15 @@
 """宏观指标 API：手动触发同步、查询指标序列、查询状态。"""
 import logging
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, text
 
 from app.core.database import get_db
-from app.schemas.common import ApiResponse
-from app.services.data.macro_sync import AKSHARE_INDICATORS, MACRO_INDICATORS
 from app.models.macro import MacroIndicator
+from app.schemas.common import ApiResponse
+from app.services.data.global_macro_sync import GLOBAL_MACRO_INDICATORS
+from app.services.data.macro_sync import AKSHARE_INDICATORS, MACRO_INDICATORS
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,29 @@ async def macro_sync_api(
         "message": "宏观指标同步已提交（独立进程后台执行）"
                    + ("" if not broadcast else "，含 bin 广播"),
         "indicators": sorted(MACRO_INDICATORS.keys()) + sorted(AKSHARE_INDICATORS.keys()),
+        "broadcast": broadcast,
+    })
+
+
+@router.post("/sync-global")
+async def macro_global_sync_api(
+    broadcast: bool = Query(False, description="是否同时广播写 qlib bin（建议数据校验/补齐阶段执行；默认只拉数据入库）"),
+):
+    """手动触发全球宏观指标同步（FRED/CFTC/EIA → PG，独立 worker 后台执行）。
+
+    broadcast=False（默认）只拉数据入库 PG，不写 bin——回填期间点也安全；
+    bin 广播放在数据校验/补齐阶段（日历对齐后）触发。
+    """
+    from app.services.data.sync_progress import ensure_no_bin_sync
+    if broadcast:
+        ensure_no_bin_sync(suffix="；全球宏观 bin 广播需等当前同步完成（日历对齐）后执行")
+
+    from app.services.data.sync_worker import spawn_sync_worker
+    spawn_sync_worker("global_macro", "global_macro", broadcast=broadcast)
+    return ApiResponse(ok=True, data={
+        "message": "全球宏观指标同步已提交（独立进程后台执行）"
+                   + ("" if not broadcast else "，含 bin 广播"),
+        "indicators": sorted(GLOBAL_MACRO_INDICATORS.keys()),
         "broadcast": broadcast,
     })
 

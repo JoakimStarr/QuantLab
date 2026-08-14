@@ -253,6 +253,13 @@ function makeHeadingIdGenerator() {
 // 渲染器侧的 id 生成器（每次渲染前重置，与 generateToc 从零对齐）
 const nextHeadingId = makeHeadingIdGenerator()
 
+// 链接新标签打开（书籍 PDF/外部链接），避免点击后离开文档页
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet('target', '_blank')
+  tokens[idx].attrSet('rel', 'noopener')
+  return self.renderToken(tokens, idx, options)
+}
+
 // 注入 heading id：markdown-it 默认不生成，TOC 定位依赖它
 md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx]

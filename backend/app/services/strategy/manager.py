@@ -260,7 +260,14 @@ async def list_backtest_results(strategy_id: int = None, limit: int = 20) -> lis
         if strategy_id:
             q = q.where(BacktestResult.strategy_id == strategy_id)
         result = await session.execute(q)
-        return [_result_summary(r) for r in result.scalars().all()]
+        rows = result.scalars().all()
+        # 联查策略名（选择器/对比列表展示策略名称，而非"策略#id"）
+        ids = {r.strategy_id for r in rows if r.strategy_id}
+        names = {}
+        if ids:
+            sres = await session.execute(select(Strategy.id, Strategy.name).where(Strategy.id.in_(ids)))
+            names = dict(sres.all())
+        return [_result_summary(r, names.get(r.strategy_id)) for r in rows]
 
 
 async def get_backtest_result(result_id: int) -> dict:
@@ -268,7 +275,11 @@ async def get_backtest_result(result_id: int) -> dict:
         r = await session.get(BacktestResult, result_id)
         if r is None or r.is_deleted:
             return None
-        return _result_dict(r)
+        sres = await session.execute(
+            select(Strategy.name).where(Strategy.id == r.strategy_id)
+        )
+        strategy_name = sres.scalar_one_or_none()
+        return _result_dict(r, strategy_name)
 
 
 async def delete_backtest_result(result_id: int) -> bool:
@@ -298,9 +309,9 @@ def _strategy_dict(r: Strategy) -> dict:
     }
 
 
-def _result_dict(r: BacktestResult) -> dict:
+def _result_dict(r: BacktestResult, strategy_name: str = None) -> dict:
     return {
-        "id": r.id, "strategy_id": r.strategy_id,
+        "id": r.id, "strategy_id": r.strategy_id, "name": strategy_name,
         "start_date": r.start_date, "end_date": r.end_date,
         "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
         "combination_method": r.combination_method,
@@ -321,7 +332,7 @@ def _result_dict(r: BacktestResult) -> dict:
     }
 
 
-def _result_summary(r: BacktestResult) -> dict:
+def _result_summary(r: BacktestResult, strategy_name: str = None) -> dict:
     """列表接口的轻量摘要：不含 trades/nav_curve/metrics 大字段。
 
     逐笔成交明细可达 2000 条、净值曲线可达数千点，单条 JSON 300KB+；
@@ -329,7 +340,7 @@ def _result_summary(r: BacktestResult) -> dict:
     省略大字段可把列表载荷从 344KB/条 降到 <1KB/条，点击"结果"不再二次下载全量。
     """
     return {
-        "id": r.id, "strategy_id": r.strategy_id,
+        "id": r.id, "strategy_id": r.strategy_id, "name": strategy_name,
         "start_date": r.start_date, "end_date": r.end_date,
         "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
         "combination_method": r.combination_method,

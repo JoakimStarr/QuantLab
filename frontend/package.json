@@ -14,10 +14,17 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{js,vue,scss}\"",
-    "check:vue": "node vue_parse_check.mjs"
+    "check:vue": "node vue_parse_check.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.8",
     "@element-plus/icons-vue": "^2.3.0",
+    "@lezer/highlight": "^1.2.3",
     "axios": "^1.7.0",
     "echarts": "^5.5.0",
     "element-plus": "^2.7.0",
@@ -37,6 +44,7 @@
     "prettier": "^3.3.0",
     "unplugin-auto-import": "^0.18.0",
     "unplugin-vue-components": "^0.27.0",
-    "vite": "^5.3.0"
+    "vite": "^5.3.0",
+    "vitest": "^4.1.10"
   }
 }

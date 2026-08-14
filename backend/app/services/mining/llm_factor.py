@@ -97,6 +97,8 @@ _USER_PROMPT_TEMPLATE = """请生成 {n} 个有 alpha 的 qlib 因子表达式�
 2. 因子应有经济学含义，避免过拟合
 3. 只能使用上述算子与字段，禁止 import/exec 等
 4. 严禁使用负数 Ref（如 Ref($close, -5)）——那是未来数据，会造成 look-ahead bias
+5. 严禁在表达式开头写一元负号（如 "-Mean(...)" 或 "-$close"）——qlib 不支持这种写法。
+   需要取反时请写成 "X * -1"（如 "Mean($close, 5) * -1" 表示负的均线）
 
 请严格返回 JSON 对象（不要返回数组），不要任何额外文字：
 {{"factors": [{{"name": "momentum_20", "expression": "$close / Ref($close, 20) - 1", "description": "20日动量"}}]}}
@@ -179,6 +181,9 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
     n_candidates = n_candidates or mining_cfg.get("candidates_per_run", 10)
     ic_threshold = mining_cfg.get("ic_threshold", 0.03)
     significance_alpha = mining_cfg.get("significance_alpha", 0.05)
+    # BH 多重检验的 FDR 水平与显著性 alpha 解耦：批内候选多（如 50 个）时
+    # p_adj 按 m 倍放大，用同一 alpha 会堵死产出；bh_alpha 单独控制假阳性率。
+    bh_alpha = mining_cfg.get("bh_alpha", 0.20)
     allowed_ops = mining_cfg.get("allowed_ops", [])
     fields = _AVAILABLE_FIELDS
 
@@ -214,13 +219,14 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
                                  "reason": "表达式或名称为空"})
                 continue
             try:
-                validate_expression(expr)
+                cleaned = validate_expression(expr)
             except ExpressionValidationError as e:
                 logger.info("因子 %s 沙箱拒绝: %s", name, e)
                 rejected.append({"name": name, "expression": expr, "description": desc,
                                  "reason": f"沙箱拒绝: {e}"})
                 continue
-            valid.append({"name": name, "expression": expr, "description": desc})
+            # 使用清洗后的表达式（含一元负号改写），避免 qlib unary minus 评价失败
+            valid.append({"name": name, "expression": cleaned, "description": desc})
         if rejected:
             await upsert_candidates(task_id, [
                 {**r, "status": "rejected"} for r in rejected
@@ -274,7 +280,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
             # BH 校正后显著性（无 p 值视为未通过多重检验保护，但保留兜底路径）
             sig = result.get("significance") or {}
             p_adj_val = sig.get("p_adj")
-            bh_ok = p_adj_val is None or p_adj_val < significance_alpha
+            bh_ok = p_adj_val is None or p_adj_val < bh_alpha
             if not bh_ok:
                 logger.info("因子 %s 未通过 BH 多重检验校正: p_adj=%s", v["name"], p_adj_val)
             # 使用 valid_ic 作为主筛选指标
@@ -433,23 +439,25 @@ def _normalize_expr(expr: str) -> str:
     return re.sub(r"\s+", "", expr).lower()
 
 
-def _is_duplicate(expr: str, existing_exprs: list, threshold: float = 0.9):
-    """表达式去重（字符串相似度），返回原因或 None。
+def _is_duplicate(expr: str, existing_exprs: list) -> str | None:
+    """表达式去重（归一化后完全一致才算重复），返回原因或 None。
+
+    不用字符串相似度：相似 ≠ 等价——`Ref($close, 20)` 与 `Ref($close, 30)`
+    文本相似度 >0.9 却是两个不同因子，会被误杀；而语义重复（等价变形）相似度
+    可能很低，会漏检。语义级去重交给 IC 序列相关性（DiversityChecker /
+    _dedupe_intra_batch），这里只拦真正的重复项，避免浪费评价计算。
 
     Args:
         expr: 候选表达式
         existing_exprs: 已有表达式列表
-        threshold: 相似度阈值
 
     Returns:
-        None 表示不重复；否则返回原因字符串（如 "与已有表达式相似度 0.95"）。
+        None 表示不重复；否则返回原因字符串（如 "与已有表达式重复"）。
     """
-    from difflib import SequenceMatcher
     norm = _normalize_expr(expr)
     for existing in existing_exprs:
-        ratio = SequenceMatcher(None, norm, _normalize_expr(existing)).ratio()
-        if ratio > threshold:
-            return f"与已有表达式相似度 {ratio:.2f}（阈值 {threshold}）"
+        if norm == _normalize_expr(existing):
+            return "与已有表达式重复"
     return None
 
 
@@ -527,6 +535,7 @@ async def iterative_mine_factors(
     mining_cfg = settings.mining.get("llm", {})
     ic_threshold = template.get("ic_threshold") or mining_cfg.get("ic_threshold", 0.03)
     significance_alpha = mining_cfg.get("significance_alpha", 0.05)
+    bh_alpha = mining_cfg.get("bh_alpha", 0.20)
 
     all_best = []
     rounds_history = []
@@ -578,7 +587,7 @@ async def iterative_mine_factors(
                     rejected.append({"expression": expr, "reason": "表达式或名称为空"})
                     continue
                 try:
-                    validate_expression(expr)
+                    cleaned = validate_expression(expr)
                 except ExpressionValidationError as e:
                     logger.info("迭代因子 %s 沙箱拒绝: %s", name, e)
                     rejected.append({"expression": expr, "reason": f"沙箱拒绝: {e}"})
@@ -590,7 +599,7 @@ async def iterative_mine_factors(
                 if dup:
                     rejected.append({"expression": expr, "reason": dup})
                     continue
-                valid_exprs.append({"name": name, "expression": expr, "description": c.get("description", "")})
+                valid_exprs.append({"name": name, "expression": cleaned, "description": c.get("description", "")})
 
             # IC 评价（并行：所有有效因子一次性提交到进程池，使用多维验证）
             round_results = []
@@ -632,7 +641,7 @@ async def iterative_mine_factors(
                     # BH 校正后显著性约束
                     sig = ic_result.get("significance") or {}
                     p_adj_val = sig.get("p_adj")
-                    bh_ok = p_adj_val is None or p_adj_val < significance_alpha
+                    bh_ok = p_adj_val is None or p_adj_val < bh_alpha
                     # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
                     valid_ic = ic_result.get("valid_ic")
                     passed_ok = (ic_result.get("passed") and valid_ic is not None
@@ -814,6 +823,9 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
     ind_neutralize = settings.mining.get("llm", {}).get("industry_neutralize", True)
     # 子样本稳健性：默认开启（时间半区 + 市值分组 IC）
     robustness = settings.mining.get("llm", {}).get("robustness", True)
+    # 显著性 / 稳定性阈值透传（config.yaml llm 段可调，与 BH 门分开控制）
+    significance_alpha = settings.mining.get("llm", {}).get("significance_alpha", 0.05)
+    stability_threshold = settings.mining.get("llm", {}).get("stability_threshold", 0.5)
     from app.core.executor import run_cpu
     return await asyncio.wait_for(
         run_cpu(evaluate_factor_with_validation, expr, start, end,
@@ -821,6 +833,8 @@ async def _evaluate_with_validation(expr: str, existing_ic_series: list = None,
                 baseline_exprs=baseline_exprs, roll_windows=roll_windows,
                 industry_neutralize_enabled=ind_neutralize,
                 robustness_enabled=robustness,
+                significance_alpha=significance_alpha,
+                stability_threshold=stability_threshold,
                 universe=universe),
         timeout=timeout,
     )

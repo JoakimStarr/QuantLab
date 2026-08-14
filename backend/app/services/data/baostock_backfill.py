@@ -31,7 +31,7 @@ from app.services.data.data_clean import format_date_series, to_float_strict as 
 from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _sync_stock_bin, _write_calendar, _compute_tradable, _get_calendar
 from app.services.data.sync_progress import (
-    init_progress, update_progress, finish_progress, clear_progress,
+    init_progress, update_progress, finish_progress, clear_progress, get_progress,
 )
 from app.models.baostock import (
     StockDaily, StockBasic, StockIndustry, TradeCalendar,
@@ -889,7 +889,27 @@ async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
     才发布；数据未到前 latest_date 应显示昨天，拉到才显示今天）。
     """
     from sqlalchemy import select, func
+    from app.services.data.disk_usage import get_dir_size_mb
     now = datetime.now()
+    # 真实开始时间：取进度管理器记录的任务启动时刻（init_progress 时写入），
+    # 缺失时回退到 now（此时耗时显示 --）。
+    started_at = now
+    try:
+        prog = get_progress()
+        if prog and prog.get("started_at"):
+            started_at = datetime.fromisoformat(prog["started_at"])
+    except Exception:  # noqa: BLE001
+        started_at = now
+    if started_at > now:
+        started_at = now
+    duration_seconds = round((now - started_at).total_seconds(), 1)
+    # 数据"版本"取覆盖区间（无预打包 release tag，自建数据以覆盖范围标识）
+    version = f"{calendar[0]} ~ {calendar[-1]}" if calendar else sync_path
+    # 文件大小：qlib 数据目录占用（带 TTL 缓存，同步本身耗时远大于一次扫描）
+    try:
+        file_size_mb = await asyncio.to_thread(get_dir_size_mb, qlib_dir)
+    except Exception:  # noqa: BLE001
+        file_size_mb = None
     async with async_session() as session:
         row_cnt = (await session.execute(select(func.count()).select_from(StockDaily))).scalar() or 0
         max_date = (await session.execute(select(func.max(StockDaily.trade_date)))).scalar()
@@ -912,9 +932,13 @@ async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
 
         h = SyncHistory(
             universe=universe, data_source="baostock", sync_path=sync_path,
-            status="ok", started_at=now, finished_at=now,
+            status="ok", started_at=started_at, finished_at=now,
+            duration_seconds=duration_seconds,
+            version=version,
+            release_date=latest_date,
             latest_date=latest_date, stock_count=len(code_range),
             row_count=row_cnt,
+            file_size_mb=file_size_mb,
         )
         session.add(h)
         await session.commit()

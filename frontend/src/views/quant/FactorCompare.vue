@@ -19,6 +19,16 @@
       </template>
 
       <div v-show="!selectorCollapsed" class="selector-area">
+        <el-date-picker
+          v-model="evalRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="评价起始日期"
+          end-placeholder="评价结束日期"
+          value-format="YYYY-MM-DD"
+          clearable
+          style="width: 320px"
+        />
         <el-select
           v-model="selectedFactorIds"
           multiple
@@ -150,7 +160,7 @@ import { fmt, numClass } from '@/utils/format'
 import { useThemeRev } from '@/composables/useChartTheme'
 
 const themeRev = useThemeRev()
-import { compareFactors, getFactorDecay } from '@/api/quant'
+import { compareFactors } from '@/api/quant'
 import { useFactorStore } from '@/stores/factor'
 
 const route = useRoute()
@@ -185,6 +195,8 @@ const selectedFactorIds = ref([])
 const factorsLoading = ref(false)
 const selectorCollapsed = ref(false)
 const comparing = ref(false)
+// 评价区间（可选；不选时后端用因子入库时区间）
+const evalRange = ref(null)
 
 // 已选因子名称摘要（折叠时展示）
 const selectedNames = computed(() => {
@@ -300,13 +312,20 @@ const seriesOption = computed(() => {
   }
 })
 
-// 标准化衰减数据
-function normalizeDecay(data) {
-  if (Array.isArray(data)) return data
-  if (data?.decay) return data.decay
-  if (data?.points) return data.points
-  if (data?.items) return data.items
-  return []
+// 从对比结果中提取每个因子的衰减曲线（对比接口已返回 decay 字段，无需 N 次单独请求）
+function buildDecayFromCompare(data) {
+  const list = data?.factors || []
+  const map = {}
+  list.forEach((f) => {
+    const dec = f.decay
+    if (dec && typeof dec === 'object') {
+      const points = Object.entries(dec)
+        .map(([lag, ic]) => ({ lag: Number(lag), ic: Number(ic) }))
+        .filter((p) => !Number.isNaN(p.ic))
+      if (points.length) map[String(f.id)] = points
+    }
+  })
+  return map
 }
 
 // 标准化 IC 时序数据
@@ -370,31 +389,26 @@ async function startCompare() {
     return
   }
   factorIds.value = selectedFactorIds.value.map(String)
+  const range = evalRange.value ? { start_date: evalRange.value[0], end_date: evalRange.value[1] } : {}
   // 同步到 URL，方便分享
-  router.replace({ query: { ...route.query, ids: factorIds.value.join(',') } })
+  router.replace({
+    query: {
+      ids: factorIds.value.join(','),
+      ...(range.start_date ? { start: range.start_date } : {}),
+      ...(range.end_date ? { end: range.end_date } : {}),
+    },
+  })
   comparing.value = true
   loading.value = true
   try {
-    const compareResult = await compareFactors(factorIds.value)
+    const compareResult = await compareFactors(factorIds.value, range.start_date, range.end_date)
     if (compareResult?.factors) {
       factorList.value = compareResult.factors
     } else if (Array.isArray(compareResult)) {
       factorList.value = compareResult
     }
     seriesData.value = normalizeSeries(compareResult)
-    const decayPromises = factorIds.value.map((id) =>
-      getFactorDecay(id)
-        .then((res) => [id, normalizeDecay(res)])
-        .catch(() => [id, []])
-    )
-    const decayResults = await Promise.all(decayPromises)
-    const decayMap = {}
-    decayResults.forEach(([id, points]) => {
-      if (Array.isArray(points) && points.length > 0) {
-        decayMap[id] = points
-      }
-    })
-    decayData.value = decayMap
+    decayData.value = buildDecayFromCompare(compareResult)
     // 对比成功后自动收起选择器，聚焦结果
     selectorCollapsed.value = true
   } catch (e) {
@@ -409,30 +423,24 @@ function goBack() {
   router.push('/quant/factors')
 }
 
+// 从 URL start/end 参数还原评价区间（分享链接场景）
+const rangeParams = computed(() => ({
+  start_date: route.query.start ? String(route.query.start) : undefined,
+  end_date: route.query.end ? String(route.query.end) : undefined,
+}))
+
 // 加载对比数据（从 URL ids 进入时）
 async function loadCompareData(ids) {
   loading.value = true
   try {
-    const compareResult = await compareFactors(ids)
+    const compareResult = await compareFactors(ids, rangeParams.value.start_date, rangeParams.value.end_date)
     if (compareResult?.factors) {
       factorList.value = compareResult.factors
     } else if (Array.isArray(compareResult)) {
       factorList.value = compareResult
     }
     seriesData.value = normalizeSeries(compareResult)
-    const decayPromises = ids.map((id) =>
-      getFactorDecay(id)
-        .then((res) => [id, normalizeDecay(res)])
-        .catch(() => [id, []])
-    )
-    const decayResults = await Promise.all(decayPromises)
-    const decayMap = {}
-    decayResults.forEach(([id, points]) => {
-      if (Array.isArray(points) && points.length > 0) {
-        decayMap[id] = points
-      }
-    })
-    decayData.value = decayMap
+    decayData.value = buildDecayFromCompare(compareResult)
   } catch (e) {
     ElMessage.error('加载对比数据失败')
   } finally {
@@ -457,6 +465,9 @@ async function loadData() {
   }
   factorIds.value = ids
   syncSelectionFromIds(ids)
+  if (route.query.start && route.query.end) {
+    evalRange.value = [String(route.query.start), String(route.query.end)]
+  }
   await loadCompareData(ids)
 }
 

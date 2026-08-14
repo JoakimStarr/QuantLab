@@ -132,7 +132,15 @@ mining:
     # 挖掘达标阈值与策略选因阈值（strategy_ic_threshold=0.02）统一：A股截面 IC 0.02
     # 已可用，0.03 门槛过高导致挖掘产出几乎无法入库、也过不了策略选因口径。
     ic_threshold: 0.02
-    significance_alpha: 0.05
+    # 显著性水平：0.05 过严——单批 50 个候选做 BH 校正后 p_adj 被放大几十倍，
+    # 绝大多数候选死在多重检验这关（曾导致挖掘长期 0 产出）。放宽到 0.10。
+    significance_alpha: 0.10
+    # 稳定性阈值（验证集日度 IC 的信息比率 ICIR）：0.5 偏高，A股 5 日截面 IC
+    # 日度序列 ICIR 0.3~0.5 已属可用，降到 0.35 平衡产率与质量。
+    stability_threshold: 0.35
+    # BH 多重检验校正的 FDR 水平：与 significance_alpha 解耦，单独控制批内假阳性率。
+    # 0.20 是因子挖掘筛选常见的宽松 FDR，保留防假阳性能力又不至于堵死产出。
+    bh_alpha: 0.20
   symbolic:
     generations: 30
     ic_threshold: 0.02
