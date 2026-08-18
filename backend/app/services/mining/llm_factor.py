@@ -536,6 +536,11 @@ async def iterative_mine_factors(
     ic_threshold = template.get("ic_threshold") or mining_cfg.get("ic_threshold", 0.03)
     significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     bh_alpha = mining_cfg.get("bh_alpha", 0.20)
+    # 早停：连续 stall_tolerance 轮最佳 IC 无实质改善（或连续全拒）时提前终止，
+    # 避免在模型输出质量停滞时继续消耗 LLM 调用与算力
+    early_stop = bool(mining_cfg.get("early_stop", True))
+    stall_tolerance = int(mining_cfg.get("stall_tolerance", 2))
+    ic_improve_eps = float(mining_cfg.get("ic_improve_eps", 1e-4))
 
     all_best = []
     rounds_history = []
@@ -544,6 +549,13 @@ async def iterative_mine_factors(
     generated_total = 0
     persisted_ids = []
     existing_ic_series = None  # 懒加载：仅当存在候选时才计算
+
+    # 早停状态
+    best_ic_so_far = 0.0          # 历史最优 |valid_ic|（含之前轮次）
+    stall_rounds = 0              # 连续无改善轮数
+    empty_rounds = 0              # 连续无有效候选轮数
+    stopped_early = False
+    stop_reason = None
 
     if task_id is not None:
         await _update_task(task_id, status="running", started_at=datetime.now())
@@ -751,6 +763,28 @@ async def iterative_mine_factors(
             logger.info("第 %d 轮完成: 生成 %d, 有效 %d, 最佳IC=%.4f",
                         round_idx + 1, len(candidates), len(valid_exprs), best_ic)
 
+            # ---- 早停判定（非末轮才检查；末轮自然结束无需早停） ----
+            if early_stop and round_idx < n_rounds - 1:
+                improved = abs(best_ic) > best_ic_so_far + ic_improve_eps
+                if improved:
+                    best_ic_so_far = abs(best_ic)
+                    stall_rounds = 0
+                else:
+                    stall_rounds += 1
+                empty_rounds = empty_rounds + 1 if not valid_exprs else 0
+
+                if stall_rounds >= stall_tolerance:
+                    stopped_early = True
+                    stop_reason = (f"连续 {stall_rounds} 轮最佳 IC 无改善"
+                                   f"（{best_ic_so_far:.4f}），已提前停止")
+                elif empty_rounds >= stall_tolerance:
+                    stopped_early = True
+                    stop_reason = f"连续 {empty_rounds} 轮无有效候选（沙箱/去重全拒），已提前停止"
+
+                if stopped_early:
+                    logger.info("LLM 迭代挖掘提前停止于第 %d 轮: %s", round_idx + 1, stop_reason)
+                    break
+
         # 汇总最优因子（已在每轮即时入库，这里仅排序取最终结果）
         all_best.sort(key=lambda x: abs(x.get("ic", 0)), reverse=True)
         final_best = all_best[:10]
@@ -761,6 +795,12 @@ async def iterative_mine_factors(
                 task_id, status="done", candidates_generated=generated_total,
                 candidates_passed=len(persisted_ids), best_ic=best_ic_final,
                 result_factor_ids=json.dumps(persisted_ids),
+                result={
+                    "improvement_curve": improvement_curve,
+                    "stopped_early": stopped_early,
+                    "stop_reason": stop_reason,
+                    "n_rounds": n_rounds,
+                },
                 finished_at=datetime.now(),
             )
 
@@ -770,6 +810,8 @@ async def iterative_mine_factors(
             "improvement_curve": improvement_curve,
             "n_rounds": n_rounds,
             "factor_ids": persisted_ids,
+            "stopped_early": stopped_early,
+            "stop_reason": stop_reason,
         }
     except Exception as e:
         if task_id is not None:

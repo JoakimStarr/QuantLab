@@ -36,11 +36,11 @@ export function fmt(val, digits = 3, suffix = '') {
   return display.toFixed(digits) + suffix
 }
 
-// 正负数着色：正数 success，负数 danger
+// 金融数值着色（A股口径统一：正/涨=红，负/跌=绿）
 export function numClass(val) {
   const n = Number(val)
   if (Number.isNaN(n) || n === 0) return ''
-  return n > 0 ? 'is-positive' : 'is-negative'
+  return n > 0 ? 'num-up' : 'num-down'
 }
 
 // 小数 → 百分比

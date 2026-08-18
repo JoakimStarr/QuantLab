@@ -1,6 +1,6 @@
 # QuantLab 技术文档 - 架构总览
 
-> 版本：v3.1.0 · 最后更新：2026-08-06
+> 版本：v3.2.0 · 最后更新：2026-08-18
 > 配套仓库：[JoakimStarr/QuantLab](https://github.com/JoakimStarr/QuantLab)
 
 本文档是 QuantLab 的**架构总览**：回答"整个系统由哪些模块组成、各模块怎么协作、数据从哪来到哪去"。读完后你应该能在脑海里画出系统的完整地图。
@@ -269,7 +269,7 @@ async def init_db():
 
 | 类型 | 入口文件 | 引擎 | 特点 |
 |------|----------|------|------|
-| **LLM** | `llm_factor.py` | 多 provider 路由 | 迭代反馈改进，可指定 n_rounds |
+| **LLM** | `llm_factor.py` | 多 provider 路由 | 迭代反馈改进，可指定 n_rounds；连续无改善自动早停 |
 | **符号回归** | `symbolic.py` | gplearn 遗传编程 | 时序分割防泄露，Pareto 前沿取 top |
 | **文本因子** | `text_factor.py` | 新闻情感 + LLM | 指定股票代码或 universe 前 30 |
 | **AutoML** | `automl.py` | LightGBM/Ridge | 因子组合，时序 CV 评估（**GPU 自动加速**） |
@@ -356,10 +356,14 @@ frontend/src/
 │   ├── app.js               # 全局 UI 状态
 │   ├── factor.js            # 因子列表缓存
 │   ├── strategy.js          # 策略列表缓存
-│   └── mining.js            # 挖掘任务 + WebSocket
+│   ├── mining.js            # 挖掘任务 + WebSocket
+│   └── sync.js              # 数据同步中心（8 域注册表 + 单 timer 进度轮询）
 ├── composables/             # 组合式函数
 │   ├── useChartTheme.js     # ECharts 主题切换
 │   └── usePolling.js        # 轮询降级
+├── components/
+│   ├── sync/SyncCenter.vue  # 全局数据同步中心抽屉（TopBar 唤起）
+│   └── common/LearnTip.vue  # 教学提示条（可关闭，localStorage 记忆）
 ├── api/                     # 后端 API 封装
 ├── router/                  # Vue Router 配置
 ├── stores/                  # Pinia
@@ -376,6 +380,8 @@ frontend/src/
 | 图表 | ECharts 5（支持暗色主题切换） |
 | HTTP 客户端 | axios + 拦截器（自动带 JWT、统一错误处理） |
 | WebSocket | 原生 WS + 心跳（断线自动重连） |
+| 数据同步中心 | TopBar 全局入口 + SyncCenter 抽屉；stores/sync.js 单 timer 自适应轮询（运行 1s / 空闲 30s） |
+| 教学提示 | LearnTip 组件（storageKey 记忆 + 可深链技术文档），投放于挖掘/因子/策略/宏观页 |
 | Markdown 渲染 | markdown-it + highlight.js |
 | 文档目录 | 从 h2/h3 自动提取 + IntersectionObserver 高亮 |
 
@@ -387,6 +393,17 @@ frontend/src/
 - 点击目录平滑滚动 + 锚点定位
 - 滚动时 IntersectionObserver 高亮当前章节
 - 全部 API 见 `/docs` 页面
+
+---
+
+### 4.1 近期架构演进（v3.2）
+
+- **数据同步统一化**：`stores/sync.js` 作为全站唯一同步调度中心，注册 8 大数据域（A股/指数/ETF/国内宏观/全球宏观/财报/外盘/政策）；TopBar 常驻同步按钮（运行中旋转 + 进度徽标）唤起 `SyncCenter` 抽屉，各页面独立同步按钮与全局入口共用同一 store，进度轮询全局仅一份 timer
+- **回测详情三数据源**：`BacktestDetail.vue` 通过 `?source=rule|classic` 区分因子回测结果、规则策略历史、经典策略历史，统一聚宽风格展示；旧内嵌组件 `BacktestResultDetail` 已删除
+- **导航分组**：`config/nav.js` 以 `navGroups`（研究/数据/系统）为单一数据源，侧栏按组渲染；移动端 4 直达 tab + "更多"底部抽屉
+- **设计令牌体系**：金融色（`num-up`/`num-down` 红涨绿跌）与操作状态色（`is-positive`/`is-negative`）语义分离；全站图表色经 `chartTheme` 从 CSS 变量读取，明暗主题自动适配
+- **LLM 挖掘早停**：连续 `stall_tolerance`（默认 2）轮最佳 IC 无改善或候选全拒时提前终止，结果记录 `stopped_early`/`stop_reason`
+- **教学提示体系**：`LearnTip.vue` 轻量提示条，在关键研究页面解释核心概念（迭代挖掘原理、IC 指标含义、回测流程、宏观因子化机制），可关闭并记忆
 
 ---
 

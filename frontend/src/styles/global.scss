@@ -159,7 +159,15 @@ img {
   color: var(--text-tertiary);
 }
 
-// 正负数着色（格式化工具 numClass 返回；多页面共用）
+// 金融数值着色（A股口径：红涨/正、绿跌/负；numClass 返回，多页面共用）
+.num-up {
+  color: var(--chart-up);
+}
+.num-down {
+  color: var(--chart-down);
+}
+
+// 操作状态着色（成功/失败/警告语义，与金融涨跌区分）
 .is-positive {
   color: var(--success);
 }
@@ -1174,25 +1182,14 @@ body {
   }
 }
 
-/* 侧边栏导航项滑动 */
-.sidebar .nav-item,
-.mobile-tabbar .tab-item {
-  transition: all 0.2s var(--ease-out-expo);
-  position: relative;
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    width: 0;
-    height: 2px;
-    background: var(--primary);
-    transition:
-      width 0.3s var(--ease-out-expo),
-      left 0.3s var(--ease-out-expo);
-  }
-  &:hover::after {
-    width: 100%;
-    left: 0;
+/* 减少动态效果偏好：关闭装饰性动画，保留必要状态切换 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

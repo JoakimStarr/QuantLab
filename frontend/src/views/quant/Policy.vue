@@ -2,316 +2,399 @@
   <PageContainer narrow>
     <PageHeader
       title="政策风向"
-      subtitle="央视《新闻联播》文字稿（akshare news_cctv，非东财）+ AI 政策解读：当日政策定调、点名行业、主题热度，点击条目展开全文与解读"
+      subtitle="多源政策新闻（新闻联播/财经早餐/快讯）+ AI 政策解读：当日定调、点名板块、主题热度；点击主题/板块可联动检索"
     />
 
-    <!-- AI 政策主题热度 -->
-    <SectionCard title="政策主题热度（AI 生成）" class="mb-6">
+    <!-- L1 当日政策定调 -->
+    <SectionCard title="当日政策定调" class="mb-6">
       <template #extra>
-        <el-radio-group v-model="topicRange" size="small">
-          <el-radio-button v-for="r in topicRanges" :key="r.key" :value="r.key">{{ r.label }}</el-radio-button>
-        </el-radio-group>
-      </template>
-      <div v-if="topicsLoading" class="chart-wrap">
-        <el-skeleton :rows="8" animated />
-      </div>
-      <v-chart v-else-if="topicHeatData.length" :option="topicChart" class="chart-topics" autoresize />
-      <el-empty v-else description="暂无 AI 主题热度，请先运行「AI 解读」" :image-size="64" />
-    </SectionCard>
-
-    <!-- 点名板块 × 市场表现 -->
-    <SectionCard title="点名板块 × 市场表现" class="mb-6" collapsible>
-      <template #extra>
-        <el-select v-model="sectorPerfDate" size="small" style="width: 130px" placeholder="选择日期">
-          <el-option v-for="d in sectorPerfDates" :key="d" :value="d" :label="d" />
-        </el-select>
-      </template>
-      <div v-if="sectorPerfLoading" class="chart-wrap">
-        <el-skeleton :rows="6" animated />
-      </div>
-      <el-table v-else-if="sectorPerfRows.length" :data="sectorPerfRows" size="small" border stripe>
-        <el-table-column label="板块" prop="name" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain">基准</el-tag>
-            <span v-if="row.is_benchmark" class="bench-name">{{ row.name }}</span>
-            <span v-else>{{ row.name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="方向" width="64" align="center">
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.direction === '利好' ? 'success' : row.direction === '利空' ? 'danger' : 'info'"
-              effect="light"
-            >
-              {{ row.direction }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="匹配行业" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.industry">{{ row.industry }}</span>
-            <span v-else class="sector-no-match">{{ row.is_benchmark ? '—' : '暂无对照' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="代表股数" width="80" align="right">
-          <template #default="{ row }">{{ row.stocks ?? '—' }}</template>
-        </el-table-column>
-        <el-table-column v-for="h in sectorPerfHorizons" :key="h" :label="`T+${h}`" width="84" align="right">
-          <template #default="{ row }">
-            <span v-if="row[`ret_${h}d`] != null" :class="perfClass(row[`ret_${h}d`])">
-              {{ fmtPct(row[`ret_${h}d`]) }}
-            </span>
-            <span v-else class="sector-no-match">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column type="expand" width="36">
-          <template #default="{ row }">
-            <div v-if="row.is_benchmark" class="bench-note">
-              市场基准：沪深300 同期单日涨跌幅（与板块成分股等权收益口径一致，用于判断板块相对大盘强弱）
-            </div>
-            <div v-else-if="row.top?.length" class="top-stocks">
-              <div class="ai-label">龙头股（按 T+1 涨幅排序，最多 {{ row.top.length }} 只）</div>
-              <el-table :data="row.top" size="mini" border>
-                <el-table-column label="代码" prop="code" width="110" />
-                <el-table-column label="名称" prop="name" min-width="140" show-overflow-tooltip />
-                <el-table-column v-for="h in sectorPerfHorizons" :key="h" :label="`T+${h}`" align="right" width="80">
-                  <template #default="{ row: stock }">
-                    <span v-if="stock[`ret_${h}d`] != null" :class="perfClass(stock[`ret_${h}d`])">
-                      {{ fmtPct(stock[`ret_${h}d`]) }}
-                    </span>
-                    <span v-else class="sector-no-match">—</span>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-            <el-empty v-else description="暂无龙头股数据（板块未匹配行业）" :image-size="36" />
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-else description="暂无板块表现数据" :image-size="64" />
-    </SectionCard>
-
-    <!-- 近 7 天板块表现榜 -->
-    <SectionCard
-      title="近 7 天板块表现榜"
-      subtitle="按板块聚合近 7 天点名，收益取最近一次点名的 T+N（成分股等权）"
-      class="mb-6"
-      collapsible
-    >
-      <div v-if="sectorPerfLoading" class="chart-wrap">
-        <el-skeleton :rows="6" animated />
-      </div>
-      <el-table v-else-if="weekPerfRows.length" :data="weekPerfRows" size="small" border stripe>
-        <el-table-column label="板块" prop="name" min-width="150" show-overflow-tooltip />
-        <el-table-column label="点名次数" prop="count" width="80" align="center">
-          <template #default="{ row }">{{ row.count }}<span class="sector-no-match"> 天</span></template>
-        </el-table-column>
-        <el-table-column label="最近方向" width="64" align="center">
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.direction === '利好' ? 'success' : row.direction === '利空' ? 'danger' : 'info'"
-              effect="light"
-            >
-              {{ row.direction }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="匹配行业" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.industry">{{ row.industry }}</span>
-            <span v-else class="sector-no-match">暂无对照</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-for="h in sectorPerfHorizons" :key="h" :label="`T+${h}`" width="84" align="right">
-          <template #default="{ row }">
-            <span v-if="row[`ret_${h}d`] != null" :class="perfClass(row[`ret_${h}d`])">
-              {{ fmtPct(row[`ret_${h}d`]) }}
-            </span>
-            <span v-else class="sector-no-match">—</span>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-else description="暂无板块表现数据" :image-size="64" />
-    </SectionCard>
-
-    <SectionCard title="政策风向" class="mb-6" collapsible>
-      <template #extra>
-        <div class="policy-toolbar">
-          <el-button size="small" @click="loadAll" :loading="loading">刷新</el-button>
-          <el-select v-model="aiWindow" size="small" style="width: 110px">
-            <el-option v-for="w in aiWindows" :key="w.value" :value="w.value" :label="w.label" />
+        <div class="tone-toolbar">
+          <el-select v-model="latestDate" size="small" style="width: 130px" placeholder="选择日期">
+            <el-option v-for="d in latestDates" :key="d" :value="d" :label="d" />
           </el-select>
-          <el-button size="small" type="warning" @click="doAiSync" :loading="aiSyncing">
-            {{ aiSyncing ? 'AI解读中...' : 'AI 解读' }}
-          </el-button>
-          <el-button size="small" type="primary" @click="doSync" :loading="syncing">
-            {{ syncing ? '同步中...' : '同步新闻联播' }}
-          </el-button>
-          <el-button size="small" @click="openScheduleDialog" :class="{ 'schedule-enabled': schedule.enabled }">
-            定时更新
+          <el-button size="small" type="primary" plain @click="jumpToNews({ d: latestDate })">
+            查看当日新闻
           </el-button>
         </div>
       </template>
-
-      <div v-if="schedule.enabled" class="schedule-banner">
-        定时更新已开启：每日 {{ schedule.run_time }} {{ schedule.workdays_only ? '（仅工作日）' : '' }} 自动同步
-        <template v-if="schedule.include_news"> · 新闻</template>
-        <template v-if="schedule.include_ai"> · AI 解读</template>
-        <template v-if="schedule.include_market"> · 行情</template>
+      <div v-if="latestLoading" class="chart-wrap">
+        <el-skeleton :rows="4" animated />
       </div>
-
-      <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
-      <div v-if="aiProgress" class="ai-progress">
-        本次任务进度：{{ aiProgress.done }} / {{ aiProgress.total }} 天（失败 {{ aiProgress.failed }}）...
-      </div>
-
-      <!-- 数据状态 -->
-      <div v-if="status" class="policy-status">
-        <div class="policy-status-item">
-          <div class="policy-status-label">最新一期</div>
-          <div class="policy-status-value">{{ status.latest_date || '--' }}</div>
+      <template v-else-if="latestItem">
+        <div v-if="latestItem.policy_tone" class="tone-row">
+          <el-tag size="small" type="warning" effect="plain">当日定调</el-tag>
+          <span class="tone-text">{{ latestItem.policy_tone }}</span>
         </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">覆盖天数</div>
-          <div class="policy-status-value">{{ status.days || 0 }}</div>
-        </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">累计条数</div>
-          <div class="policy-status-value">{{ status.total || 0 }}</div>
-        </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">AI 已解读</div>
-          <div class="policy-status-value">{{ status.ai_done || 0 }}<span class="policy-status-sub"> / {{ status.ai_total || 0 }} 天</span></div>
-        </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">AI 失败</div>
-          <div class="policy-status-value" :class="{ 'is-error': (status.ai_failed || 0) > 0 }">
-            {{ status.ai_failed || 0 }}
+        <div v-if="latestItem.summary" class="tone-summary">{{ latestItem.summary }}</div>
+        <div v-if="latestItem.sectors?.length" class="tone-sectors">
+          <span class="ai-label">点名板块（点击检索）</span>
+          <div class="ai-chips">
+            <el-tooltip v-for="s in latestItem.sectors" :key="s.name" :content="s.reason || ''" placement="top">
+              <el-tag
+                size="small"
+                :type="dirType(s.direction)"
+                effect="light"
+                class="tone-chip"
+                @click="jumpToNews({ kw: s.name })"
+              >
+                {{ s.name }} {{ s.direction }}
+              </el-tag>
+            </el-tooltip>
           </div>
         </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">待解读</div>
-          <div class="policy-status-value">{{ status.ai_pending || 0 }}<span class="policy-status-sub"> 天</span></div>
+        <div v-if="latestItem.market_impact" class="ai-impact">
+          <el-tag size="small" type="danger" effect="plain">市场影响</el-tag>
+          <span>{{ latestItem.market_impact }}</span>
         </div>
-        <div class="policy-status-item">
-          <div class="policy-status-label">最早一期</div>
-          <div class="policy-status-value">{{ status.earliest_date || '--' }}</div>
-        </div>
-      </div>
+      </template>
+      <el-empty v-else description="暂无 AI 解读，请先在「新闻列表」运行 AI 解读" :image-size="64" />
+    </SectionCard>
 
-      <!-- 筛选 -->
-      <div class="policy-filter">
-        <el-input
-          v-model="keyword"
-          placeholder="关键词：标题 / 正文 / AI关键词，如：人工智能、降准、脑机接口"
-          clearable
-          class="policy-filter-keyword"
-          @keyup.enter="search"
-        />
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-          class="policy-filter-range"
-        />
-        <el-button type="primary" @click="search">查询</el-button>
-        <el-button @click="reset">重置</el-button>
-      </div>
-
-      <!-- 列表 -->
-      <template v-if="items.length">
-        <div
-          v-for="item in items"
-          :key="item.id"
-          class="policy-item"
-          :class="{ 'policy-item--open': expandedId === item.id }"
-        >
-          <div class="policy-item-head" @click="toggle(item.id, item)">
-            <el-tag size="small" effect="plain" class="policy-item-date">{{ item.news_date }}</el-tag>
-            <el-tag v-if="item.ai_analyzed" size="small" type="success" effect="light" class="policy-item-ai">
-              AI解读
-            </el-tag>
-            <span class="policy-item-title">{{ item.title }}</span>
-            <el-icon class="policy-item-caret">
-              <CaretBottom v-if="expandedId !== item.id" />
-              <CaretTop v-else />
-            </el-icon>
+    <!-- L2 功能 Tab -->
+    <SectionCard class="mb-6">
+      <el-tabs v-model="activeTab" class="policy-tabs">
+        <!-- 板块表现 -->
+        <el-tab-pane label="板块表现" name="sector">
+          <div class="sector-switch">
+            <el-radio-group v-model="sectorView" size="small">
+              <el-radio-button value="daily">单日点名 × 市场表现</el-radio-button>
+              <el-radio-button value="week">近7天板块表现榜</el-radio-button>
+            </el-radio-group>
           </div>
-          <transition name="expand">
-            <div v-if="expandedId === item.id" class="policy-item-body">
-              <!-- 新闻全文 -->
-              <div class="policy-item-section-title">新闻全文</div>
-              <div v-if="item.content" class="policy-item-content">{{ item.content }}</div>
-              <el-empty v-else description="无全文内容" :image-size="40" />
 
-              <!-- AI 解读 -->
-              <template v-if="aiDetail">
-                <div class="policy-item-section-title">AI 政策解读</div>
-                <div v-if="aiDetail.policy_tone" class="ai-tone">
-                  <el-tag size="small" type="warning" effect="plain">当日定调</el-tag>
-                  <span>{{ aiDetail.policy_tone }}</span>
-                </div>
-                <div v-if="aiDetail.summary" class="ai-summary">{{ aiDetail.summary }}</div>
-
-                <!-- 点名行业/板块 -->
-                <div v-if="aiDetail.sectors?.length" class="ai-sectors">
-                  <div class="ai-label">点名行业/板块</div>
-                  <div class="ai-chips">
-                    <el-tooltip
-                      v-for="s in aiDetail.sectors"
-                      :key="s.name"
-                      :content="s.reason || ''"
-                      placement="top"
-                    >
-                      <el-tag
-                        size="small"
-                        :type="s.direction === '利好' ? 'success' : s.direction === '利空' ? 'danger' : 'info'"
-                        effect="light"
-                      >
-                        {{ s.name }} {{ s.direction }}
-                      </el-tag>
-                    </el-tooltip>
-                  </div>
-                </div>
-
-                <!-- 政策主题 -->
-                <div v-if="aiDetail.topics?.length" class="ai-topics">
-                  <div class="ai-label">政策主题</div>
-                  <div class="ai-chips">
-                    <el-tag v-for="t in aiDetail.topics" :key="t.topic" size="small" type="primary" effect="plain">
-                      {{ t.topic }} {{ (t.score * 100).toFixed(0) }}
-                    </el-tag>
-                  </div>
-                </div>
-
-                <!-- 对市场影响 -->
-                <div v-if="aiDetail.market_impact" class="ai-impact">
-                  <el-tag size="small" type="danger" effect="plain">市场影响</el-tag>
-                  <span>{{ aiDetail.market_impact }}</span>
-                </div>
-              </template>
-              <div v-else-if="item.ai_analyzed" class="ai-loading">解读加载中...</div>
-              <div v-else class="ai-missing">该日暂无 AI 解读，可在顶部点击「AI 解读」批量生成</div>
+          <!-- 单日点名 × 市场表现 -->
+          <template v-if="sectorView === 'daily'">
+            <div class="sector-toolbar">
+              <el-select v-model="sectorPerfDate" size="small" style="width: 160px" placeholder="选择日期">
+                <el-option v-for="d in sectorPerfDates" :key="d" :value="d" :label="d" />
+              </el-select>
+              <span class="sector-hint">成分股等权收益，T+1 起为政策日之后首个交易日；「超额」为相对沪深300 同期单日涨跌</span>
             </div>
-          </transition>
-        </div>
+            <div v-if="sectorPerfLoading" class="chart-wrap">
+              <el-skeleton :rows="6" animated />
+            </div>
+            <el-table v-else-if="sectorPerfRows.length" :data="sectorPerfRows" size="small" border stripe>
+              <el-table-column label="板块" prop="name" min-width="150" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_benchmark" size="small" type="warning" effect="plain">基准</el-tag>
+                  <span v-if="row.is_benchmark" class="bench-name">{{ row.name }}</span>
+                  <span v-else>{{ row.name }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="方向" width="64" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="dirType(row.direction)" effect="light">{{ row.direction }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="匹配行业" min-width="160" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span v-if="row.industry">{{ row.industry }}</span>
+                  <span v-else class="sector-no-match">{{ row.is_benchmark ? '—' : '暂无对照' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="代表股数" width="80" align="right">
+                <template #default="{ row }">{{ row.stocks ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column v-for="h in sectorPerfHorizons" :key="h" width="96" align="right">
+                <template #header>
+                  <div class="sector-hdr">T+{{ h }}<span class="sector-hdr-sub">超额</span></div>
+                </template>
+                <template #default="{ row }">
+                  <div v-if="row[`ret_${h}d`] != null">
+                    <div :class="perfClass(row[`ret_${h}d`])">{{ fmtPct(row[`ret_${h}d`]) }}</div>
+                    <div
+                      v-if="!row.is_benchmark && row[`ex_${h}d`] != null"
+                      :class="perfClass(row[`ex_${h}d`])"
+                      class="sector-excess"
+                    >
+                      {{ fmtPct(row[`ex_${h}d`]) }}
+                    </div>
+                  </div>
+                  <span v-else class="sector-no-match">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column type="expand" width="36">
+                <template #default="{ row }">
+                  <div v-if="row.is_benchmark" class="bench-note">
+                    市场基准：沪深300 同期单日涨跌幅（与板块成分股等权收益口径一致，用于判断板块相对大盘强弱）
+                  </div>
+                  <div v-else-if="row.top?.length" class="top-stocks">
+                    <div class="ai-label">龙头股（按 T+1 涨幅排序，最多 {{ row.top.length }} 只）</div>
+                    <el-table :data="row.top" size="mini" border>
+                      <el-table-column label="代码" prop="code" width="110" />
+                      <el-table-column label="名称" prop="name" min-width="140" show-overflow-tooltip />
+                      <el-table-column v-for="h in sectorPerfHorizons" :key="h" :label="`T+${h}`" align="right" width="80">
+                        <template #default="{ row: stock }">
+                          <span v-if="stock[`ret_${h}d`] != null" :class="perfClass(stock[`ret_${h}d`])">
+                            {{ fmtPct(stock[`ret_${h}d`]) }}
+                          </span>
+                          <span v-else class="sector-no-match">—</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </div>
+                  <el-empty v-else description="暂无龙头股数据（板块未匹配行业）" :image-size="36" />
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无板块表现数据" :image-size="64" />
+          </template>
 
-        <div class="policy-pager">
-          <el-pagination
-            v-model:current-page="page"
-            :page-size="pageSize"
-            :total="total"
-            layout="total, prev, pager, next"
-            @current-change="loadList"
+          <!-- 近 7 天板块表现榜 -->
+          <template v-else>
+            <div v-if="sectorPerfLoading" class="chart-wrap">
+              <el-skeleton :rows="6" animated />
+            </div>
+            <el-table v-else-if="weekPerfRows.length" :data="weekPerfRows" size="small" border stripe>
+              <el-table-column label="板块" prop="name" min-width="150" show-overflow-tooltip />
+              <el-table-column label="点名次数" prop="count" width="80" align="center">
+                <template #default="{ row }">{{ row.count }}<span class="sector-no-match"> 天</span></template>
+              </el-table-column>
+              <el-table-column label="最近方向" width="64" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="dirType(row.direction)" effect="light">{{ row.direction }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="匹配行业" min-width="160" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span v-if="row.industry">{{ row.industry }}</span>
+                  <span v-else class="sector-no-match">暂无对照</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-for="h in sectorPerfHorizons" :key="h" :label="`T+${h}`" width="84" align="right">
+                <template #default="{ row }">
+                  <span v-if="row[`ret_${h}d`] != null" :class="perfClass(row[`ret_${h}d`])">
+                    {{ fmtPct(row[`ret_${h}d`]) }}
+                  </span>
+                  <span v-else class="sector-no-match">—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无板块表现数据" :image-size="64" />
+          </template>
+        </el-tab-pane>
+
+        <!-- 主题热度 -->
+        <el-tab-pane label="主题热度" name="topic">
+          <div class="sector-toolbar">
+            <el-radio-group v-model="topicRange" size="small">
+              <el-radio-button v-for="r in topicRanges" :key="r.key" :value="r.key">{{ r.label }}</el-radio-button>
+            </el-radio-group>
+            <span class="sector-hint">点击主题/日期可联动到「新闻列表」检索</span>
+          </div>
+          <div v-if="topicsLoading" class="chart-wrap">
+            <el-skeleton :rows="8" animated />
+          </div>
+          <v-chart
+            v-else-if="topicHeatData.length"
+            :option="topicChart"
+            class="chart-topics"
+            autoresize
+            @click="onChartClick"
           />
-        </div>
-      </template>
-      <el-empty v-else-if="!loading" description="暂无数据，请先同步新闻联播" :image-size="64" />
+          <el-empty v-else description="暂无 AI 主题热度，请先运行「AI 解读」" :image-size="64" />
+          <div v-if="topicRank.length" class="topic-rank">
+            <span class="ai-label">主题排行（点击检索）</span>
+            <div class="ai-chips">
+              <el-tag
+                v-for="t in topicRank"
+                :key="t.topic"
+                size="small"
+                type="primary"
+                effect="plain"
+                class="topic-chip"
+                @click="jumpToNews({ kw: t.topic })"
+              >
+                {{ t.topic }} {{ Number(t.score).toFixed(1) }}
+              </el-tag>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- 新闻列表 -->
+        <el-tab-pane label="新闻列表" name="news">
+          <div class="policy-toolbar">
+            <el-button size="small" @click="loadAll" :loading="loading">刷新</el-button>
+            <el-select v-model="aiWindow" size="small" style="width: 110px">
+              <el-option v-for="w in aiWindows" :key="w.value" :value="w.value" :label="w.label" />
+            </el-select>
+            <el-button size="small" type="warning" @click="doAiSync" :loading="aiSyncing">
+              {{ aiSyncing ? 'AI解读中...' : 'AI 解读' }}
+            </el-button>
+            <el-button size="small" type="primary" @click="doSync" :loading="syncing">
+              {{ syncing ? '同步中...' : '同步新闻联播' }}
+            </el-button>
+            <el-button size="small" @click="openScheduleDialog" :class="{ 'schedule-enabled': schedule.enabled }">
+              定时更新
+            </el-button>
+          </div>
+
+          <div v-if="schedule.enabled" class="schedule-banner">
+            定时更新已开启：每日 {{ schedule.run_time }} {{ schedule.workdays_only ? '（仅工作日）' : '' }} 自动同步
+            <template v-if="schedule.include_news"> · 新闻</template>
+            <template v-if="schedule.include_ai"> · AI 解读</template>
+            <template v-if="schedule.include_market"> · 行情</template>
+          </div>
+
+          <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
+          <div v-if="aiProgress" class="ai-progress">
+            本次任务进度：{{ aiProgress.done }} / {{ aiProgress.total }} 天（失败 {{ aiProgress.failed }}）...
+          </div>
+
+          <!-- 数据状态 -->
+          <div v-if="status" class="policy-status">
+            <div class="policy-status-item">
+              <div class="policy-status-label">最新一期</div>
+              <div class="policy-status-value">{{ status.latest_date || '--' }}</div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">覆盖天数</div>
+              <div class="policy-status-value">{{ status.days || 0 }}</div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">累计条数</div>
+              <div class="policy-status-value">{{ status.total || 0 }}</div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">AI 已解读</div>
+              <div class="policy-status-value">{{ status.ai_done || 0 }}<span class="policy-status-sub"> / {{ status.ai_total || 0 }} 天</span></div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">AI 失败</div>
+              <div class="policy-status-value" :class="{ 'is-error': (status.ai_failed || 0) > 0 }">
+                {{ status.ai_failed || 0 }}
+              </div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">待解读</div>
+              <div class="policy-status-value">{{ status.ai_pending || 0 }}<span class="policy-status-sub"> 天</span></div>
+            </div>
+            <div class="policy-status-item">
+              <div class="policy-status-label">最早一期</div>
+              <div class="policy-status-value">{{ status.earliest_date || '--' }}</div>
+            </div>
+            <div v-if="status.source_breakdown" class="policy-status-sources">
+              <span v-for="(cnt, s) in status.source_breakdown" :key="s" class="policy-status-src">
+                {{ sourceLabel(s) }} {{ cnt }}
+              </span>
+            </div>
+          </div>
+
+          <!-- 筛选 -->
+          <div class="policy-filter">
+            <el-input
+              v-model="keyword"
+              placeholder="关键词：标题 / 正文 / AI关键词，如：人工智能、降准、脑机接口"
+              clearable
+              class="policy-filter-keyword"
+              @keyup.enter="search"
+            />
+            <el-select v-model="source" placeholder="来源" clearable style="width: 120px" @change="search">
+              <el-option v-for="(label, key) in SOURCE_LABELS" :key="key" :value="key" :label="label" />
+            </el-select>
+            <el-date-picker
+              v-model="dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              class="policy-filter-range"
+            />
+            <el-button type="primary" @click="search">查询</el-button>
+            <el-button @click="reset">重置</el-button>
+          </div>
+
+          <!-- 列表 -->
+          <template v-if="items.length">
+            <div
+              v-for="item in items"
+              :key="item.id"
+              class="policy-item"
+              :class="{ 'policy-item--open': expandedId === item.id }"
+            >
+              <div class="policy-item-head" @click="toggle(item.id, item)">
+                <el-tag size="small" effect="plain" class="policy-item-date">{{ item.news_date }}</el-tag>
+                <el-tag v-if="item.source !== 'cctv'" size="small" effect="plain" class="policy-item-source">
+                  {{ sourceLabel(item.source) }}
+                </el-tag>
+                <el-tag v-if="item.ai_analyzed" size="small" type="success" effect="light" class="policy-item-ai">
+                  AI解读
+                </el-tag>
+                <span class="policy-item-title">{{ item.title }}</span>
+                <el-icon class="policy-item-caret">
+                  <CaretBottom v-if="expandedId !== item.id" />
+                  <CaretTop v-else />
+                </el-icon>
+              </div>
+              <transition name="expand">
+                <div v-if="expandedId === item.id" class="policy-item-body">
+                  <!-- 新闻全文 -->
+                  <div class="policy-item-section-title">新闻全文</div>
+                  <div v-if="item.content" class="policy-item-content">{{ item.content }}</div>
+                  <el-empty v-else description="无全文内容" :image-size="40" />
+
+                  <!-- AI 解读 -->
+                  <template v-if="aiDetail">
+                    <div class="policy-item-section-title">AI 政策解读</div>
+                    <div v-if="aiDetail.policy_tone" class="ai-tone">
+                      <el-tag size="small" type="warning" effect="plain">当日定调</el-tag>
+                      <span>{{ aiDetail.policy_tone }}</span>
+                    </div>
+                    <div v-if="aiDetail.summary" class="ai-summary">{{ aiDetail.summary }}</div>
+
+                    <!-- 点名行业/板块 -->
+                    <div v-if="aiDetail.sectors?.length" class="ai-sectors">
+                      <div class="ai-label">点名行业/板块</div>
+                      <div class="ai-chips">
+                        <el-tooltip
+                          v-for="s in aiDetail.sectors"
+                          :key="s.name"
+                          :content="s.reason || ''"
+                          placement="top"
+                        >
+                          <el-tag size="small" :type="dirType(s.direction)" effect="light">
+                            {{ s.name }} {{ s.direction }}
+                          </el-tag>
+                        </el-tooltip>
+                      </div>
+                    </div>
+
+                    <!-- 政策主题 -->
+                    <div v-if="aiDetail.topics?.length" class="ai-topics">
+                      <div class="ai-label">政策主题</div>
+                      <div class="ai-chips">
+                        <el-tag v-for="t in aiDetail.topics" :key="t.topic" size="small" type="primary" effect="plain">
+                          {{ t.topic }} {{ (t.score * 100).toFixed(0) }}
+                        </el-tag>
+                      </div>
+                    </div>
+
+                    <!-- 对市场影响 -->
+                    <div v-if="aiDetail.market_impact" class="ai-impact">
+                      <el-tag size="small" type="danger" effect="plain">市场影响</el-tag>
+                      <span>{{ aiDetail.market_impact }}</span>
+                    </div>
+                  </template>
+                  <div v-else-if="item.ai_analyzed" class="ai-loading">解读加载中...</div>
+                  <div v-else class="ai-missing">该日暂无 AI 解读，可在顶部点击「AI 解读」批量生成</div>
+                </div>
+              </transition>
+            </div>
+
+            <div class="policy-pager">
+              <el-pagination
+                v-model:current-page="page"
+                :page-size="pageSize"
+                :total="total"
+                layout="total, prev, pager, next"
+                @current-change="loadList"
+              />
+            </div>
+          </template>
+          <el-empty v-else-if="!loading" description="暂无数据，请先同步新闻联播" :image-size="64" />
+        </el-tab-pane>
+      </el-tabs>
     </SectionCard>
 
     <!-- 定时数据刷新设置 -->
@@ -384,7 +467,7 @@ import { useThemeRev } from '@/composables/useChartTheme'
 import { chartTheme } from '@/utils/chartTheme'
 import { buildTopicHeatMatrix, buildTopicCumulative } from '@/utils/policyTopics'
 import {
-  syncPolicy, getPolicyNews, getPolicyStatus,
+  syncPolicy, getPolicyNews, getPolicyStatus, getPolicyLatest,
   syncPolicyAi, getPolicyAiProgress, getPolicyAiDetail, getPolicyAiTopics, getPolicySectorPerf,
   getPolicySchedule, savePolicySchedule,
 } from '@/api/policy'
@@ -403,9 +486,51 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const keyword = ref('')
+const source = ref('')
 const dateRange = ref([])
 const expandedId = ref(null)
 const aiDetail = ref(null)
+
+// ==== 数据源 ====
+const SOURCE_LABELS = { cctv: '新闻联播', cjzc: '金十早餐', em: '东财快讯' }
+const sourceLabel = (s) => SOURCE_LABELS[s] || s
+
+// ==== L2 Tab ====
+const activeTab = ref('sector')
+const sectorView = ref('daily')
+
+// ==== L1 当日定调 ====
+const latestLoading = ref(false)
+const latestItems = ref([])
+const latestDate = ref('')
+const latestDates = computed(() => latestItems.value.map((it) => it.news_date))
+const latestItem = computed(() => latestItems.value.find((it) => it.news_date === latestDate.value) || null)
+
+async function loadLatest() {
+  latestLoading.value = true
+  try {
+    const r = await getPolicyLatest(7)
+    latestItems.value = r?.items || []
+    latestDate.value = latestItems.value[0]?.news_date || ''
+  } finally {
+    latestLoading.value = false
+  }
+}
+
+function dirType(dir) {
+  if (dir === '利好') return 'success'
+  if (dir === '利空') return 'danger'
+  return 'info'
+}
+
+// 跨 tab 联动：跳转新闻列表并按主题/日期检索
+function jumpToNews({ kw = '', d = null } = {}) {
+  activeTab.value = 'news'
+  if (kw) keyword.value = kw
+  if (d) dateRange.value = [d, d]
+  page.value = 1
+  loadList()
+}
 
 // AI 解读回填窗口（对应后端 backfill_days）
 const aiWindow = ref(30)
@@ -476,11 +601,19 @@ const sectorPerfItems = ref([]) // [{date, sectors: [...]}]
 const sectorPerfDate = ref('')
 const sectorPerfHorizons = [1, 3, 5]
 const sectorPerfDates = computed(() => sectorPerfItems.value.map((it) => it.date))
+
+const round2 = (v) => (v == null ? null : Number(v.toFixed(2)))
+// 超额收益 = 板块成分股等权收益 − 沪深300 同期单日涨跌（基准已由后端返回）
 const sectorPerfRows = computed(() => {
   const it = sectorPerfItems.value.find((x) => x.date === sectorPerfDate.value)
   if (!it) return []
+  const rows = (it.sectors || []).map((s) => ({
+    ...s,
+    ex_1d: s.ret_1d != null && it.bench_ret_1d != null ? round2(s.ret_1d - it.bench_ret_1d) : null,
+    ex_3d: s.ret_3d != null && it.bench_ret_3d != null ? round2(s.ret_3d - it.bench_ret_3d) : null,
+    ex_5d: s.ret_5d != null && it.bench_ret_5d != null ? round2(s.ret_5d - it.bench_ret_5d) : null,
+  }))
   // 首行插入市场基准（沪深300 同口径单日涨跌），供用户对比板块相对大盘的强弱
-  const rows = [...(it.sectors || [])]
   if (it.bench_ret_1d != null || it.bench_ret_3d != null || it.bench_ret_5d != null) {
     rows.unshift({
       is_benchmark: true,
@@ -491,6 +624,9 @@ const sectorPerfRows = computed(() => {
       ret_1d: it.bench_ret_1d ?? null,
       ret_3d: it.bench_ret_3d ?? null,
       ret_5d: it.bench_ret_5d ?? null,
+      ex_1d: null,
+      ex_3d: null,
+      ex_5d: null,
     })
   }
   return rows
@@ -564,6 +700,7 @@ async function loadList() {
       page: page.value,
       page_size: pageSize.value,
       keyword: keyword.value || undefined,
+      source: source.value || undefined,
       start: dateRange.value?.[0] || undefined,
       end: dateRange.value?.[1] || undefined,
     })
@@ -575,7 +712,7 @@ async function loadList() {
 }
 
 async function loadAll() {
-  await Promise.all([loadStatus(), loadList(), loadTopics(), loadSectorPerf(), loadSchedule()])
+  await Promise.all([loadStatus(), loadList(), loadLatest(), loadTopics(), loadSectorPerf(), loadSchedule()])
 }
 
 function search() {
@@ -585,6 +722,7 @@ function search() {
 
 function reset() {
   keyword.value = ''
+  source.value = ''
   dateRange.value = []
   page.value = 1
   loadList()
@@ -638,6 +776,7 @@ async function doAiSync() {
       aiSyncing.value = false
       loadTopics()
       loadStatus()
+      loadLatest()
       return
     }
     // 以任务级进度（policy/ai/progress）为准轮询，直到终态 done/failed。
@@ -668,6 +807,7 @@ async function doAiSync() {
           }
           loadTopics()
           loadStatus()
+          loadLatest()
         }
       } catch (e) {
         stopAiPoll()
@@ -783,7 +923,7 @@ const topicChart = computed(() => ({
     bottom: -8,
     text: ['高', '低'],
     textStyle: { fontSize: 10 },
-    inRange: { color: ['#eef2f6', chartTheme.palette(1)] },
+    inRange: { color: [chartTheme.bgTertiary(), chartTheme.palette(1)] },
   },
   dataZoom: [{ type: 'inside', xAxisIndex: 0, zoomOnMouseWheel: true, moveOnMouseMove: true }],
   series: [
@@ -791,6 +931,16 @@ const topicChart = computed(() => ({
     ...(topicCumSeries.value ? [topicCumSeries.value] : []),
   ],
 }))
+
+// 热力图点击联动：主题/日期 → 新闻列表检索
+function onChartClick(params) {
+  if (!params || params.seriesType !== 'heatmap' || !Array.isArray(params.data) || params.data.length !== 3) return
+  const [di, ti] = params.data
+  const topic = topicTopics.value[ti]
+  const d = topicItems.value[di]?.date
+  if (!topic || !d) return
+  jumpToNews({ kw: topic, d })
+}
 
 watch(topicRange, loadTopics)
 onMounted(loadAll)
@@ -801,6 +951,42 @@ onBeforeUnmount(stopAiPoll)
 .policy-toolbar {
   display: flex;
   gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.tone-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tone-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.tone-text {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.tone-summary {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--el-text-color-regular);
+  margin-bottom: 10px;
+}
+
+.tone-sectors {
+  margin-bottom: 10px;
+}
+
+.tone-chip {
+  cursor: pointer;
 }
 
 .schedule-enabled {
@@ -849,6 +1035,7 @@ onBeforeUnmount(stopAiPoll)
   margin-bottom: 12px;
   border-radius: 8px;
   background: var(--el-fill-color-light);
+  align-items: center;
 }
 
 .policy-status-label {
@@ -872,11 +1059,26 @@ onBeforeUnmount(stopAiPoll)
   color: var(--el-text-color-secondary);
 }
 
+.policy-status-sources {
+  display: flex;
+  gap: 12px;
+  margin-left: 8px;
+  padding-left: 24px;
+  border-left: 1px solid var(--el-border-color-lighter);
+}
+
+.policy-status-src {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
 .policy-filter {
   display: flex;
   gap: 10px;
   align-items: center;
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .policy-filter-keyword {
@@ -904,7 +1106,8 @@ onBeforeUnmount(stopAiPoll)
 }
 
 .policy-item-date,
-.policy-item-ai {
+.policy-item-ai,
+.policy-item-source {
   flex-shrink: 0;
 }
 
@@ -1009,6 +1212,40 @@ onBeforeUnmount(stopAiPoll)
 }
 
 /* 板块 × 市场表现 */
+.sector-switch {
+  margin-bottom: 14px;
+}
+
+.sector-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.sector-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.sector-hdr {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.sector-hdr-sub {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  font-weight: 400;
+}
+
+.sector-excess {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 .perf-up {
   color: var(--el-color-danger);
   font-weight: 600;
@@ -1038,6 +1275,15 @@ onBeforeUnmount(stopAiPoll)
 
 .top-stocks {
   padding: 6px 8px;
+}
+
+/* 主题排行 */
+.topic-rank {
+  margin-top: 16px;
+}
+
+.topic-chip {
+  cursor: pointer;
 }
 
 .expand-enter-active,

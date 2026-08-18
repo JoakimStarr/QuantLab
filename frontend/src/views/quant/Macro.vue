@@ -5,6 +5,13 @@
       subtitle="东财 + akshare 宏观（PMI/CPI/PPI/GDP/国债/Shibor/汇率等）+ FRED/CFTC/EIA 全球宏观，同步后广播为 qlib 因子字段"
     />
 
+    <!-- 教学提示：宏观因子化机制 -->
+    <LearnTip
+      storage-key="learn_tip_macro_broadcast"
+      title="宏观指标如何进入策略研究？"
+      desc="同步入库的宏观指标（PMI/CPI/汇率等）会被广播为 qlib 因子字段，可在因子表达式中直接引用（如 $pmi），把自上而下的宏观视角融入选股与回测。"
+    />
+
     <!-- 宏观指标：最新值 + 点击指标正面下方展开走势（按需加载） -->
     <SectionCard title="宏观指标" class="macro-card mb-6">
       <template #extra>
@@ -115,6 +122,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom, CaretRight } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import LearnTip from '@/components/common/LearnTip.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'

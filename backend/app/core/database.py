@@ -84,6 +84,7 @@ async def _ensure_columns() -> None:
             ("sync_trigger", "VARCHAR"),
         ],
         "sync_history": [("sync_path", "VARCHAR")],
+        "mining_task": [("result", "TEXT")],
     }
 
     def _do(sync_conn):

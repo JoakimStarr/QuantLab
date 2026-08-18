@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import time
 
@@ -6,6 +7,11 @@ from app.core.errors import AIProviderUnavailableError
 from app.services.ai.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
+
+
+def _key_fingerprint(key: str) -> str:
+    """密钥指纹：sha256 前 8 位。用于日志排查配置是否生效，不可逆推原 key。"""
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
 
 
 class ProviderCircuitBreaker:
@@ -92,9 +98,9 @@ class ProviderRouter:
                     temperature=primary_cfg.get("temperature", 0.3),
                 )
                 logger.info(
-                    "Primary AI provider (opencodezen) 已就绪: model=%s, key=%s...",
+                    "Primary AI provider (opencodezen) 已就绪: model=%s, key=fp:%s",
                     self.primary.model,
-                    opencodezen_key[:8],
+                    _key_fingerprint(opencodezen_key),
                 )
             except Exception as e:
                 logger.warning("Primary AI provider (opencodezen) 初始化失败: %s", e)
@@ -113,9 +119,9 @@ class ProviderRouter:
                     temperature=fallback_cfg.get("temperature", 0.3),
                 )
                 logger.info(
-                    "Fallback AI provider (glm) 已就绪: model=%s, key=%s...",
+                    "Fallback AI provider (glm) 已就绪: model=%s, key=fp:%s",
                     self.fallback.model,
-                    glm_key[:8],
+                    _key_fingerprint(glm_key),
                 )
             except Exception as e:
                 logger.warning("Fallback AI provider (glm) 初始化失败: %s", e)
@@ -134,9 +140,9 @@ class ProviderRouter:
                     temperature=tertiary_cfg.get("temperature", 0.3),
                 )
                 logger.info(
-                    "Tertiary AI provider (siliconflow) 已就绪: model=%s, key=%s...",
+                    "Tertiary AI provider (siliconflow) 已就绪: model=%s, key=fp:%s",
                     self.tertiary.model,
-                    siliconflow_key[:8],
+                    _key_fingerprint(siliconflow_key),
                 )
             except Exception as e:
                 logger.warning("Tertiary AI provider (siliconflow) 初始化失败: %s", e)

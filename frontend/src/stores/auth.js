@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getAuthStatus, login as loginApi, getMe } from '@/api/auth'
+import { getAuthStatus, login as loginApi, register as registerApi, logout as logoutApi, getMe } from '@/api/auth'
 
 const TOKEN_KEY = 'auth_token'
 
@@ -31,10 +31,20 @@ export const useAuthStore = defineStore('auth', () => {
     return statusPromise
   }
 
-  /** 登录 */
-  async function login(password) {
-    const data = await loginApi(password)
+  /** 登录（邮箱 + 密码，成功后落 token 与用户信息） */
+  async function login(email, password) {
+    const data = await loginApi(email, password)
     token.value = data.token
+    user.value = data.user || null
+    localStorage.setItem(TOKEN_KEY, data.token)
+    return data
+  }
+
+  /** 注册即登录（后端注册成功直接签发 token） */
+  async function register(email, password) {
+    const data = await registerApi(email, password)
+    token.value = data.token
+    user.value = data.user || null
     localStorage.setItem(TOKEN_KEY, data.token)
     return data
   }
@@ -50,8 +60,13 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value
   }
 
-  /** 登出 */
-  function logout() {
+  /** 登出：通知后端审计（失败不阻塞），再清理本地状态 */
+  async function logout() {
+    try {
+      await logoutApi()
+    } catch {
+      /* 后端不可达时仍继续本地登出 */
+    }
     token.value = ''
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
@@ -69,6 +84,7 @@ export const useAuthStore = defineStore('auth', () => {
     needAuth,
     fetchStatus,
     login,
+    register,
     fetchUser,
     logout,
   }

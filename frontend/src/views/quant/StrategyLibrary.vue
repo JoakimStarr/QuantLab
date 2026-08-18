@@ -202,21 +202,8 @@
         size="small"
         class="history-table"
         :row-key="(row) => row.history_id"
-        :expand-row-keys="expandedKeys"
-        @expand-change="onExpandChange"
         @row-click="onRowClick"
       >
-        <el-table-column type="expand" width="48">
-          <template #default="{ row }">
-            <BacktestResultDetail
-              v-if="expandedId === row.history_id && historyDetail"
-              :result="historyDetail"
-              :strategy="displayedStrategy"
-              :loading="historyDetailLoading"
-              :deletable="false"
-            />
-          </template>
-        </el-table-column>
         <el-table-column label="模板" min-width="120">
           <template #default="{ row }">
             <div class="cell-tpl" :title="`查看「${row.template_name}」回测结果`">
@@ -256,7 +243,7 @@
           <template #default="{ row }">
             <div class="row-actions">
               <el-tooltip content="查看详情" :show-after="200">
-                <el-button size="small" text type="primary" :icon="View" @click.stop="expandHistory(row)" />
+                <el-button size="small" text type="primary" :icon="View" @click.stop="viewHistory(row)" />
               </el-tooltip>
               <el-tooltip content="重跑" :show-after="200">
                 <el-button size="small" text type="primary" :icon="RefreshRight" @click="rerunHistory(row)" />
@@ -275,20 +262,13 @@
       />
     </div>
 
-    <!-- 回测结果（本次运行，行内展开的为历史详情） -->
-    <div v-if="result" class="mt-6">
-      <BacktestResultDetail
-        :result="result"
-        :strategy="displayedStrategy"
-        :deletable="false"
-      />
-    </div>
   </PageContainer>
 </template>
 
 <script setup>
 defineOptions({ name: 'QuantStrategyLibrary' })
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import {
@@ -296,16 +276,20 @@ import {
 } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SymbolSearchSelect from '@/components/common/SymbolSearchSelect.vue'
-import BacktestResultDetail from '@/components/quant/BacktestResultDetail.vue'
 import { fmtPct, fmtNum, numClass } from '@/utils/format'
 import {
   getStrategyTemplates,
   runStrategyLibraryBacktest,
-  getStrategyHistory,
   getStrategyHistoryDetail,
   deleteStrategyHistory,
 } from '@/api/strategyLibrary'
-import { getClassicStrategies, runClassicStrategy } from '@/api/classicStrategy'
+import {
+  getClassicStrategies,
+  runClassicStrategy,
+  getCombinedHistory,
+  getClassicHistoryDetail,
+  deleteClassicHistory,
+} from '@/api/classicStrategy'
 import { getQuantDataStatus, listUniverses } from '@/api/quant'
 
 const templates = ref([])      // 技术模板
@@ -495,9 +479,12 @@ async function runBacktest() {
       result.value.rebalance_freq = formRebalance.value
     }
     dialogVisible.value = false
-    historyDetail.value = null
-    expandedKeys.value = []
-    expandedId.value = null
+    if (result.value?.history_id) {
+      // 回测完成：跳转聚宽风格独立详情页（模板=rule 源，经典=classic 源）
+      router.push({ path: `/quant/backtest/${result.value.history_id}`, query: { source: isTemplate ? 'rule' : 'classic' } })
+      return
+    }
+    ElMessage.warning('回测完成，但历史保存失败，结果详情暂不可用')
     if (isTemplate) await loadHistory()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('回测失败: ' + (e?.message || e))
@@ -510,22 +497,14 @@ async function runBacktest() {
 const historyList = ref([])
 const historyTotal = ref(0)
 const historyLoading = ref(false)
-const historyDetail = ref(null)
-const historyDetailLoading = ref(false)
-const expandedKeys = ref([])
-const expandedId = ref(null)
-
-const displayedResult = computed(() => historyDetail.value || result.value)
-const displayedStrategy = computed(() => ({
-  name: historyDetail.value?.template_name || result.value?.name || '',
-}))
+const router = useRouter()
 
 const shortTime = (ts) => (ts ? String(ts).replace('T', ' ').slice(0, 16) : '--')
 
 async function loadHistory() {
   historyLoading.value = true
   try {
-    const data = await getStrategyHistory({ limit: 50 })
+    const data = await getCombinedHistory({ limit: 50 })
     historyList.value = data?.items || []
     historyTotal.value = data?.total || 0
   } catch (e) {
@@ -535,50 +514,38 @@ async function loadHistory() {
   }
 }
 
-// === 行内展开（单开折叠）：与策略回测一致，展开时懒加载详情 ===
-function onExpandChange(row, expandedRows) {
-  const isExpanded = expandedRows.some((r) => r.history_id === row.history_id)
-  if (isExpanded) {
-    expandedKeys.value = [row.history_id]
-    expandedId.value = row.history_id
-    loadHistoryDetail(row)
-  } else if (expandedId.value === row.history_id) {
-    expandedKeys.value = []
-    expandedId.value = null
-  }
-}
-
+// === 行点击 / 查看详情：跳转聚宽风格独立详情页 ===
 function onRowClick(row) {
   if (!row) return
-  if (expandedId.value === row.history_id) {
-    expandedKeys.value = []
-    expandedId.value = null
-  } else {
-    expandedKeys.value = [row.history_id]
-    expandedId.value = row.history_id
-    loadHistoryDetail(row)
-  }
+  viewHistory(row)
 }
 
-function expandHistory(row) {
-  onRowClick(row)
-}
-
-async function loadHistoryDetail(row) {
-  if (historyDetailLoading.value && historyDetail.value?.history_id === row.history_id) return
-  historyDetail.value = null
-  historyDetailLoading.value = true
-  try {
-    historyDetail.value = await getStrategyHistoryDetail(row.history_id)
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('加载回测历史详情失败')
-  } finally {
-    historyDetailLoading.value = false
-  }
+function viewHistory(row) {
+  if (!row?.history_id) return
+  router.push({ path: `/quant/backtest/${row.history_id}`, query: { source: row.source === 'classic' ? 'classic' : 'rule' } })
 }
 
 async function rerunHistory(row) {
   try {
+    // classic 行：经典策略卡 + 截面参数预填
+    if (row.source === 'classic') {
+      const cd = await getClassicHistoryDetail(row.history_id)
+      const card = classics.value.find((c) => c.key === cd.template)
+      if (!card) {
+        ElMessage.error('该策略已下架，无法重跑')
+        return
+      }
+      current.value = { ...card, type: 'factor' }
+      formTopk.value = cd.params?.topk ?? card.defaults?.topk ?? 50
+      formNDrop.value = cd.params?.n_drop ?? card.defaults?.n_drop ?? 5
+      formRebalance.value = cd.params?.rebalance_freq ?? card.defaults?.rebalance_freq ?? 'week'
+      formUniverse.value = cd.params?.universe || card.defaults?.universe || ''
+      formDates.value = [cd.start_date, cd.end_date]
+      formBenchmark.value = cd.benchmark || 'SH000300'
+      formCapital.value = cd.initial_capital || 10_000_000
+      dialogVisible.value = true
+      return
+    }
     const detail = await getStrategyHistoryDetail(row.history_id)
     const tpl = templates.value.find((t) => t.key === detail.template)
     if (!tpl) {
@@ -610,13 +577,9 @@ async function removeHistory(row) {
     return
   }
   try {
-    await deleteStrategyHistory(row.history_id)
+    if (row.source === 'classic') await deleteClassicHistory(row.history_id)
+    else await deleteStrategyHistory(row.history_id)
     ElMessage.success('已删除')
-    if (historyDetail.value?.history_id === row.history_id) {
-      historyDetail.value = null
-      expandedKeys.value = []
-      expandedId.value = null
-    }
     await loadHistory()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('删除回测历史失败')

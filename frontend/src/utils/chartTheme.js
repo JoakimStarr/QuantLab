@@ -41,6 +41,7 @@ export const chartTheme = {
   textSecondary: () => read('--text-secondary', '#5b6b85'),
   textTertiary: () => read('--text-tertiary', '#8493ab'),
   bgCard: () => read('--bg-card', '#ffffff'),
+  bgTertiary: () => read('--bg-tertiary', '#eef2f6'),
   border: () => read('--border', '#e3e9f1'),
   successSoft: () => read('--success-soft', 'rgba(31,157,107,0.1)'),
 }

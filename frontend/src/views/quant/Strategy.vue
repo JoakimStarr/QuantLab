@@ -14,31 +14,24 @@
       </template>
     </PageHeader>
 
+    <!-- 教学提示：多因子回测流程 -->
+    <LearnTip
+      storage-key="learn_tip_strategy_flow"
+      title="多因子策略的回测流程"
+      desc="选因子 → 设定 TopK 持仓数与调仓频率 → 系统按因子得分定期调仓并模拟交易（含费用）→ 输出收益曲线、超额收益与风险指标。可先在因子库完成评价，再到这里组合成策略验证效果。"
+    />
+
     <!-- 策略列表表格 -->
     <SectionCard title="策略列表" class="table-card" v-loading="listLoading">
       <el-table
         v-if="strategies.length"
         :data="strategies"
-        :row-class-name="rowClassName"
         :row-key="(row) => row.id"
-        :expand-row-keys="expandedKeys"
-        @expand-change="onExpandChange"
         @row-click="onRowClick"
         @selection-change="handleResultSelectionChange"
         size="default"
       >
         <el-table-column type="selection" width="48" />
-        <el-table-column type="expand" width="48">
-          <template #default="{ row }">
-            <BacktestResultDetail
-              v-if="expandedId === row.id && currentResult"
-              :result="currentResult"
-              :strategy="row"
-              :loading="resultLoading"
-              @delete="deleteCurrentResult"
-            />
-          </template>
-        </el-table-column>
         <el-table-column prop="id" label="ID" width="60" align="center">
           <template #default="{ row }"
             ><span class="cell-mono">{{ row.id }}</span></template
@@ -428,30 +421,19 @@
         </div>
       </div>
     </ConfirmDialog>
-
-    <!-- 删除回测结果确认弹窗 -->
-    <ConfirmDialog
-      v-model="deleteDialog.visible"
-      title="删除回测结果"
-      message="删除后该回测结果不再显示（软删除），确定删除？"
-      icon="warning"
-      type="danger"
-      confirm-text="确定删除"
-      @confirm="doDeleteResult"
-    />
   </PageContainer>
 </template>
 
 <script setup>
 defineOptions({ name: 'QuantStrategy' })
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import LearnTip from '@/components/common/LearnTip.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import BacktestResultDetail from '@/components/quant/BacktestResultDetail.vue'
 import { usePolling } from '@/composables/usePolling'
 import { formatTime } from '@/utils/format'
 import {
@@ -459,8 +441,6 @@ import {
   createStrategy,
   runBacktest,
   listBacktestResults,
-  getBacktestResult,
-  deleteBacktestResult,
   getAllBacktestStatuses,
   runWalkForward,
   getWalkForwardResults,
@@ -472,13 +452,9 @@ import { getQuantDataStatus } from '@/api/quant'
 const router = useRouter()
 const factorStore = useFactorStore()
 
-// === 策略列表与选中 ===
+// === 策略列表 ===
 const strategies = ref([])
-const selectedStrategy = ref(null)
 const listLoading = ref(false)
-// 行内展开（单开折叠）：expandedKeys 仅保留一个 id，点其它行自动收起
-const expandedKeys = ref([])
-const expandedId = ref(null)
 
 // === AI 策略 ===
 const aiGenerating = ref(false)
@@ -574,9 +550,6 @@ async function compareResults() {
   }
 }
 
-// === 回测结果 ===
-const currentResult = ref(null)
-const resultLoading = ref(false)
 
 // === 新建策略对话框 ===
 const showCreate = ref(false)
@@ -603,11 +576,11 @@ const resultPolling = usePolling(async () => {
   try {
     const data = await listBacktestResults(pollRow, { limit: 1 })
     const latest = data?.items?.[0]
-    // 出现新的已完成结果（id 变化且指标已填充）
+    // 出现新的已完成结果（id 变化且指标已填充）→ 跳转独立详情页
     if (latest && latest.id !== pollPrevId && latest.annual_return != null) {
-      currentResult.value = await getBacktestResult(latest.id)
       ElMessage.success('回测完成')
       stopPolling()
+      router.push(`/quant/backtest/${latest.id}`)
     } else if (resultAttempts >= 40) {
       ElMessage.warning('回测仍在进行中，请稍后点击"结果"查看')
       stopPolling()
@@ -624,11 +597,6 @@ const statusPolling = usePolling(async () => {
     stopStatusPolling()
   }
 }, 3000, { immediate: false })
-
-// === 选中行样式 ===
-function rowClassName({ row }) {
-  return selectedStrategy.value?.id === row.id ? 'is-selected' : ''
-}
 
 // === 回测状态显示 ===
 function getBacktestStatusClass(strategyId) {
@@ -693,79 +661,10 @@ async function loadFactors() {
   }
 }
 
-// === 行内展开（单开折叠）：el-table 展开变化时同步状态并加载结果 ===
-function onExpandChange(row, expandedRows) {
-  const isExpanded = expandedRows.some((r) => r.id === row.id)
-  if (isExpanded) {
-    // 只保留当前行展开，其它自动收起
-    expandedKeys.value = [row.id]
-    expandedId.value = row.id
-    selectStrategy(row)
-  } else if (expandedId.value === row.id) {
-    expandedKeys.value = []
-    expandedId.value = null
-    selectedStrategy.value = null
-    currentResult.value = null
-  }
-}
-
-// === 点击行：展开该行（若已展开则收起） ===
+// === 点击行：跳转最新回测详情页 ===
 function onRowClick(row) {
   if (!row) return
-  if (expandedId.value === row.id) {
-    expandedKeys.value = []
-    expandedId.value = null
-    selectedStrategy.value = null
-    currentResult.value = null
-  } else {
-    expandedKeys.value = [row.id]
-    expandedId.value = row.id
-    selectStrategy(row)
-  }
-}
-
-async function selectStrategy(row, scroll = false) {
-  if (resultLoading.value && selectedStrategy.value?.id === row.id) return
-  selectedStrategy.value = row
-  currentResult.value = null
-  resultLoading.value = true
-  try {
-    const data = await listBacktestResults(row.id, { limit: 1 })
-    const items = data?.items || []
-    if (items.length && items[0].id != null) {
-      currentResult.value = await getBacktestResult(items[0].id)
-    }
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('加载回测结果失败')
-  } finally {
-    resultLoading.value = false
-    if (scroll) {
-      nextTick(() => {
-        const el = document.querySelector('.strategy-result')
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
-    }
-  }
-}
-
-// === 删除当前回测结果（软删除，清理重复/过期记录） ===
-const deleteDialog = ref({ visible: false })
-
-function deleteCurrentResult() {
-  if (!currentResult.value) return
-  deleteDialog.value.visible = true
-}
-
-async function doDeleteResult() {
-  deleteDialog.value.visible = false
-  try {
-    await deleteBacktestResult(currentResult.value.id)
-    ElMessage.success('回测结果已删除')
-    // 刷新为下一条最新结果
-    if (selectedStrategy.value) await selectStrategy(selectedStrategy.value)
-  } catch (e) {
-    if (e !== 'cancel') ElMessage.error('删除失败: ' + (e?.message || e))
-  }
+  viewResults(row)
 }
 
 // === 触发回测 + 轮询结果 ===
@@ -792,9 +691,6 @@ async function triggerBacktest(row) {
 async function confirmBacktest() {
   const row = btParams.value.row
   if (!row) return
-  selectedStrategy.value = row
-  expandedKeys.value = [row.id]
-  expandedId.value = row.id
   btParams.value.visible = false
   const [startDate, endDate] = btParams.value.range || []
   if (!startDate || !endDate) {
@@ -845,21 +741,27 @@ function startPolling(row, prevId) {
   pollRow = row
   pollPrevId = prevId
   resultAttempts = 0
-  resultLoading.value = true
   resultPolling.start()
 }
 
 function stopPolling() {
   resultPolling.stop()
-  resultLoading.value = false
 }
 
-// === "结果"链接：展开该行并加载回测结果，滚动定位 ===
-function viewResults(row) {
+// === "结果"链接/行点击：跳转聚宽版式独立详情页 ===
+async function viewResults(row) {
   if (!row) return
-  expandedKeys.value = [row.id]
-  expandedId.value = row.id
-  selectStrategy(row, true)
+  try {
+    const list = await listBacktestResults(row.id, { limit: 1 })
+    const latest = Array.isArray(list) ? list[0] : list?.items?.[0]
+    if (latest?.id) {
+      router.push(`/quant/backtest/${latest.id}`)
+      return
+    }
+  } catch {
+    // 网络异常时给出提示
+  }
+  ElMessage.info('该策略暂无回测结果，请先运行回测')
 }
 
 // === "归档"链接：仅提示 ===
@@ -1085,11 +987,6 @@ onBeforeUnmount(() => {
 
     .el-table__row {
       cursor: pointer;
-    }
-
-    // 选中行高亮
-    .el-table__row.is-selected td.el-table__cell {
-      background: rgba(var(--primary-rgb), 0.05) !important;
     }
   }
 }

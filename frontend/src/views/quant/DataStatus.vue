@@ -1672,7 +1672,7 @@ watch(
     height: 18px;
     border-radius: 50%;
     background: var(--danger);
-    color: #fff;
+    color: var(--text-inverse);
     align-items: center;
     justify-content: center;
     font-size: var(--font-size-sm);

@@ -17,6 +17,8 @@ class MiningTask(Base):
     best_ic = Column(Float, nullable=True)
     # 生成并通过的因子 id 列表 JSON
     result_factor_ids = Column(Text, nullable=True)
+    # 汇总结果 JSON：improvement_curve（每轮最佳 IC）/ stopped_early / stop_reason 等
+    result = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     started_at = Column(TIMESTAMP, nullable=True)
     finished_at = Column(TIMESTAMP, nullable=True)

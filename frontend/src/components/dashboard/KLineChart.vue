@@ -268,7 +268,7 @@ const klineOption = computed(() => {
   font-family: var(--font-family);
   &.is-active {
     background: var(--primary);
-    color: #fff;
+    color: var(--text-inverse);
   }
   &:hover:not(.is-active) {
     color: var(--text-primary);

@@ -11,6 +11,14 @@
         </template>
       </PageHeader>
 
+      <!-- 教学提示：迭代挖掘原理 -->
+      <LearnTip
+        storage-key="learn_tip_mining_loop"
+        title="迭代挖掘是怎么工作的？"
+        desc="每轮由大模型生成候选因子表达式 → 沙箱校验与去重 → 并行计算 IC/RankIC 并做显著性校正 → 将表现反馈给模型进入下一轮。连续多轮无改善会自动提前停止，避免浪费算力。"
+        doc-slug="factor-engine"
+      />
+
       <!-- 两栏布局 -->
       <div class="mining-layout">
         <!-- 左栏：挖掘方式 + 参数配置 -->
@@ -117,6 +125,11 @@
                     <span class="detail-error__label">失败原因:</span>
                     <span class="detail-error__text">{{ row.error }}</span>
                   </div>
+                  <!-- 早停提示 -->
+                  <div v-if="row.stopped_early" class="detail-earlystop">
+                    <span class="detail-earlystop__label">提前停止:</span>
+                    <span class="detail-earlystop__text">{{ row.stop_reason || '连续轮次无改善' }}</span>
+                  </div>
                   <!-- 候选列表 -->
                   <div v-if="candidatesMap[row.id]" class="detail-grid">
                     <table class="cand-table">
@@ -183,6 +196,21 @@
                   :class="{ 'cell-ic-positive': row.best_ic != null && Number(row.best_ic) > 0 }"
                   >{{ fmtIc(row.best_ic) }}</span
                 >
+              </template>
+            </el-table-column>
+
+            <el-table-column label="曲线" min-width="86">
+              <template #default="{ row }">
+                <el-tooltip
+                  v-if="row.improvement_curve && row.improvement_curve.length"
+                  placement="top"
+                  :content="curveTip(row)"
+                >
+                  <span class="curve-cell">
+                    <SparkLine :values="row.improvement_curve" />
+                  </span>
+                </el-tooltip>
+                <span v-else class="cell-meta">--</span>
               </template>
             </el-table-column>
 
@@ -263,6 +291,8 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import { MagicStick, Operation, ChatLineSquare, Connection, VideoPlay, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import LearnTip from '@/components/common/LearnTip.vue'
+import SparkLine from '@/components/common/SparkLine.vue'
 import { usePolling } from '@/composables/usePolling'
 import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates } from '@/api/mining'
 import { getAiStatus } from '@/api/auth'
@@ -389,6 +419,15 @@ const typeBadgeClass = (t) =>
     text: 'badge--info',
     automl: 'badge--danger',
   })[t] || 'badge--muted'
+// 曲线列 hover 文案：每轮最佳 IC + 早停信息
+const curveTip = (row) => {
+  const curve = row.improvement_curve || []
+  const shown = curve.slice(0, 8).map((v, i) => `R${i + 1} ${Number(v).toFixed(3)}`).join(' → ')
+  const more = curve.length > 8 ? ` …（共 ${curve.length} 轮）` : ''
+  const suffix = row.stopped_early ? `；已早停：${row.stop_reason || ''}` : ''
+  return `每轮最佳IC：${shown}${more}${suffix}`
+}
+
 // 状态标签映射：done 但 0 个候选通过 ≠ 成功，单独展示，避免误判为运行失败
 const statusLabel = (row) => {
   const s = typeof row === 'string' ? row : row.status
@@ -926,6 +965,30 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   word-break: break-all;
   line-height: 1.5;
+}
+.curve-cell {
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
+  vertical-align: middle;
+}
+.detail-earlystop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  font-size: var(--font-size-sm);
+}
+.detail-earlystop__label {
+  flex-shrink: 0;
+  color: var(--warning);
+  font-weight: var(--font-weight-medium);
+}
+.detail-earlystop__text {
+  color: var(--text-secondary);
 }
 .detail-empty {
   padding: 16px 0;

@@ -9,6 +9,12 @@ const routes = [
     meta: { title: '登录', public: true },
   },
   {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/auth/Register.vue'),
+    meta: { title: '注册', public: true },
+  },
+  {
     path: '/',
     component: () => import('@/components/layout/AppLayout.vue'),
     children: [
@@ -121,6 +127,16 @@ const routes = [
         },
       },
       {
+        path: 'quant/backtest/:id',
+        name: 'BacktestDetail',
+        component: () => import('@/views/quant/BacktestDetail.vue'),
+        meta: {
+          title: '回测详情',
+          transition: 'fade-in-up',
+          keepAlive: false,
+        },
+      },
+      {
         path: 'quant/factor-deep-analysis',
         name: 'FactorDeepAnalysis',
         component: () => import('@/views/quant/FactorDeepAnalysis.vue'),
@@ -181,8 +197,12 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.meta.public) {
     // 鉴权未开启时访问登录页 -> 回首页
-    if (to.name === 'Login' && !authStore.authEnabled && authStore.statusLoaded) {
-      return next({ path: '/' })
+    const isAuthPage = to.name === 'Login' || to.name === 'Register'
+    // 鉴权未开启，或已登录（无需再看登录/注册页）-> 回首页
+    if (isAuthPage && authStore.statusLoaded) {
+      if (!authStore.authEnabled || authStore.isAuthenticated) {
+        return next({ path: '/' })
+      }
     }
     return next()
   }

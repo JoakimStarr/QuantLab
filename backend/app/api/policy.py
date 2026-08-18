@@ -69,6 +69,7 @@ async def policy_list_api(
     start: str = Query(None, description="开始日期 YYYY-MM-DD（按播出日期）"),
     end: str = Query(None, description="结束日期 YYYY-MM-DD（按播出日期）"),
     keyword: str = Query(None, description="标题关键词（模糊匹配）"),
+    source: str = Query(None, description="数据源过滤：cctv/cjzc/em（空则全部）"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
     db=Depends(get_db),
@@ -86,6 +87,8 @@ async def policy_list_api(
             PolicyNews.content.ilike(kw),
             PolicyAnalysis.keywords.cast(String).ilike(kw),
         ))
+    if source:
+        query = query.where(PolicyNews.source == source)
     query = query.outerjoin(PolicyAnalysis, PolicyAnalysis.news_date == PolicyNews.news_date)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
@@ -98,6 +101,7 @@ async def policy_list_api(
         "news_date": r.PolicyNews.news_date.isoformat(),
         "title": r.PolicyNews.title,
         "content": r.PolicyNews.content,
+        "source": r.PolicyNews.source or "cctv",
         "ai_analyzed": bool(r.PolicyAnalysis and r.PolicyAnalysis.status == "done"),
     } for r in rows]
     return ApiResponse(ok=True, data={"items": items, "total": total, "page": page, "page_size": page_size})
@@ -128,6 +132,12 @@ async def policy_status_api(db=Depends(get_db)):
         ai_pending = (await db.execute(
             select(func.count()).select_from(sub).where(sub.c.news_date.notin_(select(done_sub.c.news_date)))
         )).scalar() or 0
+    # 各数据源条数统计（cctv/cjzc/em…）
+    breakdown_rows = (await db.execute(
+        select(PolicyNews.source, func.count())
+        .group_by(PolicyNews.source)
+    )).all()
+    source_breakdown = {r[0] or "cctv": r[1] for r in breakdown_rows}
     return ApiResponse(ok=True, data={
         "total": total,
         "days": days,
@@ -137,6 +147,7 @@ async def policy_status_api(db=Depends(get_db)):
         "ai_failed": ai_failed,
         "ai_pending": ai_pending,
         "ai_total": days,  # 有新闻的日期总数（解读窗口 = ai_total）
+        "source_breakdown": source_breakdown,
     })
 
 
@@ -187,6 +198,34 @@ def _analysis_to_dict(a: PolicyAnalysis) -> dict:
         "error": a.error,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }
+
+
+@router.get("/latest")
+async def policy_latest_api(
+    days: int = Query(7, ge=1, le=60, description="最近 N 个已解读日期"),
+    db=Depends(get_db),
+):
+    """最近 N 天已解读的政策定调（供顶部「当日政策定调」卡片）。
+
+    返回 [{news_date, status, summary, policy_tone, key_items, sectors, topics, market_impact}]。
+    """
+    rows = (await db.execute(
+        select(PolicyAnalysis)
+        .where(PolicyAnalysis.status == "done")
+        .order_by(PolicyAnalysis.news_date.desc())
+        .limit(days)
+    )).scalars().all()
+    items = [{
+        "news_date": a.news_date.isoformat(),
+        "status": a.status,
+        "summary": a.summary,
+        "policy_tone": a.policy_tone,
+        "key_items": a.key_items,
+        "sectors": a.sectors,
+        "topics": a.topics,
+        "market_impact": a.market_impact,
+    } for a in rows]
+    return ApiResponse(ok=True, data={"items": items})
 
 
 @router.get("/sectors/performance")

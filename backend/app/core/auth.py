@@ -103,6 +103,47 @@ async def require_user(
 current_user = fastapi_users.current_user()
 
 
+async def seed_admin_user() -> None:
+    """首次启动创建管理员账号（幂等种子）。
+
+    消费 ADMIN_PASSWORD / ADMIN_PASSWORD_HASH 配置（此前为无消费者的死配置）。
+    - 库中已有任意 superuser 则跳过；两个密码配置均未提供则跳过
+    - 不走 zxcvbn 强度校验（运维配置行为；生产闸门 enforce_production_security
+      已强制修改默认 admin123）
+    """
+    from fastapi_users.password import PasswordHelper
+    from sqlalchemy import select
+
+    from app.core.database import async_session
+
+    sec = settings.security
+    if not sec.admin_password and not sec.admin_password_hash:
+        return
+    if sec.admin_password_hash:
+        hashed = sec.admin_password_hash
+    else:
+        hashed = PasswordHelper().hash(sec.admin_password)
+
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@quantlab.dev")
+    async with async_session() as session:
+        existing = await session.execute(
+            select(User).where(User.is_superuser.is_(True)).limit(1)
+        )
+        if existing.scalar_one_or_none() is not None:
+            return
+        session.add(
+            User(
+                email=admin_email,
+                hashed_password=hashed,
+                is_superuser=True,
+                is_active=True,
+                is_verified=True,
+            )
+        )
+        await session.commit()
+        logger.info("管理员账号已创建（首次启动种子）: email=%s", admin_email)
+
+
 # ============================================================
 # 兼容接口：Token 校验（WebSocket 无状态场景）
 # ============================================================

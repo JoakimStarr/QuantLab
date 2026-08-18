@@ -7,14 +7,19 @@ export function syncPolicy() {
   return request.post('/policy/sync')
 }
 
-// 政策风向列表：关键词/日期过滤 + 分页
+// 政策风向列表：关键词/日期/来源过滤 + 分页
 export function getPolicyNews(params = {}) {
   return request.get('/policy/list', { params })
 }
 
-// 政策风向数据状态（最新日期/覆盖天数/总条数/AI 解读统计）
+// 政策风向数据状态（最新日期/覆盖天数/总条数/AI 解读统计/各源条数）
 export function getPolicyStatus() {
   return request.get('/policy/status')
+}
+
+// 最近 N 天已解读的政策定调（顶部「当日政策定调」卡片）
+export function getPolicyLatest(days = 7) {
+  return request.get('/policy/latest', { params: { days } })
 }
 
 // 手动触发 AI 政策解读（逐日生成结构化解读，后台 worker 执行；返回 pending_count 待处理天数）

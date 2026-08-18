@@ -36,6 +36,10 @@ lerna-debug.log*
 *.env
 # Database
 data/*.db
+# SQLite 运行时数据库（根目录/任意位置，含 WAL/SHM；含用户凭证哈希，禁止提交）
+quantlab.db
+quantlab.db-shm
+quantlab.db-wal
 
 # qlib bin 数据（量大且可重新生成）
 data/qlib_bin/
@@ -92,3 +96,5 @@ data/baostock_requests.json
 data/eod_last_result.json
 data/external_market.json
 data/etf_tencent_done.json
+data/*.json
+data/*_pids

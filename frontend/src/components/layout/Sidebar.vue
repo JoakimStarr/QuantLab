@@ -9,18 +9,21 @@
       <span v-if="!sidebarCollapsed" class="logo-version">v{{ appVersion }}</span>
     </div>
 
-    <!-- 导航菜单 -->
+    <!-- 导航菜单（按功能分组） -->
     <nav class="sidebar-nav">
-      <router-link
-        v-for="item in menuItems"
-        :key="item.path"
-        :to="item.path"
-        class="nav-item"
-        :class="{ 'nav-item--active': isActive(item) }"
-      >
-        <el-icon :size="18" class="nav-icon"><component :is="resolveIcon(item.icon)" /></el-icon>
-        <span v-if="!sidebarCollapsed" class="nav-label">{{ item.title }}</span>
-      </router-link>
+      <div v-for="group in menuGroups" :key="group.title" class="nav-group">
+        <div v-if="!sidebarCollapsed" class="nav-group-title">{{ group.title }}</div>
+        <router-link
+          v-for="item in group.items"
+          :key="item.path"
+          :to="item.path"
+          class="nav-item"
+          :class="{ 'nav-item--active': isActive(item) }"
+        >
+          <el-icon :size="18" class="nav-icon"><component :is="resolveIcon(item.icon)" /></el-icon>
+          <span v-if="!sidebarCollapsed" class="nav-label">{{ item.title }}</span>
+        </router-link>
+      </div>
     </nav>
 
     <!-- 底部：版本号 -->
@@ -37,7 +40,7 @@ import { DataAnalysis } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { getVersion, getAppName } from '@/config/app'
 import { resolveIcon } from '@/utils/icons'
-import { navItems } from '@/config/nav'
+import { navGroups } from '@/config/nav'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -48,8 +51,8 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const appVersion = computed(() => getVersion())
 const appName = computed(() => getAppName())
 
-// 导航菜单项（来自单一数据源 src/config/nav.js）
-const menuItems = navItems
+// 分组导航（来自单一数据源 src/config/nav.js）
+const menuGroups = navGroups
 
 // /docs 用前缀匹配，使 /docs/data-layer 也高亮"文档"项
 function isActive(item) {
@@ -151,6 +154,28 @@ function isActive(item) {
   }
 }
 
+// 分组容器：折叠态仅靠间距分隔
+.nav-group {
+  & + .nav-group {
+    margin-top: 6px;
+  }
+}
+
+// 组小标题
+.nav-group-title {
+  padding: 10px 20px 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  letter-spacing: 2px;
+  user-select: none;
+}
+
+// 首组标题贴顶，减少首屏留白
+.nav-group:first-child .nav-group-title {
+  padding-top: 4px;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -169,6 +194,11 @@ function isActive(item) {
   &:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
   }
 
   // 选中态三件套：背景 + 主色文字 + 左侧主色边条

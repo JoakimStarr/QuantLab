@@ -148,6 +148,12 @@ class MonteCarloSettings(SettingsBaseModel):
 
 class MiningSettings(SettingsBaseModel):
     automl: dict[str, Any] = Field(default_factory=lambda: {"combo_method": "lightgbm"})
+    # 政策风向新闻源：sources 抓取源 / ai_sources 送入 AI 的来源 / em_per_day 每日快讯上限
+    policy_news: dict[str, Any] = Field(default_factory=lambda: {
+        "sources": ["cctv", "cjzc"],
+        "ai_sources": ["cctv", "cjzc"],
+        "em_per_day": 5,
+    })
     llm: dict[str, Any] = Field(
         default_factory=lambda: {
             "candidates_per_run": 10,

@@ -11,3 +11,18 @@ export function getClassicStrategies() {
 export function runClassicStrategy(payload) {
   return request.post('/classic-strategies/backtest', payload)
 }
+
+// 单条经典回测历史完整详情（含参数/指标/净值曲线/成交明细）
+export function getClassicHistoryDetail(id) {
+  return request.get(`/classic-strategies/history/${id}`)
+}
+
+// 删除经典回测历史
+export function deleteClassicHistory(id) {
+  return request.delete(`/classic-strategies/history/${id}`)
+}
+
+// 策略库统一历史列表（经典 + 规则合并，按时间倒序；items 带 source 字段）
+export function getCombinedHistory(params) {
+  return request.get('/classic-strategies/history/all', { params })
+}

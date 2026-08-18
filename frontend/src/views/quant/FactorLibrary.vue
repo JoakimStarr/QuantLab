@@ -3,13 +3,21 @@
     <!-- 页面头 -->
     <PageHeader title="因子库" subtitle="因子的评价、管理与组合">
       <template #actions>
-        <el-button :icon="Refresh" :loading="syncing" @click="syncData">同步数据</el-button>
+        <el-button :icon="Refresh" @click="syncData">同步数据</el-button>
         <el-button :icon="Download" :loading="seedingAlpha158" @click="onSeedAlpha158">导入 Alpha158</el-button>
         <el-button :icon="Download" :loading="seedingEtf" @click="onSeedEtfFactors">导入 ETF 因子</el-button>
         <el-button type="primary" :icon="Plus" @click="openAdd">新增因子</el-button>
         <el-button :icon="Warning" :loading="decayChecking" @click="onDecayCheck">检测衰减</el-button>
       </template>
     </PageHeader>
+
+    <!-- 教学提示：核心评价指标含义 -->
+    <LearnTip
+      storage-key="learn_tip_factor_ic"
+      title="如何读懂因子评价指标？"
+      desc="IC 衡量因子值与下期收益的相关性（|IC|≥0.03 即有经济意义）；RankIC 用秩相关抗极端值；ICIR = IC 均值 / IC 标准差，衡量预测稳定性。评价基于样本外验证区间，配合 BH 多重检验校正防止过拟合。"
+      doc-slug="factor-engine"
+    />
 
     <!-- 指标概览条 -->
     <section class="factor-overview">
@@ -394,6 +402,7 @@ import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import { Plus, Refresh, Download, Warning, MagicStick, Search, Expand, FullScreen } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import LearnTip from '@/components/common/LearnTip.vue'
 import { fmt, numClass } from '@/utils/format'
 import { renderMarkdown } from '@/utils/markdown'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -401,7 +410,8 @@ import QlibExprEditor from '@/components/quant/QlibExprEditor.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { useFactorStore } from '@/stores/factor'
-import { syncFullData, listUniverses } from '@/api/quant'
+import { listUniverses } from '@/api/quant'
+import { useSyncStore } from '@/stores/sync'
 import {
   seedAlpha158,
   seedEtfFactors,
@@ -423,9 +433,9 @@ const router = useRouter()
 const factorStore = useFactorStore()
 
 // 因子列表与加载状态（从全局 store 读取，5 分钟缓存）
+const syncStore = useSyncStore()
 const factors = computed(() => factorStore.factors)
 const loading = computed(() => factorStore.loading)
-const syncing = ref(false)
 const seedingAlpha158 = ref(false)
 const seedingEtf = ref(false)
 // 评价/补算指标所用的标的池（空 = 后端 config 默认）；选项从 GET /quant/universes 拉取
@@ -1278,16 +1288,9 @@ async function loadFactors() {
 }
 
 // 同步数据：一键全同步（A股回填 → 指数 → 宏观 → 财报 → 外盘，后台独立进程执行）
-async function syncData() {
-  syncing.value = true
-  try {
-    await syncFullData(5)
-    ElMessage.success('数据同步已提交（一键全同步），后台执行中')
-  } catch {
-    ElMessage.error('数据同步提交失败')
-  } finally {
-    syncing.value = false
-  }
+// 同步数据：打开全局同步中心（统一入口，可一键全同步或按域同步）
+function syncData() {
+  syncStore.open()
 }
 
 // 单因子评价：复用补算链路同步计算该因子指标，成功/失败都有明确提示
@@ -1782,7 +1785,7 @@ onMounted(() => {
 }
 .ai-chat__msg--user .ai-chat__bubble {
   background: var(--primary);
-  color: #fff;
+  color: var(--text-inverse);
   border-top-right-radius: 2px;
 }
 .ai-chat__msg--assistant .ai-chat__bubble {

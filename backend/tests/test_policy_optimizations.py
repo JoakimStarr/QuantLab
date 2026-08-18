@@ -33,6 +33,100 @@ class TestFetchPolicyNewsConcurrent:
         assert all(r["source"] == "cctv" for r in rows)
 
 
+class TestFetchJin10Breakfast:
+    """金十数据财经早餐抓取：列表去重保序、日期解析、音频样板剔除、免责声明截断。"""
+
+    LIST_HTML = """
+    <div class="jin10-news-list">
+      <a href="https://xnews.jin10.com/details/1001"></a>
+      <a href="https://xnews.jin10.com/details/1001">金十数据全球财经早餐 | 2026年8月18日
+        特朗普：美国不寻求延长与伊朗的谅解备忘录</a>
+      <a href="https://xnews.jin10.com/details/1002">普通快讯一则</a>
+    </div>
+    """
+
+    DETAIL_HTML = """
+    <div class="jin10-news-cdetails-content">
+      <h2>今日优选</h2>
+      <p>特朗普：美国不寻求延长与伊朗的谅解备忘录</p>
+      <p class="insert-audio">男生普通话版 下载mp3 女声普通话版 粤语版</p>
+      <h2>国内要闻</h2>
+      <p>1、李强主持召开国务院第十二次全体会议。</p>
+      <p>风险提示及免责条款：市场有风险，投资需谨慎。本文不构成个人投资建议。</p>
+    </div>
+    """
+
+    def _mock_requests(self, monkeypatch, list_html=None, detail_html=None):
+        """mock requests.get：列表页与详情页按 URL 分流，记录调用序列。"""
+        import requests
+
+        calls = []
+
+        class FakeResp:
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, *args, **kwargs):
+            calls.append(url)
+            if url == "https://xnews.jin10.com/30":
+                return FakeResp(list_html or self.LIST_HTML)
+            return FakeResp(detail_html or self.DETAIL_HTML)
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        return calls
+
+    def test_fetch_returns_daily_breakfast(self, monkeypatch):
+        from app.services.data.policy_sync import _fetch_cjzc
+
+        calls = self._mock_requests(monkeypatch)
+        rows = _fetch_cjzc([])
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["news_date"] == date(2026, 8, 18)
+        assert r["source"] == "cjzc"
+        assert r["title"] == "金十数据全球财经早餐 | 2026年8月18日"
+        assert "今日优选" in r["content"]
+        assert "特朗普：美国不寻求延长与伊朗的谅解备忘录" in r["content"]
+        # 音频样板与文末免责声明已被剔除
+        for boiler in ("男生普通话版", "下载mp3", "粤语版", "风险提示及免责条款"):
+            assert boiler not in r["content"]
+        # 只请求了列表页 + 当日早餐正文
+        assert calls == ["https://xnews.jin10.com/30", "https://xnews.jin10.com/details/1001"]
+
+    def test_no_breakfast_in_list_returns_empty(self, monkeypatch):
+        from app.services.data.policy_sync import _fetch_cjzc
+
+        calls = self._mock_requests(monkeypatch, list_html="""
+        <div class="jin10-news-list">
+          <a href="/details/2001">普通快讯</a>
+        </div>
+        """)
+        assert _fetch_cjzc([]) == []
+        assert calls == ["https://xnews.jin10.com/30"]
+
+    def test_title_without_date_skipped(self, monkeypatch):
+        from app.services.data.policy_sync import _fetch_cjzc
+
+        calls = self._mock_requests(monkeypatch, list_html="""
+        <div class="jin10-news-list">
+          <a href="/details/3001">金十数据全球财经早餐 | 今日</a>
+        </div>
+        """)
+        assert _fetch_cjzc([]) == []
+        assert calls == ["https://xnews.jin10.com/30"]
+
+    def test_breakfast_date_parser(self):
+        from app.services.data.policy_sync import _jin10_breakfast_date
+
+        assert _jin10_breakfast_date("金十数据全球财经早餐 | 2026年8月18日") == date(2026, 8, 18)
+        assert _jin10_breakfast_date("财经早餐 2026年12月3日") == date(2026, 12, 3)
+        assert _jin10_breakfast_date("没有日期的标题") is None
+        assert _jin10_breakfast_date("2026年13月40日") is None
+
+
 class TestPendingDatesRetryLimit:
     async def test_pending_excludes_done_and_exhausted(self, db_ready):
         """重试限制：done 与 retry_count 达上限的 failed 日期都不再待处理。"""

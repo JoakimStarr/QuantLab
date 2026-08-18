@@ -46,6 +46,9 @@ async def lifespan(app: FastAPI):
     warn_insecure_config()
     settings.enforce_production_security()
     await init_db()
+    from app.core.auth import seed_admin_user
+
+    await seed_admin_user()
     await recover_stale_sync()
     await recover_stale_mining()
     from app.core.recovery import rerun_pending_mining

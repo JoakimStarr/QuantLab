@@ -151,7 +151,8 @@ const currentMarks = computed(() => {
 
 // 策略指标线（后端随回测结果返回）：按日期对齐 K 线数据，供图表叠加。
 // grid=main 价格域叠主图，grid=sub 振荡域占一个副图。
-const STRATEGY_COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#9c27b0', '#00bcd4', '#795548']
+// 策略指标线配色：统一从 chartTheme.palette 派生（token 化，暗色模式自动适配）
+const STRATEGY_COLORS = Array.from({ length: 8 }, (_, i) => chartTheme.palette(i + 1))
 
 const strategyIndicator = computed(() => {
   const ind = props.result?.indicator

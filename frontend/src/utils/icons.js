@@ -13,6 +13,11 @@ import {
   Reading,
   Document,
   Postcard,
+  Histogram,
+  DataLine,
+  Place,
+  Tickets,
+  Sunrise,
 } from '@element-plus/icons-vue'
 
 const iconMap = {
@@ -26,6 +31,11 @@ const iconMap = {
   Reading,
   Document,
   Postcard,
+  Histogram,
+  DataLine,
+  Place,
+  Tickets,
+  Sunrise,
 }
 
 export function resolveIcon(name) {

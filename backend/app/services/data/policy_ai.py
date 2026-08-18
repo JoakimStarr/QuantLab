@@ -22,8 +22,11 @@ from app.services.data.db_utils import bulk_upsert
 logger = logging.getLogger(__name__)
 
 AI_BACKFILL_DAYS = 30        # 默认回填窗口（天）
-_MAX_CONTENT_CHARS = 400     # 每条新闻内容截断长度
-_MAX_ITEMS = 24              # 每天最多送入 LLM 的新闻条数
+# 每条新闻内容截断长度（按来源区分：cctv 定调摘要 400 字足够，cjzc 金十早餐综述约 2500 字）
+_MAX_CONTENT_CHARS = {"cctv": 400, "cjzc": 3000, "em": 300}
+_DEFAULT_CONTENT_CHARS = 400
+_MAX_ITEMS = 24              # 每天最多送入 LLM 的新闻联播条数
+_MAX_EM_ITEMS = 5            # 每天最多送入 LLM 的东财快讯条数（默认不进 AI，见 ai_sources）
 _CONCURRENCY = 4             # LLM 并发数（默认 4；可用 config.mining.policy_ai.concurrency 覆盖）
 _MAX_RETRY = 3               # 失败日期最大重试次数（超过后不再自动重试，避免每次同步反复打失败日）
 
@@ -45,7 +48,8 @@ def _max_retry() -> int:
     except Exception:
         return _MAX_RETRY
 
-SYSTEM_PROMPT = """你是 A 股的宏观政策研究员。用户会给你某一天的央视《新闻联播》文字稿列表（标题+正文前段）。
+SYSTEM_PROMPT = """你是 A 股的宏观政策研究员。用户会给你某一天的政策信息（央视《新闻联播》文字稿、金十数据财经早餐综述等），每条标注来源。
+来源权重：新闻联播(cctv) 是国家级定调，权重最高，是解读主依据；财经早餐(cjzc) 是每日综合综述，作参考；快讯(em) 仅作细节补充，忽略纯市场/公司新闻。
 请输出 JSON（不要输出 JSON 之外的任何内容），结构：
 {
   "summary": "150字以内当日政策解读摘要（覆盖最重要 1-3 件事，偏市场视角）",
@@ -56,25 +60,30 @@ SYSTEM_PROMPT = """你是 A 股的宏观政策研究员。用户会给你某一�
   "keywords": ["5-12个中文关键词，覆盖当日政策的检索要点"],
   "market_impact": "对翌日 A 股市场的影响判断（不超过80字，突出方向与相关板块）"
 }
-要求：只依据给定文字稿，不编造；sectors 必须给出 direction；topics 的 score 为 0~1 小数，
+要求：只依据给定材料，不编造；sectors 必须给出 direction；topics 的 score 为 0~1 小数，
 表示当日该主题的政策力度与市场相关度。"""
 
 _USER_TEMPLATE = """日期：{day}（{weekday}）
 
-新闻联播条目：
+政策信息：
 {items}
 """
 
 
 def _build_messages(day: date, news_rows: list[dict]) -> list[dict]:
-    """组装 messages：截断长文，控制 token 预算。"""
+    """组装 messages：截断长文，控制 token 预算；每条标注来源权重。"""
+    from app.services.data.policy_sync import SOURCE_LABELS
+
     lines = []
     for i, r in enumerate(news_rows, 1):
         title = r["title"]
+        source = r.get("source") or "cctv"
+        label = SOURCE_LABELS.get(source, source)
         content = r.get("content") or ""
-        if len(content) > _MAX_CONTENT_CHARS:
-            content = content[:_MAX_CONTENT_CHARS] + "…"
-        lines.append(f"{i}. 【{title}】{content}")
+        cap = _MAX_CONTENT_CHARS.get(source, _DEFAULT_CONTENT_CHARS)
+        if len(content) > cap:
+            content = content[:cap] + "…"
+        lines.append(f"{i}. 【{label}】{title}: {content}")
     user = _USER_TEMPLATE.format(
         day=day.isoformat(),
         weekday="周" + "一二三四五六日"[day.weekday()],
@@ -98,14 +107,32 @@ def _normalize(d: dict) -> dict:
 
 
 async def _day_news(news_date: date) -> list[dict]:
+    """取某一天的多源政策新闻（按来源分层，控制 token 预算）。
+
+    顺序：cctv（定调，主依据）→ cjzc（综述）→ em（细节）。仅取 ai_sources 启用的来源。
+    """
+    from app.services.data.policy_sync import ai_sources
+
     async with async_session() as session:
         rows = (await session.execute(
-            select(PolicyNews.title, PolicyNews.content)
+            select(PolicyNews.title, PolicyNews.content, PolicyNews.source)
             .where(PolicyNews.news_date == news_date)
             .order_by(PolicyNews.id)
-            .limit(_MAX_ITEMS)
         )).all()
-    return [{"title": r.title, "content": r.content} for r in rows]
+
+    enabled = set(ai_sources())
+    buckets: dict[str, list[dict]] = {"cctv": [], "cjzc": [], "em": []}
+    for title, content, source in rows:
+        source = source or "cctv"
+        if source not in enabled:
+            continue
+        buckets.setdefault(source, []).append({"title": title, "content": content, "source": source})
+
+    items = []
+    items.extend(buckets["cctv"][:_MAX_ITEMS])
+    items.extend(buckets["cjzc"][:1])
+    items.extend(buckets["em"][:_MAX_EM_ITEMS])
+    return items
 
 
 async def analyze_one_day(news_date: date) -> dict:

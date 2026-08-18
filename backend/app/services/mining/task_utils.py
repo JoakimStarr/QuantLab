@@ -18,7 +18,7 @@ async def update_task_status(task_id: int, status: str = None, **kwargs) -> None
             t.status = status
         for key, value in kwargs.items():
             if hasattr(t, key):
-                if key in ("params", "result_factor_ids") and isinstance(value, (list, dict)):
+                if key in ("params", "result_factor_ids", "result") and isinstance(value, (list, dict)):
                     value = json.dumps(value)
                 setattr(t, key, value)
         if status in ("done", "failed"):

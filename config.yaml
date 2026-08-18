@@ -66,6 +66,12 @@ mining:
   policy_ai:
     concurrency: 4
     max_retry: 3
+  # 政策风向新闻源（policy_sync）：多源抓取与 AI 取稿配置
+  #   sources:     启用的抓取源，cctv=新闻联播(定调) / cjzc=金十数据财经早餐(综述) / em=东财快讯(细节)
+  #   ai_sources:  送入 AI 解读的来源（em 快讯噪声大、token 成本高，默认不进 AI，仅入库检索）
+  policy_news:
+    sources: [cctv, cjzc]
+    ai_sources: [cctv, cjzc]
   llm:
     # AI 策略选因子的达标阈值（区别于 ic_threshold=0.03 的挖掘线，
     # A 股截面 IC 0.02-0.03 已可用，用 0.03 达标池过小 AI 无法生成策略）

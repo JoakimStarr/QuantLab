@@ -8,6 +8,8 @@ psycopg[binary]>=3.2.0
 akshare==1.18.63
 openai>=1.50.0
 requests>=2.32.0
+# lxml: 政策风向金十数据财经早餐 HTML 解析（xnews.jin10.com）
+lxml>=5.0.0
 pandas>=2.2.0
 numpy>=1.26.0
 scipy>=1.13.0

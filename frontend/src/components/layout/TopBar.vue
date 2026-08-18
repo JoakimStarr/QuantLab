@@ -23,6 +23,17 @@
         {{ dataReady ? '数据已就绪' : '数据未就绪' }}
       </span>
 
+      <!-- 全局同步入口：打开数据同步中心（运行中旋转 + 进度徽标） -->
+      <button
+        class="sync-btn"
+        :class="{ 'is-running': syncStore.running }"
+        :title="syncStore.running ? `同步中 ${syncStore.progressPct}%` : '数据同步中心'"
+        @click="syncStore.open()"
+      >
+        <el-icon :size="18"><Refresh /></el-icon>
+        <span v-if="syncStore.running" class="sync-btn__pct">{{ syncStore.progressPct }}%</span>
+      </button>
+
       <!-- 主题切换 -->
       <button class="theme-btn" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'" @click="toggleTheme">
         <el-icon :size="18">
@@ -38,7 +49,7 @@
           <el-dropdown-menu>
             <div class="user-identity">
               <span class="user-identity__name">{{ displayName }}</span>
-              <span v-if="authStore.user?.role" class="user-identity__role">{{ authStore.user.role }}</span>
+              <span v-if="displayRole" class="user-identity__role">{{ displayRole }}</span>
             </div>
             <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
           </el-dropdown-menu>
@@ -53,13 +64,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
-import { Sunny, Moon, Fold, Expand } from '@element-plus/icons-vue'
+import { Sunny, Moon, Fold, Expand, Refresh } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { getQlibStatus } from '@/api/quant'
+import { useSyncStore } from '@/stores/sync'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const syncStore = useSyncStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -69,7 +82,14 @@ const pageTitle = computed(() => route.meta.title || 'QuantLab')
 const dataReady = ref(false)
 
 const displayName = computed(
-  () => authStore.user?.username || authStore.user?.name || '研究员'
+  () =>
+    authStore.user?.email?.split('@')[0] ||
+    authStore.user?.username ||
+    authStore.user?.name ||
+    '研究员'
+)
+const displayRole = computed(() =>
+  authStore.user?.is_superuser ? '管理员' : authStore.user?.role || '研究员'
 )
 
 function toggleTheme() {
@@ -100,13 +120,17 @@ async function fetchDataStatus() {
 // 用户下拉指令
 async function onUserCommand(command) {
   if (command === 'logout') {
-    authStore.logout()
+    await authStore.logout()
     ElMessage.success('已退出登录')
-    router.push({ name: 'Login', query: { redirect: route.fullPath } })
+    router.push({ name: 'Login' })
   }
 }
 
-onMounted(fetchTopbarStatus)
+onMounted(() => {
+  fetchTopbarStatus()
+  // 全局同步中心常驻初始化：进度轮询 + 各域状态（单 timer，全站共享）
+  syncStore.init()
+})
 </script>
 
 <style scoped lang="scss">
@@ -185,6 +209,64 @@ onMounted(fetchTopbarStatus)
   border-radius: 50%;
   background: var(--success);
   flex-shrink: 0;
+}
+
+// 全局同步按钮
+.sync-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 150ms var(--ease-in-out);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+
+  // 同步中：图标旋转 + 主色
+  &.is-running {
+    color: var(--primary);
+
+    .el-icon {
+      animation: sync-spin 1.2s linear infinite;
+    }
+  }
+}
+
+.sync-btn__pct {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--text-inverse);
+  font-size: 10px;
+  line-height: 1.4;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+@keyframes sync-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 // 主题切换按钮

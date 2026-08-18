@@ -73,6 +73,7 @@ def _spawn(task_id: int, task_type: str, params: dict) -> None:
 
 
 def _task_dict(r: MiningTask) -> dict:
+    result = json.loads(r.result) if r.result else None
     return {
         "id": r.id, "type": r.type, "status": r.status,
         "params": json.loads(r.params) if r.params else None,
@@ -80,6 +81,9 @@ def _task_dict(r: MiningTask) -> dict:
         "candidates_passed": r.candidates_passed,
         "best_ic": r.best_ic,
         "result_factor_ids": json.loads(r.result_factor_ids) if r.result_factor_ids else [],
+        "improvement_curve": result.get("improvement_curve") if result else None,
+        "stopped_early": result.get("stopped_early") if result else None,
+        "stop_reason": result.get("stop_reason") if result else None,
         "error": r.error,
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,

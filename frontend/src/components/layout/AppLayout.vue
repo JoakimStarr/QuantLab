@@ -14,6 +14,8 @@
       </main>
     </div>
     <MobileTabBar />
+    <!-- 数据同步中心：全局唯一实例，TopBar/页面按钮经 store 打开 -->
+    <SyncCenter />
   </div>
 </template>
 
@@ -23,6 +25,7 @@ import { useRouter } from 'vue-router'
 import Sidebar from './Sidebar.vue'
 import TopBar from './TopBar.vue'
 import MobileTabBar from './MobileTabBar.vue'
+import SyncCenter from '@/components/sync/SyncCenter.vue'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useAuthStore } from '@/stores/auth'
 
