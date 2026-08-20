@@ -173,3 +173,95 @@ def test_sync_indices_handles_fetch_failure(tmp_path):
     assert result["ok"] is True
     assert result["success"] == 1
     assert result["failed"] == 1
+
+
+# ---------- 连续失败熔断 / akshare 兜底（2026-08 优化） ----------
+
+def _mock_index_df(dates):
+    """单指数日K（akshare 兜底返回值）。"""
+    return pd.DataFrame({
+        "date": dates,
+        "open": [3000.0] * len(dates), "high": [3020.0] * len(dates),
+        "low": [2990.0] * len(dates), "close": [3010.0] * len(dates),
+        "volume": [1e8] * len(dates),
+    })
+
+
+def test_sync_indices_baostock_error_falls_back_to_akshare(tmp_path):
+    """baostock 抛异常时也走 akshare 兜底（回归：此前直接标记失败）。"""
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+    provider_uri = _make_calendar(tmp_path, dates)
+    with patch('app.services.data.index_sync._fetch_index_via_baostock',
+               side_effect=RuntimeError("10002007 网络接收错误")), \
+         patch('app.services.data.index_sync._fetch_index_via_akshare',
+               return_value=_mock_index_df(dates)) as m_ak:
+        result = index_sync.sync_indices_to_qlib(provider_uri, indices=["sh000001"])
+    assert result["ok"] is True
+    assert result["success"] == 1
+    assert result["failed"] == 0
+    assert result["source"] == "akshare"
+    assert m_ak.call_count == 1
+
+
+def test_sync_indices_circuit_breaker_switches_to_akshare(tmp_path):
+    """连续 5 失败重建会话 + 再 3 失败 → 熔断 baostock，剩余指数直接走 akshare。"""
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+    provider_uri = _make_calendar(tmp_path, dates)
+    indices = [f"sh{i:06d}" for i in range(10)]
+    with patch('app.services.data.index_sync._fetch_index_via_baostock',
+               side_effect=RuntimeError("10002007 网络接收错误")) as m_bs, \
+         patch('app.services.data.index_sync._fetch_index_via_akshare',
+               return_value=_mock_index_df(dates)) as m_ak, \
+         patch('app.services.data.baostock_client.ensure_logout') as m_logout, \
+         patch('app.services.data.baostock_client._ensure_login'):
+        result = index_sync.sync_indices_to_qlib(provider_uri, indices=indices)
+    # 5 次失败触发重建 + 重建后 3 次失败熔断 = baostock 共请求 8 次
+    assert m_bs.call_count == 8
+    assert m_logout.call_count == 1
+    # 熔断后剩余 2 只跳过 baostock 直接 akshare；前 8 只兜底也走 akshare
+    assert m_ak.call_count == 10
+    assert result["success"] == 10
+    assert result["failed"] == 0
+    assert result["source"] == "akshare"
+    # baostock 熔断但 akshare 兜底成功：aborted=False，abort_reason 仍记录原因
+    assert result["aborted"] is False
+    assert "熔断" in (result["abort_reason"] or "")
+
+
+def test_sync_indices_quota_error_aborts(tmp_path):
+    """配额耗尽中止整个指数同步，akshare 兜底也不执行。"""
+    from app.services.data.baostock_client import BaostockQuotaError
+    dates = ["2024-01-02", "2024-01-03"]
+    provider_uri = _make_calendar(tmp_path, dates)
+    with patch('app.services.data.index_sync._fetch_index_via_baostock',
+               side_effect=BaostockQuotaError("当日配额已耗尽")), \
+         patch('app.services.data.index_sync._fetch_index_via_akshare',
+               return_value=_mock_index_df(dates)) as m_ak:
+        result = index_sync.sync_indices_to_qlib(
+            provider_uri, indices=["sh000001", "sh000300"])
+    assert m_ak.call_count == 0  # 配额耗尽直接中止，不逐只兜底
+    assert result["aborted"] is True
+    assert result["success"] == 0
+    assert result["total"] == 2
+
+
+def test_sync_indices_circuit_breaker_when_relogin_fails(tmp_path):
+    """会话重建失败也必须熔断切换 akshare（回归：relogin_done 未标记，
+    baostock 全挂时每只指数都先空试 baostock 再兜底，纯浪费）。"""
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+    provider_uri = _make_calendar(tmp_path, dates)
+    indices = [f"sh{i:06d}" for i in range(10)]
+    with patch('app.services.data.index_sync._fetch_index_via_baostock',
+               side_effect=RuntimeError("10002007 网络接收错误")) as m_bs, \
+         patch('app.services.data.index_sync._fetch_index_via_akshare',
+               return_value=_mock_index_df(dates)) as m_ak, \
+         patch('app.services.data.baostock_client.ensure_logout'), \
+         patch('app.services.data.baostock_client._ensure_login',
+               side_effect=RuntimeError("login failed")):
+        result = index_sync.sync_indices_to_qlib(provider_uri, indices=indices)
+    # 5 次失败 → 重建失败（consecutive_fail 保持 5）→ 第 6 次失败即熔断
+    assert m_bs.call_count == 6
+    assert m_ak.call_count == 10  # 全部走 akshare 兜底成功
+    assert result["success"] == 10
+    assert result["source"] == "akshare"
+    assert "熔断" in (result["abort_reason"] or "")

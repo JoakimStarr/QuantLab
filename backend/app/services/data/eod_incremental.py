@@ -137,39 +137,52 @@ def _pad_bins_to_calendar(qlib_dir: str, calendar: list) -> int:
     bin 不会被重新写入，长度停留在旧日历 → 数据校验报"长度异常"。本函数扫描
     features/*/{field}.day.bin，短于目标长度的统一末尾补 NaN 扩展（覆盖股票
     OHLCV / 宏观 / 财报 / 指数等全部字段）；长度超长的（异常）仅记 warning。
+
+    线程池并行处理：全市场 55 万+ 个 bin 逐个串行校验/补齐耗时 10 分钟级，
+    文件互相独立且 _write_bin 原子写，并行安全（8 线程约快 4-6 倍）。
     """
     feat_root = os.path.join(qlib_dir, "features")
     if not os.path.isdir(feat_root):
         return 0
     target_size = QLIB_BIN_HEADER_SIZE + 4 * len(calendar)
     target_n = len(calendar)
-    padded = 0
-    for code in sorted(os.listdir(feat_root)):
+
+    # 先收集全部 bin 路径（listdir 一次），再并行处理
+    all_bins: list[str] = []
+    for code in os.listdir(feat_root):
         code_dir = os.path.join(feat_root, code)
         if not os.path.isdir(code_dir):
             continue
-        for fname in sorted(os.listdir(code_dir)):
-            if not fname.endswith(".day.bin"):
-                continue
-            path = os.path.join(code_dir, fname)
-            try:
-                size = os.path.getsize(path)
-            except OSError:
-                continue
-            if size == target_size:
-                continue
-            if size < target_size:
-                raw = np.fromfile(path, dtype="<f4")
-                arr = np.full(target_n, np.nan, dtype="<f4")
-                if raw.size > 1:
-                    keep = min(raw.size - 1, target_n)
-                    arr[:keep] = raw[1 : keep + 1]
-                _write_bin(path, arr, 0)
-                padded += 1
-            else:
-                logger.warning("bin 长度超过日历（异常）: %s %d > %d", path, size, target_size)
+        for fname in os.listdir(code_dir):
+            if fname.endswith(".day.bin"):
+                all_bins.append(os.path.join(code_dir, fname))
+    if not all_bins:
+        return 0
+
+    def _pad_one(path: str) -> int:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return 0
+        if size == target_size:
+            return 0
+        if size < target_size:
+            raw = np.fromfile(path, dtype="<f4")
+            arr = np.full(target_n, np.nan, dtype="<f4")
+            if raw.size > 1:
+                keep = min(raw.size - 1, target_n)
+                arr[:keep] = raw[1 : keep + 1]
+            _write_bin(path, arr, 0)
+            return 1
+        logger.warning("bin 长度超过日历（异常）: %s %d > %d", path, size, target_size)
+        return 0
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        padded = sum(pool.map(_pad_one, all_bins))
     if padded:
-        logger.info("已按新日历补齐 %d 个 bin 文件（末尾补 NaN）", padded)
+        logger.info("已按新日历补齐 %d 个 bin 文件（末尾补 NaN，共扫描 %d 个）", padded, len(all_bins))
     return padded
 
 

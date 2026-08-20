@@ -36,6 +36,7 @@ async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = 
     qlib_dir = settings.qlib_provider_path
     init_progress(universe, "full", writes_bins=True, kind="full")
     steps: list[str] = []
+    warnings: list[str] = []
 
     def _restage(pct: float, message: str) -> None:
         # 前一阶段内部已 finish+clear，重新恢复全同步进度标识。
@@ -64,14 +65,31 @@ async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = 
         idx = await sync_and_register_indices(qlib_dir)
         steps.append(f"indices({idx.get('success', 0)}ok/{idx.get('failed', 0)}fail)")
         logger.info("阶段2/6 完成: %s", idx)
+        idx_failed = idx.get("failed", 0) or 0
+        if idx.get("total") and idx_failed >= idx.get("total", 0):
+            warnings.append(f"指数同步全部失败: {idx_failed}/{idx['total']}（数据可能过期）"
+                            + (f"——{idx.get('abort_reason')}" if idx.get("abort_reason") else ""))
+        elif idx.get("abort_reason"):
+            warnings.append(f"指数同步异常: {idx.get('abort_reason')}")
 
         # 阶段 3/6: ETF 同步 + 全量池
         _restage(42, "阶段3/6: ETF 同步（全市场日K，重建全量池）...")
         from app.services.data.etf_sync import sync_etf_task
 
         etf = await sync_etf_task(qlib_dir, days=730)
-        steps.append(f"etf({etf.get('etf_count', 0)}etfs/{etf.get('pool_count', 0)}pool)")
+        etf_days_failed = etf.get("days_failed", 0) or 0
+        steps.append(
+            f"etf({etf.get('etf_count', 0)}etfs/{etf.get('pool_count', 0)}pool"
+            + (f"/{etf_days_failed}days-fail" if etf_days_failed else "") + ")"
+        )
         logger.info("阶段3/6 完成: %s", etf)
+        if etf_days_failed and not etf.get("dates"):
+            warnings.append(f"ETF 拉取全部失败: {etf_days_failed} 天无一成功"
+                            + (f"——{etf.get('abort_reason')}" if etf.get("abort_reason") else ""))
+        elif etf.get("aborted"):
+            warnings.append(f"ETF 同步中途熔断: {etf.get('abort_reason')}")
+        elif etf_days_failed:
+            warnings.append(f"ETF 有 {etf_days_failed} 个交易日拉取失败（下次同步自动补）")
 
         # 阶段 4-6/6: 宏观 / 财报 / 外盘 —— 三者都不连 baostock（无并发连接限制），
         # 并行下载拉取（akshare/eastmoney 各自独立，互不依赖）。
@@ -105,15 +123,25 @@ async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = 
         ext = await ext_task
         steps.append(f"macro({macro.get('inserted', 0)}rows/{macro.get('fields_written', 0)}fields)")
         steps.append(f"fin({fin.get('fetched', 0)}fetched/{fin.get('inserted', 0)}rows)")
-        steps.append("external")
+        ext_items = ext.get("items") or {}
+        ext_ok = sum(1 for v in ext_items.values() if v.get("ok"))
+        steps.append(f"external({ext_ok}/{len(ext_items)}ok)")
         logger.info("阶段4-6/6 完成: macro=%s fin=%s ext=%s", macro, fin, ext)
+        for name, phase in (("宏观", macro), ("财报", fin)):
+            if phase is not None and phase.get("ok") is False:
+                warnings.append(f"{name}同步失败: {phase.get('error', '未知错误')}")
+        if ext_items and ext_ok == 0:
+            warnings.append("外盘因子全部拉取失败（akshare 可能不可用）")
 
-        update_progress(pct=100, status="running", message=f"全同步完成: {', '.join(steps)}")
+        final_msg = f"全同步完成: {', '.join(steps)}"
+        if warnings:
+            final_msg += f" | 注意: {'; '.join(warnings)}"
+        update_progress(pct=100, status="running", message=final_msg)
         finish_progress(True)
         await asyncio.sleep(3)
         clear_progress()
-        logger.info("full 同步完成: steps=%s", steps)
-        return {"ok": True, "steps": steps}
+        logger.info("full 同步完成: steps=%s warnings=%s", steps, warnings)
+        return {"ok": True, "steps": steps, "warnings": warnings}
     except Exception as e:  # noqa: BLE001
         finish_progress(False, str(e))
         await asyncio.sleep(3)

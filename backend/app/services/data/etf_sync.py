@@ -64,28 +64,61 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict
     overwrite=True，baostock 路径这里同样必须强制。
     """
     from app.services.data.baostock_client import (
-        BaostockQuotaError, fetch_etf_daily_sync, from_baostock_code,
+        BaostockQuotaError, _ensure_login, ensure_logout,
+        fetch_etf_daily_sync, from_baostock_code,
     )
     from app.services.data.eod_incremental import _sync_stock_bin
 
     if not dates:
-        return {"ok": True, "success": 0, "failed": 0, "dates": [],
-                "new_dates": [], "etf_codes": [], "pg_rows": []}
+        return {"ok": True, "success": 0, "failed": 0, "days_failed": 0,
+                "dates": [], "new_dates": [], "etf_codes": [], "pg_rows": [],
+                "aborted": False, "abort_reason": None}
 
     cal_set = set(old_calendar) if old_calendar else set()
     per_code = {}
     all_new_dates = set()
     fetched_dates = []
+    days_failed = 0
+    # 连续失败熔断：连接衰减（10002007 网络接收错误）后逐日重试只会白白消耗
+    # 请求配额并污染日志。连续 5 次失败 → 重建 baostock 会话一次；重建后
+    # 再连续 3 次失败 → 熔断中止本批（剩余日期留给下次同步）。
+    consecutive_fail = 0
+    relogin_done = False
+    abort_reason = None
 
     for date_idx, d in enumerate(dates):
         try:
             df_all = fetch_etf_daily_sync(d)
         except BaostockQuotaError as e:
             logger.error("ETF 同步中止: %s", e)
+            abort_reason = str(e)
             break
         except Exception as e:  # noqa: BLE001
-            logger.warning("ETF 拉取 %s 失败: %s", d, e)
+            days_failed += 1
+            consecutive_fail += 1
+            logger.warning("ETF 拉取 %s 失败（连续 %d 次）: %s", d, consecutive_fail, e)
+            if consecutive_fail >= 5 and not relogin_done:
+                logger.warning("ETF 拉取连续失败 %d 次，尝试重建 baostock 会话", consecutive_fail)
+                try:
+                    ensure_logout()
+                    _ensure_login()
+                    relogin_done = True
+                    consecutive_fail = 0
+                    logger.info("baostock 会话已重建，继续 ETF 拉取")
+                except Exception as e2:  # noqa: BLE001
+                    logger.error("baostock 会话重建失败: %s", e2)
+                    # 重建失败也标记已尝试：否则 relogin_done 恒为 False，
+                    # 熔断分支永不可达，baostock 全挂时会空跑全部日期
+                    relogin_done = True
+            elif relogin_done and consecutive_fail >= 3:
+                logger.error(
+                    "会话重建后 ETF 拉取仍连续失败 %d 次，熔断中止（跳过剩余 %d 天）",
+                    consecutive_fail, len(dates) - date_idx - 1,
+                )
+                abort_reason = f"连续 {consecutive_fail} 次拉取失败熔断: {e}"
+                break
             continue
+        consecutive_fail = 0
         if df_all is None or df_all.empty:
             continue
         fetched_dates.append(d)
@@ -128,9 +161,10 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict
             fail += 1
 
     return {
-        "ok": True, "success": success, "failed": fail,
+        "ok": True, "success": success, "failed": fail, "days_failed": days_failed,
         "dates": fetched_dates, "new_dates": sorted(all_new_dates),
         "etf_codes": sorted(per_code.keys()), "pg_rows": pg_rows,
+        "aborted": bool(abort_reason), "abort_reason": abort_reason,
     }
 
 
@@ -464,9 +498,10 @@ async def sync_etf_task(provider_uri: str = None, days: int = 730,
         return {"ok": True, "success": 0, "message": "ETF 数据已最新，无新日期需同步"}
 
     loop = asyncio.get_running_loop()
-    total_success = total_failed = 0
+    total_success = total_failed = total_days_failed = 0
     fetched_dates = []
     etf_codes = set()
+    abort_reason = None
     for i in range(0, len(candidate), _CHUNK_DAYS):
         chunk = candidate[i:i + _CHUNK_DAYS]
         result = await asyncio.wait_for(
@@ -480,17 +515,24 @@ async def sync_etf_task(provider_uri: str = None, days: int = 730,
         await _insert_etf_daily(result.get("pg_rows") or [])
         total_success += result.get("success", 0)
         total_failed += result.get("failed", 0)
+        total_days_failed += result.get("days_failed", 0)
         fetched_dates.extend(result.get("dates") or [])
         etf_codes.update(result.get("etf_codes") or [])
-        logger.info("ETF 同步进度: %d/%d 天（成功%d 失败%d）",
+        logger.info("ETF 同步进度: %d/%d 天（成功%d 只/写失败%d 只/拉取失败%d 天）",
                     min(i + _CHUNK_DAYS, len(candidate)), len(candidate),
-                    total_success, total_failed)
+                    total_success, total_failed, total_days_failed)
+        if result.get("aborted"):
+            abort_reason = result.get("abort_reason")
+            logger.error("ETF 同步被熔断中止: %s", abort_reason)
+            break
 
     curated = await rebuild_etf_pool(provider_uri)
     registered = await _register_synced_etfs(list(etf_codes))
 
     return {
         "ok": True, "success": total_success, "failed": total_failed,
+        "days_failed": total_days_failed,
+        "aborted": bool(abort_reason), "abort_reason": abort_reason,
         "dates": fetched_dates, "etf_count": len(etf_codes),
         "pool_count": len(curated), "registered": registered,
     }

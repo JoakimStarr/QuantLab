@@ -274,3 +274,72 @@ async def test_run_backfill_downloads_multi_chunk_keeps_all_bin_data(tmp_path):
     assert not np.isnan(close).any(), "分块回填后 bin 不应出现 NaN（前几批数据被丢弃）"
     # 值按日历升序写入：最早日期(01-12, i=5)在最前，最新日期(01-19, i=0)在最后
     assert close.tolist() == pytest.approx([10.5 + i for i in range(5, -1, -1)])
+
+
+# ---------- 动态成分缓存 / 空采样熔断（2026-08 优化） ----------
+
+def test_dynamic_cache_fresh_within_limits():
+    """7 天内构建且日历末端推进 ≤7 个交易日 → 新鲜。"""
+    from datetime import datetime
+    from app.services.data.baostock_backfill import _dynamic_cache_fresh
+    cal = [f"2026-01-{d:02d}" for d in range(1, 21)]
+    cache = {"built_at": datetime.now().isoformat(timespec="seconds"),
+             "cal_end": cal[12]}  # 末端推进 7 个交易日
+    assert _dynamic_cache_fresh(cache, cal) is True
+
+
+def test_dynamic_cache_stale_after_7_days():
+    """构建超 7 天 → 过期。"""
+    from datetime import datetime, timedelta
+    from app.services.data.baostock_backfill import _dynamic_cache_fresh
+    cal = [f"2026-01-{d:02d}" for d in range(1, 21)]
+    cache = {"built_at": (datetime.now() - timedelta(days=8)).isoformat(timespec="seconds"),
+             "cal_end": cal[-1]}
+    assert _dynamic_cache_fresh(cache, cal) is False
+
+
+def test_dynamic_cache_stale_when_cal_advanced_over_7():
+    """日历末端推进 >7 个交易日 → 过期（成分调整需及时刷新）。"""
+    from datetime import datetime
+    from app.services.data.baostock_backfill import _dynamic_cache_fresh
+    cal = [f"2026-01-{d:02d}" for d in range(1, 21)]
+    cache = {"built_at": datetime.now().isoformat(timespec="seconds"),
+             "cal_end": cal[10]}  # 末端推进 9 个交易日
+    assert _dynamic_cache_fresh(cache, cal) is False
+
+
+def test_dynamic_cache_fresh_when_cal_not_advanced():
+    """日历末端未推进（无新交易日的全量同步）→ 新鲜。"""
+    from datetime import datetime
+    from app.services.data.baostock_backfill import _dynamic_cache_fresh
+    cal = [f"2026-01-{d:02d}" for d in range(1, 21)]
+    cache = {"built_at": datetime.now().isoformat(timespec="seconds"),
+             "cal_end": cal[-1]}
+    assert _dynamic_cache_fresh(cache, cal) is True
+
+
+def test_rebuild_dynamic_instruments_cache_hit(tmp_path):
+    """缓存新鲜时直接复用，不发起任何成分采样请求。"""
+    from datetime import datetime
+    from unittest.mock import patch
+    from app.services.data import baostock_backfill as bb
+    cal = [f"2026-01-{d:02d}" for d in range(1, 21)]
+    cache = {"built_at": datetime.now().isoformat(timespec="seconds"),
+             "cal_end": cal[-1], "counts": {"csi300": 300, "csi500": 500}}
+    with patch.object(bb, "_load_dynamic_cache", return_value=cache), \
+         patch.object(bb, "_fetch_membership_history") as m_fetch:
+        counts = bb._rebuild_dynamic_instruments(str(tmp_path), cal)
+    assert counts == {"csi300": 300, "csi500": 500}
+    assert m_fetch.call_count == 0  # 0 次采样请求（省几十次串行 baostock 调用）
+
+
+def test_fetch_membership_history_empty_circuit_breaker():
+    """连续 3 个空采样点即中止，剩余采样点不再请求（省配额）。"""
+    from unittest.mock import patch
+    from app.services.data import baostock_backfill as bb
+    samples = [f"2024-{m:02d}-01" for m in range(1, 13)]  # 12 个采样点
+    with patch.object(bb, "_fetch_all_sync", return_value=[]) as m_fetch, \
+         patch("app.services.data.baostock_client._ensure_login"):
+        spans = bb._fetch_membership_history("query_hs300_stocks", samples)
+    assert m_fetch.call_count == 3  # 第 3 个空采样点熔断，剩余 9 个跳过
+    assert spans == {}

@@ -191,7 +191,17 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
     start_date = calendar[0]
     end_date = datetime.now().strftime("%Y-%m-%d")
 
-    from app.services.data.baostock_client import BaostockQuotaError
+    from app.services.data.baostock_client import (
+        BaostockQuotaError, _ensure_login, ensure_logout,
+    )
+
+    # 连续失败熔断：baostock 连接衰减（10002007）时逐只重试只是浪费——
+    # 连续 5 次异常 → 重建会话一次；重建后再连续 3 次 → 熔断 baostock，
+    # 剩余指数直接走 akshare 兜底（不同网络路径，大概率仍可用）。
+    consecutive_fail = 0
+    relogin_done = False
+    baostock_broken = False
+    abort_reason = None
 
     for idx, qlib_code in enumerate(index_list):
         update_progress(
@@ -199,10 +209,39 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
             message=f"同步指数 {idx + 1}/{total_ind}（{qlib_code}）...",
         )
         try:
-            df = _fetch_index_via_baostock(qlib_code, start_date, end_date)
-            source_used = "baostock"
+            df = None
+            source_used = "akshare"
+            if not baostock_broken:
+                try:
+                    df = _fetch_index_via_baostock(qlib_code, start_date, end_date)
+                    source_used = "baostock"
+                    consecutive_fail = 0
+                except BaostockQuotaError:
+                    raise
+                except Exception as e_bs:  # noqa: BLE001
+                    consecutive_fail += 1
+                    df = None
+                    logger.warning("指数 %s baostock 拉取异常（连续 %d 次）: %s",
+                                   qlib_code, consecutive_fail, e_bs)
+                    if consecutive_fail >= 5 and not relogin_done:
+                        logger.warning("baostock 指数拉取连续失败 %d 次，尝试重建会话", consecutive_fail)
+                        try:
+                            ensure_logout()
+                            _ensure_login()
+                            relogin_done = True
+                            consecutive_fail = 0
+                            logger.info("baostock 会话已重建，继续指数拉取")
+                        except Exception as e2:  # noqa: BLE001
+                            logger.error("baostock 会话重建失败: %s", e2)
+                            # 重建失败也标记已尝试：否则 relogin_done 恒为 False，
+                            # 熔断分支永不可达，baostock 全挂时逐只空试浪费
+                            relogin_done = True
+                    elif relogin_done and consecutive_fail >= 3:
+                        baostock_broken = True
+                        abort_reason = f"baostock 连续 {consecutive_fail} 次失败熔断，剩余指数改用 akshare"
+                        logger.error("指数同步熔断 baostock: %s", abort_reason)
             if df is None or df.empty:
-                # baostock 无此指数（如科创50）→ akshare 兜底
+                # baostock 无数据/异常/熔断 → akshare 兜底（不同数据源，独立可用）
                 logger.info("指数 %s baostock 无数据，尝试 akshare 兜底", qlib_code)
                 df = _fetch_index_via_akshare(qlib_code, start_date, end_date)
                 source_used = "akshare"
@@ -234,13 +273,15 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
         except BaostockQuotaError as e:
             # 当日请求配额耗尽，中止整个指数同步，避免逐只无谓重试
             logger.error("指数同步中止: %s", e)
+            abort_reason = str(e)
             break
         except Exception as e:
             logger.error("指数 %s 同步失败: %s", qlib_code, e)
             failed += 1
 
     source = "+".join(sorted(sources_used)) if sources_used else "none"
-    logger.info("指数同步完成: 成功%d, 失败%d, 共%d", success, failed, len(index_list))
+    logger.info("指数同步完成: 成功%d, 失败%d, 共%d（baostock熔断=%s）",
+                success, failed, len(index_list), baostock_broken)
     return {
         "ok": True,
         "success": success,
@@ -248,4 +289,6 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
         "indices": indices_synced,
         "total": len(index_list),
         "source": source,
+        "aborted": bool(abort_reason and not baostock_broken),
+        "abort_reason": abort_reason,
     }

@@ -11,6 +11,7 @@
 - 增量由日期去重天然支持（ON CONFLICT DO NOTHING），重复执行只补缺失日期
 """
 import asyncio
+import json
 import logging
 import os
 from datetime import date, datetime, timedelta
@@ -412,6 +413,9 @@ def _fetch_membership_history(api_name: str, sample_dates: list) -> dict:
     """
     spans_by_code: dict[str, list] = {}
     prev_dates: dict[str, str] = {}
+    # 空采样熔断：baostock 成分接口异常时所有采样点都返回空（每次请求仍计配额），
+    # 连续 3 个空采样点即中止，避免几十次无效请求。
+    consecutive_empty = 0
     from app.services.data.baostock_client import _ensure_login
     _ensure_login()
     for sample in sample_dates:
@@ -420,6 +424,14 @@ def _fetch_membership_history(api_name: str, sample_dates: list) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.warning("%s 采样 %s 失败: %s", api_name, sample, e)
             continue
+        if not rows:
+            consecutive_empty += 1
+            if consecutive_empty >= 3:
+                logger.warning("%s 连续 %d 个采样点返回空，中止剩余采样"
+                               "（baostock 成分接口可能异常）", api_name, consecutive_empty)
+                break
+            continue
+        consecutive_empty = 0
         cur_codes = {from_baostock_code(r["code"]).lower() for r in rows}
         # 上期在册且本期不在册 -> 关闭区间
         for code in list(prev_dates.keys()):
@@ -445,6 +457,43 @@ def _fetch_membership_history(api_name: str, sample_dates: list) -> dict:
     return spans_by_code
 
 
+def _dynamic_cache_path() -> str:
+    """动态成分构建缓存文件路径（data/dynamic_instruments_cache.json）。"""
+    return os.path.join(str(settings.PROJECT_ROOT), "data", "dynamic_instruments_cache.json")
+
+
+def _load_dynamic_cache() -> dict | None:
+    try:
+        with open(_dynamic_cache_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _dynamic_cache_fresh(cache: dict, calendar: list) -> bool:
+    """缓存新鲜度：构建于 7 天内 且 日历末端未推进超过 7 个交易日。
+
+    指数成分调整频率约半年一次，每次全量同步都重新采样（数十次串行请求）
+    纯属浪费；日历推进容忍 7 个交易日，保证缓存过期后成分变更能及时刷新。
+    """
+    try:
+        built = datetime.fromisoformat(str(cache.get("built_at")))
+    except ValueError:
+        return False
+    if datetime.now() - built > timedelta(days=7):
+        return False
+    cal_end = calendar[-1] if calendar else ""
+    cached_end = str(cache.get("cal_end") or "")
+    if not cached_end or cal_end <= cached_end:
+        return True  # 日历末端未推进（或倒退），成分无需重建
+    try:
+        cur_idx = calendar.index(cal_end)
+        cached_idx = calendar.index(cached_end)
+    except ValueError:
+        return False
+    return (cur_idx - cached_idx) <= 7
+
+
 def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
                                  sample_interval_days: int = 90) -> dict:
     """按点按时点重建 csi300/csi500 动态成分 instruments 文件。
@@ -454,12 +503,21 @@ def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
     qlib 的 instruments 解析会按 (start, end) 区间掩码因子数据，
     从而在回测/评价中实现动态成分（避免幸存者偏差）。
 
+    构建结果有文件缓存（7 天内且日历末端未明显推进则跳过重建），
+    避免"无新数据"的全量同步仍发起数十次成分采样请求。
+
     Returns:
         dict: 各指数文件写入的代码数（供日志/状态展示）。
     """
     cal_start, cal_end = calendar[0], calendar[-1]
     if len(calendar) < 2:
         return {}
+    cache = _load_dynamic_cache()
+    if cache and _dynamic_cache_fresh(cache, calendar):
+        logger.info("动态成分缓存命中（构建于 %s，日历末 %s），跳过重建",
+                    str(cache.get("built_at"))[:19], cache.get("cal_end"))
+        return cache.get("counts") or {}
+
     sample_dates = calendar[::max(1, sample_interval_days)]
     if sample_dates[-1] != cal_end:
         sample_dates.append(cal_end)
@@ -485,6 +543,19 @@ def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
         _write_instrument_file(qlib_dir, name, entries)
         counts[name] = len(spans)
         logger.info("%s 动态成分写入完成: %d 只股票", name, len(spans))
+
+    # 至少一个指数写入成功才刷新缓存；全空不缓存，下次同步还会重试
+    if counts:
+        try:
+            os.makedirs(os.path.dirname(_dynamic_cache_path()), exist_ok=True)
+            with open(_dynamic_cache_path(), "w", encoding="utf-8") as f:
+                json.dump({
+                    "built_at": datetime.now().isoformat(timespec="seconds"),
+                    "cal_end": cal_end, "cal_len": len(calendar),
+                    "counts": counts,
+                }, f, ensure_ascii=False)
+        except OSError as e:
+            logger.warning("动态成分缓存写入失败: %s", e)
     return counts
 
 
@@ -811,23 +882,30 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         from app.services.data.eod_incremental import _pad_bins_to_calendar
         _pad_bins_to_calendar(qlib_dir, _final_cal)
 
-        # 日历可能被本轮回填扩展（如 5 年→10 年）；若此前已广播过外盘因子
-        # （对齐到旧日历），这里按最终日历重新对齐广播，避免长度异常。
-        try:
-            from app.services.data.external_market import rebroadcast_external_market
-            rb = await asyncio.to_thread(rebroadcast_external_market, qlib_dir)
-            if rb.get("rebroadcasted"):
-                logger.info("外盘因子已按最终日历重新对齐广播: %s", rb)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("外盘因子重新对齐广播失败（可稍后手动重拉）: %s", e)
-        # 宏观字段同样按最终日历重广播（尽力而为，失败可稍后在宏观页同步）
-        try:
-            from app.services.data.macro_sync import broadcast_macro_to_bins
-            n = await broadcast_macro_to_bins(qlib_dir)
-            if n:
-                logger.info("宏观字段已按最终日历重广播: %d 股票字段", n)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("宏观字段重广播失败（可稍后在宏观页同步）: %s", e)
+        # 外盘/宏观重广播：仅当日历相对回填前发生变化时才执行——
+        # 日历没变时外盘 bin 长度无需重对齐、宏观广播指纹也会判重跳过，
+        # 无条件全量重广播（约 25 万次 bin 写 ×2 轮）是纯浪费。
+        cal_changed = _final_cal != (existing_calendar or [])
+        if cal_changed:
+            # 日历可能被本轮回填扩展（如 5 年→10 年）；若此前已广播过外盘因子
+            # （对齐到旧日历），这里按最终日历重新对齐广播，避免长度异常。
+            try:
+                from app.services.data.external_market import rebroadcast_external_market
+                rb = await asyncio.to_thread(rebroadcast_external_market, qlib_dir)
+                if rb.get("rebroadcasted"):
+                    logger.info("外盘因子已按最终日历重新对齐广播: %s", rb)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("外盘因子重新对齐广播失败（可稍后手动重拉）: %s", e)
+            # 宏观字段同样按最终日历重广播（尽力而为，失败可稍后在宏观页同步）
+            try:
+                from app.services.data.macro_sync import broadcast_macro_to_bins
+                n = await broadcast_macro_to_bins(qlib_dir)
+                if n:
+                    logger.info("宏观字段已按最终日历重广播: %d 股票字段", n)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("宏观字段重广播失败（可稍后在宏观页同步）: %s", e)
+        else:
+            logger.info("日历未变化（%d 天），跳过外盘/宏观重广播", len(_final_cal))
 
         # 基础资料 / 行业 / 日历
         # 用户明确要求：stock_basic/stock_industry 不随日常同步拉取（默认关闭）。

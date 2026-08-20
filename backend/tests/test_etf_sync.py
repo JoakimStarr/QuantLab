@@ -359,3 +359,104 @@ async def test_sync_etf_tencent_skips_done(tmp_path):
     assert r["success"] == 0
     assert r["failed"] == 1
     assert m_fetch.call_count == 1
+
+
+# ---------- 连续失败熔断 / days_failed（2026-08 优化） ----------
+
+def _mk_qlib_base(tmp_path, calendar):
+    """构造含 day.txt 的最小 qlib 目录。"""
+    base = tmp_path / "qlib"
+    (base / "calendars").mkdir(parents=True, exist_ok=True)
+    (base / "features").mkdir(parents=True, exist_ok=True)
+    (base / "instruments").mkdir(parents=True, exist_ok=True)
+    with open(base / "calendars" / "day.txt", "w") as f:
+        f.write("\n".join(calendar) + "\n")
+    return str(base)
+
+
+def test_sync_etf_days_failed_counted(tmp_path):
+    """拉取异常计入 days_failed（回归：此前 336 天全失败却报 失败0）。"""
+    calendar = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    base = _mk_qlib_base(tmp_path, calendar)
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=RuntimeError("网络接收错误 10002007")), \
+         patch("app.services.data.baostock_client.ensure_logout") as m_logout, \
+         patch("app.services.data.baostock_client._ensure_login"):
+        r = es.sync_etf_to_qlib(base, calendar, calendar)
+    assert r["days_failed"] == 3
+    assert r["success"] == 0
+    assert r["dates"] == []
+    # 3 < 5：未触发会话重建，更未熔断
+    assert m_logout.call_count == 0
+    assert r["aborted"] is False
+    assert r["abort_reason"] is None
+
+
+def test_sync_etf_circuit_breaker_after_relogin(tmp_path):
+    """5 次连续失败重建会话一次；重建后再 3 次连续失败 → 熔断中止剩余日期。"""
+    calendar = [f"2026-01-{d:02d}" for d in range(5, 18)]  # 13 天
+    base = _mk_qlib_base(tmp_path, calendar)
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=RuntimeError("网络接收错误 10002007")) as m_fetch, \
+         patch("app.services.data.baostock_client.ensure_logout") as m_logout, \
+         patch("app.services.data.baostock_client._ensure_login"):
+        r = es.sync_etf_to_qlib(base, calendar, calendar)
+    # 5 次失败触发重建 + 重建后 3 次失败熔断 = 共 8 次请求，剩余 5 天跳过
+    assert m_fetch.call_count == 8
+    assert m_logout.call_count == 1
+    assert r["days_failed"] == 8
+    assert r["aborted"] is True
+    assert "熔断" in r["abort_reason"]
+
+
+def test_sync_etf_success_resets_consecutive_fail(tmp_path):
+    """成功拉取重置连续失败计数：失败/成功交替不触发会话重建或熔断。"""
+    calendar = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08",
+                "2026-01-09", "2026-01-12", "2026-01-13", "2026-01-14"]
+    base = _mk_qlib_base(tmp_path, calendar)
+    # 偶数位失败、奇数位成功（2 只 ETF）：连续失败最多 1 次
+    effects = [RuntimeError("x") if i % 2 == 0 else _mock_etf_market(d)
+               for i, d in enumerate(calendar)]
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=effects), \
+         patch("app.services.data.baostock_client.ensure_logout") as m_logout, \
+         patch("app.services.data.baostock_client._ensure_login"):
+        r = es.sync_etf_to_qlib(base, calendar, calendar)
+    assert m_logout.call_count == 0  # 连续失败从未达 5，未重建会话
+    assert r["aborted"] is False
+    assert r["days_failed"] == 4
+    assert r["success"] == 2  # 4 个成功日 × 2 只 ETF
+    assert len(r["dates"]) == 4
+
+
+def test_sync_etf_quota_error_aborts_immediately(tmp_path):
+    """配额耗尽（BaostockQuotaError）立即中止，不逐日重试、不落 days_failed。"""
+    from app.services.data.baostock_client import BaostockQuotaError
+    calendar = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    base = _mk_qlib_base(tmp_path, calendar)
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=BaostockQuotaError("当日配额已耗尽")) as m_fetch:
+        r = es.sync_etf_to_qlib(base, calendar, calendar)
+    assert m_fetch.call_count == 1  # 首日即中止
+    assert r["aborted"] is True
+    assert "配额" in r["abort_reason"]
+    assert r["days_failed"] == 0  # 配额错误不计入逐日失败
+
+
+def test_sync_etf_circuit_breaker_when_relogin_fails(tmp_path):
+    """会话重建失败也必须熔断（回归：relogin_done 未标记导致熔断不可达，
+    baostock 全挂时循环空跑全部日期、每5次失败重试登录）。"""
+    calendar = [f"2026-01-{d:02d}" for d in range(5, 18)]  # 13 天
+    base = _mk_qlib_base(tmp_path, calendar)
+    with patch("app.services.data.baostock_client.fetch_etf_daily_sync",
+               side_effect=RuntimeError("10002007 网络接收错误")) as m_fetch, \
+         patch("app.services.data.baostock_client.ensure_logout"), \
+         patch("app.services.data.baostock_client._ensure_login",
+               side_effect=RuntimeError("login failed")):
+        r = es.sync_etf_to_qlib(base, calendar, calendar)
+    # 5 次失败 → 重建失败（已标记尝试，consecutive_fail 保持 5）
+    # → 第 6 次失败即满足熔断（relogin_done 且 >=3）= 6 次，非 13 次全跑
+    assert m_fetch.call_count == 6
+    assert r["aborted"] is True
+    assert "熔断" in r["abort_reason"]
+    assert r["days_failed"] == 6
