@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""全同步效能对比：提取指定日期的 sync.log 时间线，与 2026-08-20 旧代码基线对比。
+"""全同步效能对比：提取指定日期 sync.log 的每次全同步运行，与 2026-08-20 旧代码基线对比。
 
 用法（WSL）:
-  .venv/bin/python3 compare_sync.py [YYYY-MM-DD]   # 默认今天
+  .venv/bin/python3 compare_sync.py [YYYY-MM-DD]        # 默认今天
+  .venv/bin/python3 compare_sync.py 2026-08-20 2        # 只看第 2 次运行
 
-输出：各阶段耗时对比表 + 新机制日志证据清单。
+同日多次运行（如早晚各一次）自动分段：检测"阶段1/6"起始标记。
+注意：sync.log 时间戳为 UTC，比北京时间晚 8 小时。
 """
 import json
-import subprocess
 import sys
 from datetime import date
 
 SYNC_LOG = "/home/joakim/QuantLab/logs/sync.log"
 
-# 2026-08-20 旧代码基线（09:40 定时触发，总 49.5 分钟）
+# 2026-08-20 旧代码基线（09:40 CST 定时触发，总 49.5 分钟）
 BASELINE = {
     "bin补齐": ("09:43:51", "09:57:54", "14.0min 串行 551,909 文件"),
     "外盘/宏观广播#1": ("09:57:58", "10:03:18", "5.5min（日历变化触发，正确）"),
@@ -27,8 +28,7 @@ BASELINE = {
 # 新机制预期的日志关键词 → 说明
 EVIDENCE_KEYS = [
     ("动态成分缓存命中", "缓存复用成功（省 56 次采样请求）"),
-    ("连续", "空采样熔断或失败计数生效"),
-    ("熔断", "熔断机制触发（若因连接衰减为正常；数据正常时为误触发）"),
+    ("熔断", "熔断机制触发（因连接衰减触发为正常；数据正常时为误触发）"),
     ("akshare 兜底", "指数 baostock 失败后走 akshare"),
     ("跳过外盘/宏观重广播", "日历未变化时跳过重广播"),
     ("宏观字段无变化", "指纹判重跳过广播"),
@@ -36,22 +36,17 @@ EVIDENCE_KEYS = [
     ("注意:", "完成消息携带 warnings"),
 ]
 
+KEYS = ["sync_worker", "阶段", "全同步完成", "交易日数", "已按新日历补齐",
+        "重新对齐广播", "广播", "日历未变化", "缓存命中", "熔断", "兜底",
+        "跳过", "无变化", "回填完成", "指数同步完成", "动态成分", "采样",
+        "中止", "days-fail", "重建日历"]
+# 噪音过滤：逐字段广播/逐 ETF 进度行
+NOISE = ["广播写入", "ETF 同步进度"]
 
-def fmt_delta(sec: float) -> str:
-    if sec >= 60:
-        return f"{sec / 60:.1f}min"
-    return f"{sec:.0f}s"
 
-
-def main() -> None:
-    target = sys.argv[1] if len(sys.argv) > 1 else str(date.today())
-    print(f"=== {target} 全同步时间线（对比 2026-08-20 旧代码基线）===\n")
-
-    # 提取当日 full 同步的关键事件
-    keys = ["阶段", "全同步完成", "bin 文件", "日历未变化", "缓存命中", "熔断",
-            "兜底", "跳过广播", "无变化", "ETF 同步进度: 33", "回填完成",
-            "指数同步完成", "动态成分", "采样", "中止", "sync_worker 完成"]
-    rows = []
+def load_runs(target: str) -> list[list[tuple[str, str]]]:
+    """按"sync_worker 开始: kind=full"起始标记把当日日志切成多次运行。"""
+    runs: list[list[tuple[str, str]]] = []
     for line in open(SYNC_LOG, encoding="utf-8"):
         if f'"{target}T' not in line:
             continue
@@ -60,24 +55,44 @@ def main() -> None:
         except Exception:
             continue
         ev = d.get("event", "")
-        if any(k in ev for k in keys):
-            rows.append((d.get("timestamp", "")[11:19], ev))
+        if not any(k in ev for k in KEYS) or any(n in ev for n in NOISE):
+            continue
+        row = (d.get("timestamp", "")[11:19], ev)
+        if "sync_worker 开始: kind=full" in ev:
+            runs.append([row])
+        elif runs:
+            runs[-1].append(row)
+    return runs
 
-    if not rows:
-        print("当日无 full 同步日志。")
-        return
 
+def show_run(idx: int, rows: list[tuple[str, str]]) -> None:
+    print(f"--- 运行 #{idx}（{len(rows)} 条关键事件）---")
     for ts, ev in rows:
         print(f"{ts} {ev[:110]}")
-
-    print(f"\n共 {len(rows)} 条关键事件")
-    print("\n=== 检查新机制证据 ===\n")
     text = "\n".join(e for _, e in rows)
+    print("新机制证据:")
     for kw, desc in EVIDENCE_KEYS:
-        mark = "✓" if kw in text else " "
-        print(f" [{mark}] {desc}")
+        mark = "✓" if kw in text else "·"
+        print(f"  [{mark}] {desc}")
+    print()
 
-    print("\n=== 基线参考（旧代码）===")
+
+def main() -> None:
+    target = sys.argv[1] if len(sys.argv) > 1 else str(date.today())
+    only = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    print(f"=== {target} 全同步运行（对比 2026-08-20 旧代码基线 49.5min）===")
+    print("注：日志时间为 UTC（北京时间 -8h）\n")
+
+    runs = load_runs(target)
+    if not runs:
+        print("当日无全同步日志。")
+        return
+
+    for i, rows in enumerate(runs, 1):
+        if only is None or i == only:
+            show_run(i, rows)
+
+    print("=== 基线参考（2026-08-20 09:40 CST 旧代码）===")
     for k, (s, e, note) in BASELINE.items():
         print(f"  {k}: {s}→{e}  {note}")
 
