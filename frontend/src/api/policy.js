@@ -7,9 +7,14 @@ export function syncPolicy() {
   return request.post('/policy/sync')
 }
 
-// 政策风向列表：关键词/日期/来源过滤 + 分页
+// 政策风向列表：关键词/日期/来源过滤 + 分页（列表默认不含全文）
 export function getPolicyNews(params = {}) {
   return request.get('/policy/list', { params })
+}
+
+// 单条新闻全文（列表折叠态不返回 content，展开时按需拉取）
+export function getPolicyNewsDetail(id) {
+  return request.get('/policy/news/' + id)
 }
 
 // 政策风向数据状态（最新日期/覆盖天数/总条数/AI 解读统计/各源条数）

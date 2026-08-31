@@ -11,28 +11,90 @@ logger = logging.getLogger(__name__)
 
 
 async def list_factors(category: str = None, status: str = "active", sort_by: str = "ic",
-                       limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
-    """列出因子，支持按 IC 等排序，返回 (items, total)。"""
-    async with async_session() as session:
-        base_q = select(func.count()).select_from(Factor)
-        if category:
-            base_q = base_q.where(Factor.category == category)
-        if status:
-            base_q = base_q.where(Factor.status == status)
-        total_result = await session.execute(base_q)
-        total = total_result.scalar() or 0
+                       limit: int = 100, offset: int = 0, keyword: str = None,
+                       sort_order: str = "desc", ids: list[int] = None) -> tuple[list[dict], int]:
+    """列出因子，支持按 IC 等排序、关键词搜索（名称/表达式/描述）、ID 过滤，返回 (items, total)。
 
-        q = select(Factor)
-        if category:
-            q = q.where(Factor.category == category)
-        if status:
-            q = q.where(Factor.status == status)
+    keyword: 名称/表达式/描述模糊匹配（ilike）。
+    sort_order: "asc"/"desc"（默认 desc）；启用因子始终排在前面，再按所选字段排序。
+    ids: 限定返回的因子 ID 列表（如「仅衰减」视图传衰减集合）。
+    """
+    from sqlalchemy import or_
+    filters = []
+    if category:
+        filters.append(Factor.category == category)
+    if status:
+        filters.append(Factor.status == status)
+    if keyword:
+        kw = f"%{keyword.strip()}%"
+        filters.append(or_(
+            Factor.name.ilike(kw),
+            Factor.expression.ilike(kw),
+            Factor.description.ilike(kw),
+        ))
+    if ids:
+        filters.append(Factor.id.in_(ids))
+
+    async with async_session() as session:
+        count_q = select(func.count()).select_from(Factor)
+        for f in filters:
+            count_q = count_q.where(f)
+        total = (await session.execute(count_q)).scalar() or 0
+
         sort_col = {"ic": Factor.ic, "rank_ic": Factor.rank_ic, "icir": Factor.icir,
-                    "created_at": Factor.created_at}.get(sort_by, Factor.ic)
-        q = q.order_by(sort_col.desc().nullslast()).limit(limit).offset(offset)
+                    "turnover": Factor.turnover, "name": Factor.name, "category": Factor.category,
+                    "status": Factor.status, "created_at": Factor.created_at}.get(sort_by, Factor.ic)
+        col = sort_col.asc().nullslast() if sort_order == "asc" else sort_col.desc().nullslast()
+        q = select(Factor)
+        for f in filters:
+            q = q.where(f)
+        # 启用因子始终置顶，与旧版前端「active 优先」行为一致
+        q = q.order_by((Factor.status == "active").desc(), col).limit(limit).offset(offset)
         result = await session.execute(q)
         rows = result.scalars().all()
     return [_to_dict(r) for r in rows], total
+
+
+async def get_factor_summary() -> dict:
+    """因子库概览统计：总数/已评价/平均 IC/各类别计数与平均 IC（供列表页概览条使用）。
+
+    与旧版前端基于整表客户端统计的语义保持一致：
+    - avg_ic 仅统计 active 且已有 IC 的因子；
+    - 各类别 count 统计全部因子（含禁用）。
+    """
+    async with async_session() as session:
+        total = (await session.execute(
+            select(func.count()).select_from(Factor)
+        )).scalar() or 0
+        evaluated = (await session.execute(
+            select(func.count()).select_from(Factor).where(Factor.ic.is_not(None))
+        )).scalar() or 0
+        avg_ic = (await session.execute(
+            select(func.avg(Factor.ic)).where(Factor.status == "active", Factor.ic.is_not(None))
+        )).scalar() or 0.0
+        cat_rows = (await session.execute(
+            select(Factor.category, func.count())
+            .group_by(Factor.category)
+        )).all()
+        cat_act_rows = (await session.execute(
+            select(Factor.category, func.count(), func.avg(Factor.ic))
+            .where(Factor.status == "active", Factor.ic.is_not(None))
+            .group_by(Factor.category)
+        )).all()
+    counts = {c: n for c, n in cat_rows}
+    act_map = {c: (n, a) for c, n, a in cat_act_rows}
+    categories = [{
+        "key": c or "other",
+        "count": counts.get(c, 0),
+        "active_evaluated": act_map.get(c, (0, None))[0],
+        "avg_ic": act_map.get(c, (0, None))[1],
+    } for c in counts]
+    return {
+        "total": total,
+        "evaluated": evaluated,
+        "avg_ic": float(avg_ic),
+        "categories": categories,
+    }
 
 
 async def get_factor(factor_id: int) -> dict:

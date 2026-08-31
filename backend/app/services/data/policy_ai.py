@@ -135,6 +135,23 @@ async def _day_news(news_date: date) -> list[dict]:
     return items
 
 
+def _policy_ai_lock():
+    """policy_ai 单实例文件锁（flock，data/policy_ai.lock）。
+
+    与 baostock 的 sync.lock 同款设计：锁由内核持有，进程退出（含 kill -9）
+    自动释放。用于防止手动点击 + 定时任务叠加触发多个 policy_ai worker
+    重复处理同一批失败日期、竞态 upsert。
+    """
+    from app.services.data.sync_lock import SyncLock
+
+    try:
+        from app.core.config import settings
+        path = str(settings.PROJECT_ROOT / "data" / "policy_ai.lock")
+    except Exception:
+        path = None
+    return SyncLock(path=path)
+
+
 async def analyze_one_day(news_date: date) -> dict:
     """对单日文字稿调用 LLM 产出解读（网络 IO）。"""
     from app.services.ai.llm_json import call_llm_json
@@ -220,6 +237,7 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
 
     done = 0
     failed = 0
+    fail_errors: list[str] = []
     try:
         for i, d in enumerate(pending):
             if progress_cb:
@@ -235,6 +253,9 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
                 done += 1
             else:
                 failed += 1
+                err = (row.get("error") or "").strip()
+                if err and err not in fail_errors:
+                    fail_errors.append(err)
             policy_ai_progress.update(done, failed, len(pending))
             if (i + 1) % 20 == 0:
                 logger.info("AI 政策解读进度 %d/%d (done=%d failed=%d)",
@@ -243,7 +264,12 @@ async def sync_policy_analysis(backfill_days: int = AI_BACKFILL_DAYS,
         policy_ai_progress.finish(False, error="policy_ai 任务异常退出")
         raise
 
-    policy_ai_progress.finish(True, done=done, failed=failed, total=len(pending))
+    # 失败原因汇总（去重、截断），写入 progress 文件供前端直接展示，避免"只报数不报因"
+    error_summary = None
+    if fail_errors:
+        error_summary = "；".join(fail_errors[:3])[:1000]
+        logger.warning("AI 政策解读失败 %d 天，原因: %s", failed, error_summary)
+    policy_ai_progress.finish(True, done=done, failed=failed, total=len(pending), error=error_summary)
     logger.info("AI 政策解读完成: 处理 %d 天, 成功 %d, 失败 %d",
                 len(pending), done, failed)
     return {"days": len(pending), "done": done, "failed": failed}

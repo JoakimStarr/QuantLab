@@ -165,7 +165,7 @@ QuantLab/
 | `app` | `debug` | false | 调试开关 |
 | `api` | `version` | v1 | API 版本前缀 |
 | `api` | `request_timeout` | 30 | 请求超时（秒） |
-| `api` | `cors_origins` | localhost:3000 等 | CORS 来源（可被环境变量覆盖） |
+| `api` | `cors_origins` | localhost:3001 等 | CORS 来源（可被环境变量覆盖） |
 | `data` | `qlib_provider_uri`（在 quant 段） | data/qlib_bin/cn_data | QLib bin 目录 |
 | `quant` | `data_source` | baostock | 数据源（主 baostock，补充 akshare） |
 | `quant` | `universe` | csi300 | 股票池 |
@@ -209,7 +209,9 @@ QuantLab/
 | `STATIC_DIR` | static | 前端静态目录 |
 | `TZ` | — | 时区（本地部署按系统时区） |
 | `GLM_API_KEY` / `SILICONFLOW_API_KEY` / `OPENCODEZEN_API_KEY` | 空 | AI Provider Key |
-| `VITE_API_BASE_URL` | http://localhost:8000/api/v1 | 前端 API 基址 |
+| `VITE_API_BASE_URL` | http://localhost:8101/api/v1 | 前端 API 基址 |
+| `BACKEND_PORT` | 8101 | 后端端口（start.sh / vite proxy 读取） |
+| `FRONTEND_PORT` | 3001 | 前端端口（start.sh / vite 读取） |
 | `VITE_APP_TITLE` | 量化策略研究平台 | 前端标题 |
 
 ### 3.3 QLib 数据路径配置
@@ -232,17 +234,18 @@ cd ~/QuantLab
 ```
 
 `start.sh dev` 会：
-1. 检查 8000/3000 端口占用
+1. 检查 `.env` 中 `BACKEND_PORT` / `FRONTEND_PORT` 端口占用
 2. 检查 `.venv` 与 `node_modules`，缺失则安装
-3. 后台启动 `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`（cwd=backend）
-4. 后台启动 `npm run dev -- --port 3000`（cwd=frontend）
+3. 后台启动 `uvicorn app.main:app --reload --host 0.0.0.0 --port ${BACKEND_PORT}`（cwd=backend，默认 8101）
+4. 后台启动 `npm run dev -- --port ${FRONTEND_PORT}`（cwd=frontend，默认 3001）
 5. 等待端口就绪后输出访问地址
 
 ### 4.2 后端手动启动
 
 ```bash
 cd ~/QuantLab/backend
-~/QuantLab/.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+BACKEND_PORT=$(sed -n 's/^[[:space:]]*BACKEND_PORT=//p' ../.env | tail -n1 | tr -d '[:space:]')
+~/QuantLab/.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port "${BACKEND_PORT:-8101}"
 ```
 
 **lifespan 启动序列**（`app/main.py`）：

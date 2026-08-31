@@ -622,7 +622,8 @@ async def indices_api(db=Depends(get_db)):
     feat_root = os.path.join(settings.qlib_provider_path, "features")
     items = []
     for r in rows:
-        code_dir = os.path.join(feat_root, r.code)
+        # DB code 为大写（统一口径），QLib features 目录名为小写，此处对齐
+        code_dir = os.path.join(feat_root, (r.code or "").lower())
         fields: list[str] = []
         if os.path.isdir(code_dir):
             fields = sorted(

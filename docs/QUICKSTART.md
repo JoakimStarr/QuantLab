@@ -122,11 +122,11 @@ ADMIN_PASSWORD=admin123
 ./start.sh
 ```
 
-启动后访问：
-- 前端：http://localhost:3000
-- 后端 API：http://localhost:8000
-- Swagger 文档：http://localhost:8000/docs
-- Prometheus 指标：http://localhost:8000/metrics
+启动后访问（端口在 `.env` 的 `BACKEND_PORT` / `FRONTEND_PORT` 配置）：
+- 前端：http://localhost:3001
+- 后端 API：http://localhost:8101
+- Swagger 文档：http://localhost:8101/docs
+- Prometheus 指标：http://localhost:8101/metrics
 
 按 `Ctrl+C` 停止所有服务。
 
@@ -175,7 +175,7 @@ npm install --registry=https://registry.npmmirror.com
 
 ### Q4: 前端能打开但接口 422/500
 
-- 确认后端已启动（`http://localhost:8000/docs` 能访问）
+- 确认后端已启动（`http://localhost:8101/docs` 能访问，端口见 `.env` 的 `BACKEND_PORT`）
 - 查看后端日志：`tail -f logs/quantlab.log`（同步问题看 `logs/sync.log`，错误看 `logs/error.log`）
 - 数据未同步时部分接口会返回 503（qlib 不可用），先同步数据
 

@@ -55,15 +55,16 @@ def setup_cors(app):
     if cors_env:
         origins = [o.strip() for o in cors_env.split(",") if o.strip()]
     else:
+        fp = os.getenv("FRONTEND_PORT", "3001")
         origins = (settings.api or {}).get("cors_origins") or [
-            "http://localhost:3000", "http://127.0.0.1:3000",
+            f"http://localhost:{fp}", f"http://127.0.0.1:{fp}",
         ]
     # 安全断言：'*' + allow_credentials=True 时 starlette 会回显任意 Origin，
     # 等于向所有网站开放带凭证跨域——直接拒绝启动（fail fast）
     if "*" in origins:
         raise ValueError(
             "CORS_ORIGINS 含 '*' 且 allow_credentials=True 为危险组合，"
-            "请显式列出允许的来源（逗号分隔），如 http://localhost:3000"
+            "请显式列出允许的来源（逗号分隔），如 http://localhost:3001"
         )
     app.add_middleware(
         CORSMiddleware,

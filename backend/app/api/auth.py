@@ -138,11 +138,8 @@ async def ai_status(_: User = Depends(require_user)):
     from app.services.ai.provider_router import ProviderRouter
 
     router_ = ProviderRouter()
-    providers = []
-    if router_.primary:
-        providers.append({"provider": "opencodezen", "model": router_.primary.model, "ready": True})
-    if router_.fallback:
-        providers.append({"provider": "glm", "model": router_.fallback.model, "ready": True})
-    if router_.tertiary:
-        providers.append({"provider": "siliconflow", "model": router_.tertiary.model, "ready": True})
+    providers = [
+        {"provider": e["name"], "model": e["client"].model, "ready": True}
+        for e in router_._route_order
+    ]
     return ApiResponse(ok=True, data={"providers": providers, "count": len(providers)})

@@ -20,6 +20,8 @@ import {
   Sunrise,
 } from '@element-plus/icons-vue'
 
+import GearIcon from '@/components/common/GearIcon.vue'
+
 const iconMap = {
   DataAnalysis,
   Coin,
@@ -36,6 +38,7 @@ const iconMap = {
   Place,
   Tickets,
   Sunrise,
+  Setting: GearIcon,
 }
 
 export function resolveIcon(name) {

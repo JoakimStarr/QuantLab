@@ -7,6 +7,7 @@ from .baostock import (
     TradeCalendar,
 )
 from .classic_backtest_history import ClassicBacktestHistory
+from .daily_report import DailyReport
 from .data_sync_schedule import DataSyncSchedule
 from .factor import Factor
 from .fundamental import FinancialIndicator
@@ -46,4 +47,5 @@ __all__ = [
     "EtfDaily",
     "SyncSchedule",
     "DataSyncSchedule",
+    "DailyReport",
 ]

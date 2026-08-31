@@ -6,7 +6,7 @@
 """
 from datetime import date
 
-from sqlalchemy import Date, Float, Index, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, Float, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -22,7 +22,7 @@ class FinancialIndicator(Base):
     __tablename__ = "financial_indicator"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(16), comment="QLib代码 sh600000")
+    code: Mapped[str] = mapped_column(String(16), comment="QLib代码（大写 SH600000；bin 广播时转小写）")
     report_date: Mapped[date] = mapped_column(Date, comment="报告期（季度截止日）")
     field_name: Mapped[str] = mapped_column(String(64), comment="字段名（bin 广播同名）")
     value: Mapped[float | None] = mapped_column(Float, nullable=True, comment="数值")
@@ -33,4 +33,6 @@ class FinancialIndicator(Base):
     __table_args__ = (
         UniqueConstraint("code", "report_date", "field_name", name="uq_financial_indicator"),
         Index("idx_fin_indicator_code_date", "code", "available_date"),
+        # DB 统一大写口径（与库内 ck 约束同名，create_all 新库自动带上）
+        CheckConstraint("code = UPPER(code)", name="ck_financial_indicator_code_uppercase"),
     )

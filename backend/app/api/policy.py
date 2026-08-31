@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, func, or_, select
+from sqlalchemy.orm import load_only
 
 from app.core.database import get_db
 from app.models.policy import PolicyAnalysis, PolicyNews
@@ -40,9 +41,17 @@ async def policy_ai_sync_api(
 
     返回 pending_count：本次窗口内待处理天数，前端据此判断任务是否已结束，
     避免拿全历史口径的 status.ai_pending 当完成信号（那会导致轮询永不终止）。
+
+    并发保护：policy_ai.lock 被占用说明已有 worker 在跑（手动点击 + 定时任务叠加），
+    直接返回 409，避免多个 worker 重复处理同一批失败日期。
     """
-    from app.services.data.policy_ai import _pending_dates
+    from app.services.data.policy_ai import _pending_dates, _policy_ai_lock
     pending = await _pending_dates(backfill_days)
+
+    probe = _policy_ai_lock()
+    if not probe.try_acquire():
+        raise HTTPException(status_code=409, detail="已有 AI 政策解读任务在运行，请稍后再试")
+    probe.release()
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("policy_ai", "policy_ai", days=backfill_days)
@@ -72,26 +81,45 @@ async def policy_list_api(
     source: str = Query(None, description="数据源过滤：cctv/cjzc/em（空则全部）"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    include_content: bool = Query(False, description="是否返回新闻全文（列表默认不返回，展开时按需拉取）"),
     db=Depends(get_db),
 ):
-    """政策风向列表：按播出日期倒序 + 关键词过滤（标题/正文/AI关键词）+ 分页。"""
-    query = select(PolicyNews, PolicyAnalysis)
+    """政策风向列表：按播出日期倒序 + 关键词过滤（标题/正文/AI关键词）+ 分页。
+
+    content 是体积最大的字段（一整天全文数 KB），列表折叠态只需标题。
+    默认不加载 content，展开单条时由 /policy/news/{news_id} 按需拉取，显著减小列表载荷。
+    """
+    filters = []
     if start:
-        query = query.where(PolicyNews.news_date >= _parse_date(start, "start"))
+        filters.append(PolicyNews.news_date >= _parse_date(start, "start"))
     if end:
-        query = query.where(PolicyNews.news_date <= _parse_date(end, "end"))
+        filters.append(PolicyNews.news_date <= _parse_date(end, "end"))
+    if source:
+        filters.append(PolicyNews.source == source)
+    # 关键词检索涉及 AI 关键词（policy_analysis.keywords）；无关键词时避免 join analysis
+    needs_analysis = bool(keyword)
     if keyword:
         kw = f"%{keyword.strip()}%"
-        query = query.where(or_(
+        filters.append(or_(
             PolicyNews.title.ilike(kw),
             PolicyNews.content.ilike(kw),
             PolicyAnalysis.keywords.cast(String).ilike(kw),
         ))
-    if source:
-        query = query.where(PolicyNews.source == source)
-    query = query.outerjoin(PolicyAnalysis, PolicyAnalysis.news_date == PolicyNews.news_date)
 
-    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    # 总数：直接对 news 表计数（无关键词不必 join，避免子查询物化 JSON 大字段）
+    count_q = select(func.count(PolicyNews.id))
+    if needs_analysis:
+        count_q = count_q.join(PolicyAnalysis, PolicyAnalysis.news_date == PolicyNews.news_date)
+    for f in filters:
+        count_q = count_q.where(f)
+    total = (await db.execute(count_q)).scalar() or 0
+
+    query = select(PolicyNews, PolicyAnalysis)
+    if not include_content:
+        query = query.options(load_only(PolicyNews.id, PolicyNews.news_date, PolicyNews.title, PolicyNews.source))
+    query = query.outerjoin(PolicyAnalysis, PolicyAnalysis.news_date == PolicyNews.news_date)
+    for f in filters:
+        query = query.where(f)
     rows = (await db.execute(
         query.order_by(PolicyNews.news_date.desc(), PolicyNews.id.desc())
         .offset((page - 1) * page_size).limit(page_size)
@@ -100,11 +128,27 @@ async def policy_list_api(
         "id": r.PolicyNews.id,
         "news_date": r.PolicyNews.news_date.isoformat(),
         "title": r.PolicyNews.title,
-        "content": r.PolicyNews.content,
+        "content": r.PolicyNews.content if include_content else None,
         "source": r.PolicyNews.source or "cctv",
         "ai_analyzed": bool(r.PolicyAnalysis and r.PolicyAnalysis.status == "done"),
+        "ai_status": r.PolicyAnalysis.status if r.PolicyAnalysis else None,
     } for r in rows]
     return ApiResponse(ok=True, data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/news/{news_id}")
+async def policy_news_detail_api(news_id: int, db=Depends(get_db)):
+    """单条新闻全文（列表默认不带 content，展开条目时按需拉取）。"""
+    r = (await db.execute(select(PolicyNews).where(PolicyNews.id == news_id))).scalar_one_or_none()
+    if r is None:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+    return ApiResponse(ok=True, data={
+        "id": r.id,
+        "news_date": r.news_date.isoformat(),
+        "title": r.title,
+        "content": r.content,
+        "source": r.source or "cctv",
+    })
 
 
 @router.get("/status")
@@ -196,6 +240,7 @@ def _analysis_to_dict(a: PolicyAnalysis) -> dict:
         "keywords": a.keywords,
         "market_impact": a.market_impact,
         "error": a.error,
+        "retry_count": a.retry_count,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }
 

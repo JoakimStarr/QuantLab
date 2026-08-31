@@ -4,7 +4,7 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,7 +48,6 @@ class AppSettings(SettingsBaseModel):
 
 
 class DataSettings(SettingsBaseModel):
-    db_path: str = "data/quantlab.db"
     models_dir: str = "models"
     processed_dir: str = "data/processed"
     raw_dir: str = "data/raw"
@@ -64,14 +63,35 @@ class AIProviderEndpoint(SettingsBaseModel):
 
 
 class AIProviderSettings(SettingsBaseModel):
-    primary: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
-    fallback: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
-    tertiary: AIProviderEndpoint = Field(default_factory=AIProviderEndpoint)
+    providers: list[AIProviderEndpoint] = Field(default_factory=list)
+    main_provider: str = ""
     force_json_output: bool = True
     cache_ttl: str = "day"
     retry_times: int = 1
     route_budget_seconds: int = 120
     total_timeout_seconds: int = 10
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_slots_to_list(cls, value):
+        """兼容旧 config：把 primary/fallback/tertiary 三槽迁移为 providers 列表。
+
+        未知名沿用 opencodezen/glm/siliconflow。main_provider 默认取列表首个。
+        """
+        if not isinstance(value, dict) or not any(
+            k in value for k in ("primary", "fallback", "tertiary")
+        ):
+            return value
+        defaults = {"primary": "opencodezen", "fallback": "glm", "tertiary": "siliconflow"}
+        slots = []
+        for s in ("primary", "fallback", "tertiary"):
+            blk = value.get(s)
+            if isinstance(blk, dict) and (blk.get("provider") or blk.get("base_url") or blk.get("model")):
+                slots.append({**blk, "provider": blk.get("provider") or defaults[s]})
+        out = {k: v for k, v in value.items() if k not in ("primary", "fallback", "tertiary")}
+        out["providers"] = slots
+        out.setdefault("main_provider", slots[0]["provider"] if slots else "")
+        return out
 
 
 class APISettings(SettingsBaseModel):
@@ -79,8 +99,8 @@ class APISettings(SettingsBaseModel):
     version: str = "v1"
     cors_origins: list[str] = Field(
         default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
+            f"http://localhost:{os.getenv('FRONTEND_PORT', '3001')}",
+            f"http://127.0.0.1:{os.getenv('FRONTEND_PORT', '3001')}",
         ]
     )
 
@@ -345,6 +365,22 @@ class Settings(BaseSettings):
                 updated = current.__class__(**(cfg[section]))
                 setattr(self, field_name, updated)
 
+    def reload(self) -> None:
+        """保存设置后重新加载 config.yaml 与 .env（API keys / 安全配置）。
+
+        不重建 Settings 实例（会破坏各模块持有的单例引用），
+        而是重新读取配置文件并原位更新当前实例字段。
+        """
+        _project_root = Path(os.getenv("PROJECT_ROOT") or self.PROJECT_ROOT)
+        load_dotenv(_project_root / ".env", override=True)
+        self._load_yaml()
+        self._load_security_from_env()
+        self.glm_api_key = os.getenv("GLM_API_KEY", "")
+        self.siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY", "")
+        self.opencodezen_api_key = os.getenv("OPENCODEZEN_API_KEY", "")
+        self.fred_api_key = os.getenv("FRED_API_KEY", "")
+        self.eia_api_key = os.getenv("EIA_API_KEY", "")
+
     def _load_security_from_env(self) -> None:
         """从环境变量加载安全配置。"""
         app_env = os.getenv("APP_ENV", "development").lower()
@@ -381,9 +417,6 @@ class Settings(BaseSettings):
     def app_timezone(self) -> str:
         return self.app.timezone
 
-    @property
-    def db_path(self) -> str:
-        return str(self.PROJECT_ROOT / self.data.db_path)
 
     @property
     def qlib_provider_path(self) -> str:

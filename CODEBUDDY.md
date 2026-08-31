@@ -18,23 +18,24 @@ Python is pinned to 3.11 (`pyqlib` does not support 3.13). The venv lives at `.v
 # One-time environment bootstrap (venv + deps + data dirs + .env)
 ./setup.sh
 
-# Start dev services (backend :8000 with --reload, frontend :3000 via Vite)
+# Start dev services (backend/frontend ports come from `.env`: BACKEND_PORT=8101, FRONTEND_PORT=3001)
 ./start.sh dev        # 应用日志写 logs/quantlab.log + logs/error.log，worker 写 logs/sync.log
                       # （结构化 JSON，前端"日志管理"页可视化查看；前端页面日志在浏览器 DevTools）
 
-# Backend alone (from repo root)
-.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000  # cwd=backend
+# Backend alone (from repo root; port from .env BACKEND_PORT, default 8101)
+.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8101  # cwd=backend
 
 # Frontend alone
 cd frontend && npm run dev
 
 # Manual data operations (no auto-sync; all run in an independent worker subprocess)
-curl -X POST 'http://localhost:8000/api/v1/quant/data/sync-full?years=5'        # 一键全同步：A股回填→指数→宏观→财报→外盘
-curl -X POST 'http://localhost:8000/api/v1/quant/data/eod-sync?source=baostock&days=5'   # 增量 EOD（baostock/akshare）
-curl -X POST 'http://localhost:8000/api/v1/quant/data/fundamental/sync?broadcast=true'  # 财报拉取(+广播到 bin)
-curl -X POST 'http://localhost:8000/api/v1/quant/data/sync-external-market'     # 外盘隔夜情绪因子
-curl 'http://localhost:8000/api/v1/quant/data/validate?universe=all'            # 全市场数据校验
-curl -X POST 'http://localhost:8000/api/v1/quant/data/repair' -H 'Content-Type: application/json' -d '{"universe":"all","include_baostock":false}'
+# 以下 curl 用后端端口 ${BACKEND_PORT:-8101}（见 .env）
+curl -X POST 'http://localhost:8101/api/v1/quant/data/sync-full?years=5'        # 一键全同步：A股回填→指数→宏观→财报→外盘
+curl -X POST 'http://localhost:8101/api/v1/quant/data/eod-sync?source=baostock&days=5'   # 增量 EOD（baostock/akshare）
+curl -X POST 'http://localhost:8101/api/v1/quant/data/fundamental/sync?broadcast=true'  # 财报拉取(+广播到 bin)
+curl -X POST 'http://localhost:8101/api/v1/quant/data/sync-external-market'     # 外盘隔夜情绪因子
+curl 'http://localhost:8101/api/v1/quant/data/validate?universe=all'            # 全市场数据校验
+curl -X POST 'http://localhost:8101/api/v1/quant/data/repair' -H 'Content-Type: application/json' -d '{"universe":"all","include_baostock":false}'
 ```
 
 ### Tests
@@ -131,7 +132,7 @@ Important: the baseline migration `23fc4c667c2f` is an **empty** `upgrade` — t
 
 - `views/quant/` — business pages: `Dashboard.vue`, `FactorLibrary.vue` (expression cells truncate single-line with ellipsis; "补算指标" button in the filter toolbar applies to any selected factor, not just alpha158), `Strategy.vue`, `Mining.vue`, `DataStatus.vue` (data management: "开始同步" submits the full sync chain, plus EOD/指数/财报/外盘 buttons, data validation + 一键补齐 dialogs, an index table from `stock_index`, and a sync-statistics panel; 同步监控/系统监控 pages were removed), `FactorCompare.vue`, `BacktestCompare.vue`, etc.
 - `stores/` (Pinia) — `factor.js` holds a 5-min-cached factor list; invalidate after mutations. `api/` — axios wrappers per domain. `composables/` — `useWebSocket`.
-- Vite dev server proxies `/api` and `/ws` to `http://localhost:8000`.
+- Vite dev server proxies `/api` and `/ws` to `http://localhost:${BACKEND_PORT:-8101}` (from `.env`).
 
 ## Conventions and gotchas
 

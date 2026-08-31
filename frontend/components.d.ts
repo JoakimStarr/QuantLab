@@ -67,6 +67,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es/components/tooltip/index')['ElTooltip']
     ErrorBoundary: typeof import('./src/components/ErrorBoundary.vue')['default']
     FactorStats: typeof import('./src/components/dashboard/FactorStats.vue')['default']
+    GearIcon: typeof import('./src/components/common/GearIcon.vue')['default']
     Guide: typeof import('./src/components/common/Guide.vue')['default']
     KLineChart: typeof import('./src/components/dashboard/KLineChart.vue')['default']
     KpiCards: typeof import('./src/components/dashboard/KpiCards.vue')['default']

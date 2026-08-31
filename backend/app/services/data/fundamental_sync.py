@@ -161,7 +161,8 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
             except (ValueError, IndexError):
                 continue
             rows.append({
-                "code": qlib_code,
+                # DB 统一大写口径（与 stock_daily 一致）；QLib bin 目录仍用小写（广播时 lower）
+                "code": qlib_code.upper(),
                 "report_date": stat,
                 "field_name": field,
                 "value": val,
@@ -252,7 +253,8 @@ async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None,
         if not os.path.isdir(code_dir):
             continue
         for field in FIN_FIELD_NAMES:
-            series = series_map.get((code, field))
+            # features 目录名为小写（QLib 约定），DB code 为大写，此处对齐
+            series = series_map.get((code.lower(), field))
             if series is None:
                 continue
             values = _forward_fill_series(series, cal_dates)
@@ -327,8 +329,8 @@ async def fetch_all_financial(codes: list[str], progress_cb=None) -> tuple[int, 
     if index_codes:
         codes = [c for c in codes if c not in index_codes]
 
-    existing = await _load_fetched_codes()
-    todo = [c for c in codes if c not in existing]
+    existing = await _load_fetched_codes()  # DB code 为大写
+    todo = [c for c in codes if c.upper() not in existing]  # codes 来自 features 目录（小写）
     skipped = len(codes) - len(todo)
     expected = expected_latest_report_date()
     if skipped:

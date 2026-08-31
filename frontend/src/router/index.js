@@ -34,10 +34,31 @@ const routes = [
         name: 'FactorLibrary',
         component: () => import('@/views/quant/FactorLibrary.vue'),
         meta: {
+          title: '因子库（旧版）',
+          icon: 'Coin',
+          transition: 'fade-in-up',
+          keepAlive: true,
+        },
+      },
+      {
+        path: 'quant/factor-library',
+        name: 'FactorLibraryV2',
+        component: () => import('@/views/quant/FactorLibraryV2.vue'),
+        meta: {
           title: '因子库',
           icon: 'Coin',
           transition: 'fade-in-up',
           keepAlive: true,
+        },
+      },
+      {
+        path: 'quant/factor/:id',
+        name: 'FactorDetail',
+        component: () => import('@/views/quant/FactorDetail.vue'),
+        meta: {
+          title: '因子详情',
+          transition: 'fade-in-up',
+          keepAlive: false,
         },
       },
       {
@@ -107,6 +128,17 @@ const routes = [
         },
       },
       {
+        path: 'quant/daily-report',
+        name: 'DailyReport',
+        component: () => import('@/views/quant/DailyReport.vue'),
+        meta: {
+          title: '每日晨报',
+          icon: 'Sunrise',
+          transition: 'fade-in-up',
+          keepAlive: false,
+        },
+      },
+      {
         path: 'quant/factor-compare',
         name: 'FactorCompare',
         component: () => import('@/views/quant/FactorCompare.vue'),
@@ -164,6 +196,17 @@ const routes = [
         meta: {
           title: '日志管理',
           icon: 'Document',
+          transition: 'fade-in-up',
+          keepAlive: false,
+        },
+      },
+      {
+        path: 'system/settings',
+        name: 'SystemSettings',
+        component: () => import('@/views/quant/Settings.vue'),
+        meta: {
+          title: '系统设置',
+          icon: 'Setting',
           transition: 'fade-in-up',
           keepAlive: false,
         },

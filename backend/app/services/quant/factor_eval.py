@@ -87,22 +87,50 @@ def _load_instrument_spans(market: str) -> dict:
     return code_spans
 
 
+def _pg_fetchone(query: str, *args):
+    """同步执行的 PG 单行查询（asyncpg，SQLite 已全面弃用）。
+
+    兼容两种调用环境：无事件循环（worker 脚本）与已运行事件循环
+    （FastAPI 线程池中的同步代码）：后者在新线程里用独立事件循环
+    执行，避免 asyncio.run 嵌套报错。
+    """
+    import asyncio
+    import concurrent.futures
+
+    import asyncpg
+
+    dsn = (
+        f"postgresql://{settings.postgres_user}:{settings.postgres_password}"
+        f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+    )
+
+    async def _run():
+        conn = await asyncpg.connect(dsn)
+        try:
+            return await conn.fetchrow(query, *args)
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_run())
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, _run()).result()
+
+
 def _resolve_task_id_from_factor_ids(method: str, factor_ids: list):
     """旧格式 AutoML(method, fid1, fid2, ...) 反查 task_id。
 
     旧表达式里数字是基础因子 id，无法直接得到 task_id；通过表达式精确
     匹配 factor 表的 source_task_id 字段获取。查不到时返回 None。
     """
-    import sqlite3
     expr = f"AutoML({method},{','.join(map(str, factor_ids))})"
     try:
-        with sqlite3.connect(settings.db_path) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT source_task_id FROM factor WHERE expression = ? AND source_task_id IS NOT NULL",
-                (expr,),
-            )
-            row = cur.fetchone()
+        row = _pg_fetchone(
+            "SELECT source_task_id FROM factor WHERE expression = $1 AND source_task_id IS NOT NULL",
+            expr,
+        )
         return str(row[0]) if row else None
     except Exception as e:
         logger.warning("反查 AutoML task_id 失败 expr=%s: %s", expr, e)

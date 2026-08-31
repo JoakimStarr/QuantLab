@@ -297,7 +297,8 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
             rows = []
             for _, r in df_basic.iterrows():
                 rows.append({
-                    "code": from_baostock_code(str(r["code"])),
+                    # DB 统一大写口径（与 stock_daily 一致）
+                    "code": from_baostock_code(str(r["code"])).upper(),
                     "name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
                     "ipo_date": _parse_date(r.get("ipoDate")),
                     "out_date": _parse_date(r.get("outDate")),
@@ -313,7 +314,8 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
             rows = []
             for _, r in df_industry.iterrows():
                 rows.append({
-                    "code": from_baostock_code(str(r["code"])),
+                    # DB 统一大写口径（与 stock_daily 一致）
+                    "code": from_baostock_code(str(r["code"])).upper(),
                     "code_name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
                     "industry": str(r["industry"]) if pd.notna(r["industry"]) else None,
                     "industry_classification": str(r["industryClassification"]) if pd.notna(r["industryClassification"]) else None,

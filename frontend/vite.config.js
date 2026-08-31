@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
@@ -65,50 +65,61 @@ function ElementPlusOnDemandResolver() {
   }))
 }
 
-export default defineConfig({
-  plugins: [
-    vue(),
-    AutoImport({ resolvers: [...ElementPlusOnDemandResolver()] }),
-    Components({ resolvers: [...ElementPlusOnDemandResolver()] })
-  ],
-  resolve: {
-    alias: { '@': resolve(__dirname, 'src') }
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        api: 'modern-compiler',
-        silenceDeprecations: ['legacy-js-api'],
+export default defineConfig(({ mode }) => {
+  // 端口从仓库根目录 .env 读取（BACKEND_PORT / FRONTEND_PORT），改端口只改 .env
+  const rootEnv = loadEnv(mode, resolve(__dirname, '..'), [
+    'VITE_',
+    'BACKEND_PORT',
+    'FRONTEND_PORT'
+  ])
+  const backendPort = rootEnv.BACKEND_PORT || '8000'
+  const frontendPort = rootEnv.FRONTEND_PORT || '3000'
+
+  return {
+    plugins: [
+      vue(),
+      AutoImport({ resolvers: [...ElementPlusOnDemandResolver()] }),
+      Components({ resolvers: [...ElementPlusOnDemandResolver()] })
+    ],
+    resolve: {
+      alias: { '@': resolve(__dirname, 'src') }
+    },
+    css: {
+      preprocessorOptions: {
+        scss: {
+          api: 'modern-compiler',
+          silenceDeprecations: ['legacy-js-api'],
+        },
       },
     },
-  },
-  server: {
-    port: 3000,
-    // 允许 cloudflared 快速隧道域名访问 dev server（Vite 5.3+ 默认拦截非 localhost Host）
-    allowedHosts: ['.trycloudflare.com'],
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/ws': {
-        target: 'ws://localhost:8000',
-        ws: true,
-        changeOrigin: true
+    server: {
+      port: Number(frontendPort),
+      // 允许 cloudflared 快速隧道域名访问 dev server（Vite 5.3+ 默认拦截非 localhost Host）
+      allowedHosts: ['.trycloudflare.com'],
+      proxy: {
+        '/api': {
+          target: `http://localhost:${backendPort}`,
+          changeOrigin: true
+        },
+        '/ws': {
+          target: `ws://localhost:${backendPort}`,
+          ws: true,
+          changeOrigin: true
+        }
       }
-    }
-  },
-  build: {
-    rollupOptions: {
-      output: {
-        // 函数形式 manualChunks：按 node_modules 路径分组，避免对象形式解析包入口
-        // 导致 barrel 被强制纳入图、破坏 tree-shaking。
-        manualChunks(id) {
-          if (!id.includes('node_modules/')) return
-          if (id.includes('element-plus') || id.includes('@element-plus/icons-vue')) return 'vendor-element'
-          if (id.includes('/echarts/') || id.includes('vue-echarts') || id.includes('/zrender/')) return 'vendor-echarts'
-          if (id.includes('/vue/') || id.includes('vue-router') || id.includes('/pinia/') || id.includes('@vue/')) return 'vendor-vue'
-          if (id.includes('/axios/') || id.includes('/dayjs/')) return 'vendor-utils'
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          // 函数形式 manualChunks：按 node_modules 路径分组，避免对象形式解析包入口
+          // 导致 barrel 被强制纳入图、破坏 tree-shaking。
+          manualChunks(id) {
+            if (!id.includes('node_modules/')) return
+            if (id.includes('element-plus') || id.includes('@element-plus/icons-vue')) return 'vendor-element'
+            if (id.includes('/echarts/') || id.includes('vue-echarts') || id.includes('/zrender/')) return 'vendor-echarts'
+            if (id.includes('/vue/') || id.includes('vue-router') || id.includes('/pinia/') || id.includes('@vue/')) return 'vendor-vue'
+            if (id.includes('/axios/') || id.includes('/dayjs/')) return 'vendor-utils'
+          }
         }
       }
     }

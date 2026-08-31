@@ -147,11 +147,20 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.kind == "policy_ai":
         # AI 政策解读（LLM 逐日生成结构化解读）只写 policy_analysis，不需要爬取锁。
+        # 但要防并发：手动点击 + 定时任务叠加会 spawn 多个 worker 重复处理同一批
+        # 失败日期，因此用 policy_ai.lock（flock）保证单实例，抢不到直接退出。
         # backfill_days 透传 API 的 days 参数（默认 30）。
-        from app.services.data.policy_ai import run_policy_ai_task
+        from app.services.data.policy_ai import _policy_ai_lock, run_policy_ai_task
 
-        logger.info("policy_ai worker 启动 pid=%s backfill_days=%s", os.getpid(), args.days)
-        await run_policy_ai_task(backfill_days=args.days or 30)
+        lock = _policy_ai_lock()
+        if not lock.try_acquire():
+            logger.info("已有 AI 政策解读进程在运行(policy_ai.lock 被占用)，本 worker 直接退出")
+            return
+        try:
+            logger.info("policy_ai worker 启动 pid=%s backfill_days=%s", os.getpid(), args.days)
+            await run_policy_ai_task(backfill_days=args.days or 30)
+        finally:
+            lock.release()
         return
 
     from app.services.data.sync_lock import SyncLock
@@ -322,7 +331,10 @@ def main() -> None:
         level=settings.logging.level,
         console=False,
         log_file="sync.log",
-        error_file=None,
+        # worker 的 WARNING+（如 LLM provider 失败）也写入 error.log，
+        # 与 web 进程共享同一错误日志文件（LockedRotatingFileHandler 跨进程安全），
+        # 避免只写 sync.log 导致排查时在 error.log/quantlab.log 里看不到失败原因。
+        error_file="error.log",
     )
 
     try:

@@ -5,7 +5,7 @@ from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.schemas.factor import FactorCreate
 from app.services.factor.library import (
-    list_factors, get_factor, add_factor, disable_factor,
+    list_factors, get_factor, get_factor_summary, add_factor, disable_factor,
 )
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.builtin_factors import seed_builtin_factors
@@ -18,12 +18,23 @@ async def list_factors_api(
     category: str = Query(None),
     status: str = Query("active"),
     sort_by: str = Query("ic"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    keyword: str = Query(None, description="名称/表达式/描述模糊搜索"),
+    ids: str = Query(None, description="逗号分隔的因子 ID 白名单（如仅衰减视图）"),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
 ):
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()] if ids else None
     items, total = await list_factors(category=category, status=status, sort_by=sort_by,
+                                      sort_order=sort_order, keyword=keyword, ids=id_list,
                                       limit=limit, offset=offset)
     return ApiResponse(ok=True, data={"items": items, "total": total})
+
+
+@router.get("/summary")
+async def factor_summary_api():
+    """因子库概览统计（总数/已评价/平均 IC/类别分布），列表页按需加载。"""
+    return ApiResponse(ok=True, data=await get_factor_summary())
 
 
 @router.get("/expression-schema")

@@ -5,6 +5,16 @@ export function listFactors(params) {
   return request.get('/factors', { params })
 }
 
+// 因子库概览统计（总数/已评价/平均 IC/类别分布），列表页概览条按需加载
+export function listFactorSummary() {
+  return request.get('/factors/summary')
+}
+
+// 单因子详情（含 IC/RankIC/ICIR/换手/评价区间等评价字段）
+export function getFactor(id) {
+  return request.get('/factors/' + id)
+}
+
 // 表达式白名单（算子+字段），供编辑器自动补全（与后端校验共用同一数据源）
 export function getExpressionSchema() {
   return request.get('/factors/expression-schema')

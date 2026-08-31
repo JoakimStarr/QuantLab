@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.core.database import get_db
 from app.models.macro import MacroIndicator
@@ -127,32 +127,7 @@ async def macro_snapshot_api(db=Depends(get_db)):
 
     供前端"最新值"卡片使用，替代全量拉历史数据只为取最新值的做法。
     """
-    rows = await db.execute(text("""
-        SELECT indicator, field_name,
-               MAX(CASE WHEN rn = 1 THEN unit END) AS unit,
-               MAX(CASE WHEN rn = 1 THEN available_date END) AS latest_date,
-               MAX(CASE WHEN rn = 1 THEN value END) AS latest_value,
-               MAX(CASE WHEN rn = 2 THEN available_date END) AS prev_date,
-               MAX(CASE WHEN rn = 2 THEN value END) AS prev_value
-        FROM (
-            SELECT indicator, field_name, unit, available_date, value,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY indicator, field_name
-                       ORDER BY available_date DESC
-                   ) AS rn
-            FROM macro_indicator
-        ) t
-        WHERE rn <= 2
-        GROUP BY indicator, field_name
-        ORDER BY indicator, field_name
-    """))
-    items = [{
-        "indicator": r.indicator,
-        "field_name": r.field_name,
-        "unit": r.unit,
-        "latest_date": r.latest_date.isoformat() if r.latest_date else None,
-        "latest_value": r.latest_value,
-        "prev_date": r.prev_date.isoformat() if r.prev_date else None,
-        "prev_value": r.prev_value,
-    } for r in rows]
+    from app.services.data.macro_snapshot import get_macro_snapshot
+
+    items = await get_macro_snapshot(db)
     return ApiResponse(ok=True, data={"items": items, "total": len(items)})

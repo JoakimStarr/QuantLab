@@ -39,12 +39,12 @@ async def main():
         instruments = D.instruments(market="csi300")
         df = D.features(instruments, ["$close"], start_time="2024-01-01", end_time="2024-06-01")
         if df is None or df.empty:
-            print("  ✗ 无数据，请先同步: curl -X POST 'http://localhost:8000/api/v1/quant/data/sync'")
+            print("  ✗ 无数据，请先同步: curl -X POST 'http://localhost:8101/api/v1/quant/data/sync'")
             sys.exit(1)
         print(f"  ✓ 数据就绪，样本行数: {len(df)}")
     except Exception as e:
         print(f"  ✗ 数据加载失败: {e}")
-        print("  请先同步: curl -X POST 'http://localhost:8000/api/v1/quant/data/sync'")
+        print("  请先同步: curl -X POST 'http://localhost:8101/api/v1/quant/data/sync'")
         sys.exit(1)
 
     # 3. 因子评价

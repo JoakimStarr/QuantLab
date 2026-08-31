@@ -239,6 +239,7 @@
           <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
           <div v-if="aiProgress" class="ai-progress">
             本次任务进度：{{ aiProgress.done }} / {{ aiProgress.total }} 天（失败 {{ aiProgress.failed }}）...
+            <div v-if="aiProgress.error" class="ai-progress-error">失败原因：{{ aiProgress.error }}</div>
           </div>
 
           <!-- 数据状态 -->
@@ -321,6 +322,9 @@
                 <el-tag v-if="item.ai_analyzed" size="small" type="success" effect="light" class="policy-item-ai">
                   AI解读
                 </el-tag>
+                <el-tag v-else-if="item.ai_status === 'failed'" size="small" type="danger" effect="light" class="policy-item-ai">
+                  AI解读失败
+                </el-tag>
                 <span class="policy-item-title">{{ item.title }}</span>
                 <el-icon class="policy-item-caret">
                   <CaretBottom v-if="expandedId !== item.id" />
@@ -331,52 +335,63 @@
                 <div v-if="expandedId === item.id" class="policy-item-body">
                   <!-- 新闻全文 -->
                   <div class="policy-item-section-title">新闻全文</div>
-                  <div v-if="item.content" class="policy-item-content">{{ item.content }}</div>
+                  <div v-if="item.contentLoading" class="ai-loading">全文加载中...</div>
+                  <div v-else-if="item.content" class="policy-item-content">{{ item.content }}</div>
                   <el-empty v-else description="无全文内容" :image-size="40" />
 
                   <!-- AI 解读 -->
                   <template v-if="aiDetail">
                     <div class="policy-item-section-title">AI 政策解读</div>
-                    <div v-if="aiDetail.policy_tone" class="ai-tone">
-                      <el-tag size="small" type="warning" effect="plain">当日定调</el-tag>
-                      <span>{{ aiDetail.policy_tone }}</span>
-                    </div>
-                    <div v-if="aiDetail.summary" class="ai-summary">{{ aiDetail.summary }}</div>
+                    <el-alert
+                      v-if="aiDetail.status === 'failed' && aiDetail.error"
+                      :title="`AI 解读失败（第 ${aiDetail.retry_count || '?'} 次重试）：${aiDetail.error}`"
+                      type="error"
+                      :closable="false"
+                      show-icon
+                      class="ai-failed-alert"
+                    />
+                    <template v-else>
+                      <div v-if="aiDetail.policy_tone" class="ai-tone">
+                        <el-tag size="small" type="warning" effect="plain">当日定调</el-tag>
+                        <span>{{ aiDetail.policy_tone }}</span>
+                      </div>
+                      <div v-if="aiDetail.summary" class="ai-summary">{{ aiDetail.summary }}</div>
 
-                    <!-- 点名行业/板块 -->
-                    <div v-if="aiDetail.sectors?.length" class="ai-sectors">
-                      <div class="ai-label">点名行业/板块</div>
-                      <div class="ai-chips">
-                        <el-tooltip
-                          v-for="s in aiDetail.sectors"
-                          :key="s.name"
-                          :content="s.reason || ''"
-                          placement="top"
-                        >
-                          <el-tag size="small" :type="dirType(s.direction)" effect="light">
-                            {{ s.name }} {{ s.direction }}
+                      <!-- 点名行业/板块 -->
+                      <div v-if="aiDetail.sectors?.length" class="ai-sectors">
+                        <div class="ai-label">点名行业/板块</div>
+                        <div class="ai-chips">
+                          <el-tooltip
+                            v-for="s in aiDetail.sectors"
+                            :key="s.name"
+                            :content="s.reason || ''"
+                            placement="top"
+                          >
+                            <el-tag size="small" :type="dirType(s.direction)" effect="light">
+                              {{ s.name }} {{ s.direction }}
+                            </el-tag>
+                          </el-tooltip>
+                        </div>
+                      </div>
+
+                      <!-- 政策主题 -->
+                      <div v-if="aiDetail.topics?.length" class="ai-topics">
+                        <div class="ai-label">政策主题</div>
+                        <div class="ai-chips">
+                          <el-tag v-for="t in aiDetail.topics" :key="t.topic" size="small" type="primary" effect="plain">
+                            {{ t.topic }} {{ (t.score * 100).toFixed(0) }}
                           </el-tag>
-                        </el-tooltip>
+                        </div>
                       </div>
-                    </div>
 
-                    <!-- 政策主题 -->
-                    <div v-if="aiDetail.topics?.length" class="ai-topics">
-                      <div class="ai-label">政策主题</div>
-                      <div class="ai-chips">
-                        <el-tag v-for="t in aiDetail.topics" :key="t.topic" size="small" type="primary" effect="plain">
-                          {{ t.topic }} {{ (t.score * 100).toFixed(0) }}
-                        </el-tag>
+                      <!-- 对市场影响 -->
+                      <div v-if="aiDetail.market_impact" class="ai-impact">
+                        <el-tag size="small" type="danger" effect="plain">市场影响</el-tag>
+                        <span>{{ aiDetail.market_impact }}</span>
                       </div>
-                    </div>
-
-                    <!-- 对市场影响 -->
-                    <div v-if="aiDetail.market_impact" class="ai-impact">
-                      <el-tag size="small" type="danger" effect="plain">市场影响</el-tag>
-                      <span>{{ aiDetail.market_impact }}</span>
-                    </div>
+                    </template>
                   </template>
-                  <div v-else-if="item.ai_analyzed" class="ai-loading">解读加载中...</div>
+                  <div v-else-if="item.ai_analyzed || item.ai_status === 'failed'" class="ai-loading">解读加载中...</div>
                   <div v-else class="ai-missing">该日暂无 AI 解读，可在顶部点击「AI 解读」批量生成</div>
                 </div>
               </transition>
@@ -467,7 +482,7 @@ import { useThemeRev } from '@/composables/useChartTheme'
 import { chartTheme } from '@/utils/chartTheme'
 import { buildTopicHeatMatrix, buildTopicCumulative } from '@/utils/policyTopics'
 import {
-  syncPolicy, getPolicyNews, getPolicyStatus, getPolicyLatest,
+  syncPolicy, getPolicyNews, getPolicyNewsDetail, getPolicyStatus, getPolicyLatest,
   syncPolicyAi, getPolicyAiProgress, getPolicyAiDetail, getPolicyAiTopics, getPolicySectorPerf,
   getPolicySchedule, savePolicySchedule,
 } from '@/api/policy'
@@ -728,7 +743,7 @@ function reset() {
   loadList()
 }
 
-// 展开条目：先展示全文，再按需拉取该日 AI 解读
+// 展开条目：先展示全文，再按需拉取该日 AI 解读（列表默认不含全文，展开时按需拉取）
 async function toggle(id, item) {
   if (expandedId.value === id) {
     expandedId.value = null
@@ -737,9 +752,22 @@ async function toggle(id, item) {
   }
   expandedId.value = id
   aiDetail.value = null
-  if (item.ai_analyzed) {
+  if (item.content == null && !item.contentLoading) {
+    item.contentLoading = true
+    try {
+      const r = await getPolicyNewsDetail(item.id)
+      if (expandedId.value === id) {
+        item.content = r?.content ?? null
+      }
+    } catch (e) {
+      if (expandedId.value === id) item.content = ''
+    } finally {
+      if (expandedId.value === id) item.contentLoading = false
+    }
+  }
+  if (item.ai_analyzed || item.ai_status === 'failed') {
     const r = await getPolicyAiDetail(item.news_date)
-    aiDetail.value = r || null
+    if (expandedId.value === id) aiDetail.value = r || null
   }
 }
 
@@ -796,12 +824,14 @@ async function doAiSync() {
           }
           return
         }
-        aiProgress.value = { total: p.total || 0, done: p.done || 0, failed: p.failed || 0 }
+        aiProgress.value = { total: p.total || 0, done: p.done || 0, failed: p.failed || 0, error: p.error || '' }
         if (p.status === 'done' || p.status === 'failed') {
           stopAiPoll()
           aiSyncing.value = false
           if (p.status === 'failed') {
-            ElMessage.warning('AI 解读任务异常结束')
+            ElMessage.warning(`AI 解读任务异常结束${p.error ? `：${p.error}` : ''}`)
+          } else if (p.failed > 0) {
+            ElMessage.warning(`AI 解读完成，${p.failed} 天失败${p.error ? `（${p.error.slice(0, 120)}${p.error.length > 120 ? '…' : ''}）` : ''}`)
           } else {
             ElMessage.success('AI 解读完成')
           }
@@ -1025,6 +1055,18 @@ onBeforeUnmount(stopAiPoll)
   margin-bottom: 12px;
   color: var(--el-color-warning);
   font-size: 13px;
+}
+
+.ai-progress-error {
+  margin-top: 4px;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.ai-failed-alert {
+  margin-bottom: 8px;
 }
 
 .policy-status {

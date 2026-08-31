@@ -7,7 +7,8 @@ export const navGroups = [
     title: '研究',
     items: [
       { path: '/', title: '研究首页', icon: 'DataAnalysis' },
-      { path: '/quant/factors', title: '因子库', icon: 'Coin' },
+      { path: '/quant/daily-report', title: '每日晨报', icon: 'Sunrise' },
+      { path: '/quant/factor-library', title: '因子库', icon: 'Coin' },
       { path: '/quant/strategy', title: '策略回测', icon: 'TrendCharts' },
       { path: '/quant/strategy-library', title: '策略库', icon: 'Collection' },
       { path: '/quant/mining', title: 'AI因子挖掘', icon: 'MagicStick' },
@@ -26,6 +27,7 @@ export const navGroups = [
     items: [
       { path: '/docs', title: '技术文档', icon: 'Reading' },
       { path: '/system/logs', title: '日志管理', icon: 'Document' },
+      { path: '/system/settings', title: '系统设置', icon: 'Setting' },
     ],
   },
 ]
@@ -34,10 +36,10 @@ export const navGroups = [
 export const navItems = navGroups.flatMap((group) => group.items)
 
 // 移动底栏直达 tab 子集（4 个高频入口，其余项收纳进"更多"抽屉）
-const mobileTabPaths = ['/', '/quant/factors', '/quant/strategy', '/quant/data']
+const mobileTabPaths = ['/', '/quant/factor-library', '/quant/strategy', '/quant/data']
 const mobileLabels = {
   '/': '首页',
-  '/quant/factors': '因子',
+  '/quant/factor-library': '因子',
   '/quant/strategy': '回测',
   '/quant/data': '数据',
 }

@@ -62,10 +62,10 @@ cp .env.example .env   # setup.sh 已自动复制，按需修改
 
 # 启动
 ./start.sh
-# 后端：  http://localhost:8000
-# 前端：  http://localhost:3000
-# 文档：  http://localhost:8000/docs  (Swagger UI)
-# 指标：  http://localhost:8000/metrics (Prometheus)
+# 后端：  http://localhost:8101   （端口见 .env 的 BACKEND_PORT）
+# 前端：  http://localhost:3001   （端口见 .env 的 FRONTEND_PORT）
+# 文档：  http://localhost:8101/docs  (Swagger UI)
+# 指标：  http://localhost:8101/metrics (Prometheus)
 ```
 
 ### 2.2 生产部署

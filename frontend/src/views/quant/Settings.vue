@@ -86,10 +86,11 @@
                 </el-button>
               </div>
               <div class="provider-card__body">
-                <div class="provider-card__meta">
-                  <span class="provider-meta-model">{{ p.model || '（未设置模型）' }}</span>
-                  <span class="provider-meta-url">{{ p.base_url }}</span>
-                </div>
+              <div class="provider-card__meta">
+                <span class="provider-meta-model">{{ p.model || '（未设置模型）' }}</span>
+                <span v-if="p.max_tokens" class="provider-meta-tokens">max_tokens={{ p.max_tokens }}</span>
+                <span class="provider-meta-url">{{ p.base_url }}</span>
+              </div>
               </div>
             </div>
           </div>
@@ -142,6 +143,17 @@
                     />
                   </el-form-item>
                 </div>
+                <el-form-item label="单次输出上限 max_tokens（推理模型请调大，如 8192）">
+                  <el-input-number
+                    v-model="editor.maxTokens"
+                    :min="256"
+                    :max="32768"
+                    :step="512"
+                    controls-position="right"
+                    placeholder="留空用全局默认"
+                    style="width: 100%"
+                  />
+                </el-form-item>
                 <div class="editor-actions">
                   <el-button :loading="editorTesting" @click="testEditor">测试连接</el-button>
                   <span class="spacer"></span>
@@ -466,7 +478,7 @@ const EDIT_PRESETS = [
 ]
 
 const editorOpen = ref(false)
-const editor = reactive({ id: null, name: '', baseUrl: '', model: '', apiKey: '' })
+const editor = reactive({ id: null, name: '', baseUrl: '', model: '', apiKey: '', maxTokens: null })
 const editorConfigured = ref(false) // 编辑的 provider 是否已有 key（打码提示）
 const editPreset = ref('自定义')
 const editorSaving = ref(false)
@@ -598,6 +610,7 @@ function openCreate() {
   editor.baseUrl = ''
   editor.model = ''
   editor.apiKey = ''
+  editor.maxTokens = null
   editorConfigured.value = false
   editPreset.value = '自定义'
   editorOpen.value = true
@@ -610,6 +623,7 @@ function openEdit(p) {
   editor.baseUrl = p.base_url
   editor.model = p.model
   editor.apiKey = ''
+  editor.maxTokens = p.max_tokens ?? null
   editorConfigured.value = p.configured
   editPreset.value = '自定义'
   editorOpen.value = true
@@ -657,6 +671,7 @@ async function saveProvider() {
   try {
     const payload = { name, base_url: baseUrl, model }
     if (editor.apiKey.trim()) payload.api_key = editor.apiKey.trim()
+    if (editor.maxTokens) payload.max_tokens = editor.maxTokens
     if (editor.id) {
       await updateAIProvider(editor.id, payload)
       ElMessage.success('已保存')
@@ -680,7 +695,7 @@ async function testEditor() {
       base_url: editor.baseUrl.trim(),
       api_key: editor.apiKey.trim() || undefined,
       model: editor.model.trim(),
-      max_tokens: aiGlobal.maxTokens,
+      max_tokens: editor.maxTokens || aiGlobal.maxTokens,
       temperature: aiGlobal.temperature,
     })
     if (res.ok) ElMessage.success(`连接成功${res.reply ? `：${res.reply}` : ''}`)
@@ -952,6 +967,11 @@ onMounted(load)
 .provider-meta-model {
   font-size: var(--font-size-sm);
   color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+.provider-meta-tokens {
+  font-size: 11.5px;
+  color: var(--el-color-warning);
   font-family: var(--font-mono);
 }
 .provider-meta-url {

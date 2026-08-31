@@ -17,8 +17,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODE="${1:-silent}"
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
+
+# 端口从 .env 读取（BACKEND_PORT / FRONTEND_PORT），改端口只改 .env 即可。
+# 用 sed 解析 KEY=value 而非 source，避免 .env 中出现 shell 语法时误执行。
+env_val() {
+    local key=$1 default=$2 val
+    val="$(sed -n "s/^[[:space:]]*${key}=//p" "$SCRIPT_DIR/.env" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+    echo "${val:-$default}"
+}
+BACKEND_PORT="$(env_val BACKEND_PORT 8101)"
+FRONTEND_PORT="$(env_val FRONTEND_PORT 3001)"
 
 # ============ Python 解释器检测 ============
 PYTHON_BIN=""

@@ -20,14 +20,14 @@ async def register_index(code: str, name: str | None = None, source: str | None 
     """注册一个指数（幂等：已存在则忽略）。
 
     Args:
-        code: qlib 指数代码，小写（如 sh000001）
+        code: 指数代码，入库统一大写（如 SH000001；传入小写自动转换）
         name: 指数名称（如 上证指数）
         source: 数据源（baostock/akshare）
 
     Returns:
         bool: True 表示新增，False 表示已存在
     """
-    code = (code or "").strip().lower()
+    code = (code or "").strip().upper()
     if not code:
         return False
     stmt = pg_insert(StockIndex).values(code=code, name=name, source=source)
@@ -45,7 +45,7 @@ async def register_indices(items: list[dict]) -> int:
     """批量注册指数（幂等）。
 
     Args:
-        items: [{"code": "sh000001", "name": "上证指数", "source": "baostock"}]
+        items: [{"code": "SH000001", "name": "上证指数", "source": "baostock"}]
 
     Returns:
         int: 本次新增条数
@@ -106,14 +106,14 @@ async def register_etf(code: str, name: str | None = None, source: str | None = 
     """注册一个 ETF（幂等：已存在则忽略），type='etf'。
 
     Args:
-        code: qlib ETF 代码，小写（如 sh510300）
+        code: ETF 代码，入库统一大写（如 SH510300；传入小写自动转换）
         name: ETF 名称（如 沪深300ETF）
         source: 数据源（baostock/akshare）
 
     Returns:
         bool: True 表示新增，False 表示已存在
     """
-    code = (code or "").strip().lower()
+    code = (code or "").strip().upper()
     if not code:
         return False
     stmt = pg_insert(StockIndex).values(code=code, name=name, source=source, type="etf")
@@ -135,7 +135,7 @@ async def register_etfs_bulk(items: list[dict], source: str = "baostock") -> int
     if not items:
         return 0
     rows = [{
-        "code": (it.get("code") or "").strip().lower(),
+        "code": (it.get("code") or "").strip().upper(),
         "name": it.get("name"),
         "source": it.get("source") or source,
         "type": "etf",
