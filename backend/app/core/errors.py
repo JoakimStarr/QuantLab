@@ -1,14 +1,15 @@
-from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 
 class AppError(Exception):
-    def __init__(self, code: str, message: str, status: int = 400):
+    def __init__(self, code: str, message: str, status: int = 400, suggestion: str = None):
         self.code = code
         self.message = message
         self.status = status
+        # 可操作提示：随 error payload 下发，前端可展示"怎么修"（如去同步）
+        self.suggestion = suggestion
 
 
 class DataFetchError(AppError):
@@ -27,14 +28,22 @@ class AINotConfiguredError(AppError):
 
 
 async def app_error_handler(request: Request, exc: AppError):
+    # QLIB_NOT_AVAILABLE 的兜底操作建议：指明去数据管理/同步中心，前端可弹"去同步"
+    suggestion = exc.suggestion
+    if suggestion is None and exc.code == "QLIB_NOT_AVAILABLE":
+        suggestion = "行情数据尚未同步或 qlib 不可用，请先在数据管理页/同步中心发起一键全同步或增量同步后再试"
+    error = {"code": exc.code, "message": exc.message, "status": exc.status}
+    if suggestion:
+        error["suggestion"] = suggestion
     return JSONResponse(
         status_code=exc.status,
-        content={"ok": False, "error": {"code": exc.code, "message": exc.message, "status": exc.status}},
+        content={"ok": False, "error": error},
     )
 
 
 async def general_error_handler(request: Request, exc: Exception):
     import logging
+
     from app.core.logging_config import request_id_var
     rid = request_id_var.get("")
     logger = logging.getLogger(__name__)

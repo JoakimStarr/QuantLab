@@ -294,9 +294,9 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import LearnTip from '@/components/common/LearnTip.vue'
 import SparkLine from '@/components/common/SparkLine.vue'
 import { usePolling } from '@/composables/usePolling'
-import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates } from '@/api/mining'
+import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningCandidates } from '@/api/mining'
 import { getAiStatus } from '@/api/auth'
-import { listFactors } from '@/api/factor'
+import { useFactorStore } from '@/stores/factor'
 
 // 挖掘方式定义
 const modes = [
@@ -359,6 +359,7 @@ const form = reactive(defaultForm())
 const tasks = ref([])
 const loading = ref(false)
 const submitting = ref(false)
+const factorStore = useFactorStore()
 
 // 候选列表缓存：task_id -> [candidate]，懒加载避免列表查询打满
 const candidatesMap = reactive({})
@@ -517,24 +518,20 @@ async function loadTasks() {
   }
 }
 
-// 轮询运行中任务，每 5s 拉取单个任务状态；无运行中任务时自动停止
+// 轮询运行中任务：每 5s 拉一次任务列表整体刷新（单请求替代逐任务 N 次 getMiningTask）；
+// 无运行中任务时自动停止
 const runningPolling = usePolling(async () => {
   const running = tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
   if (!running.length) {
     runningPolling.stop()
     return
   }
-  await Promise.all(
-    running.map(async (t) => {
-      try {
-        const data = await getMiningTask(t.id)
-        const idx = tasks.value.findIndex((x) => x.id === t.id)
-        if (idx > -1) tasks.value[idx] = { ...tasks.value[idx], ...data }
-      } catch (e) {
-        // 单个任务查询失败忽略，下轮继续
-      }
-    })
-  )
+  try {
+    const data = await listMiningTasks({ limit: 20 })
+    if (data?.items) tasks.value = data.items
+  } catch (e) {
+    // 单个 tick 失败忽略，下轮重试
+  }
 }, 5000, { immediate: false })
 
 function startPolling() {
@@ -599,11 +596,11 @@ function resetForm() {
   selectedMode.value = 'llm'
 }
 
-// 加载因子库列表
+// 加载因子库列表：走全局 factor store（5 分钟缓存，跨页共享），避免独立重复拉全表
 async function loadFactors() {
   try {
-    const data = await listFactors({ status: 'active', sort_by: 'ic', limit: 200 })
-    factorList.value = data?.items || []
+    await factorStore.fetchList()
+    factorList.value = factorStore.factors.filter((f) => f.status === 'active')
   } catch (e) {
     // 忽略，列表为空时用户可见
   }

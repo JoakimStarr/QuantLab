@@ -567,34 +567,55 @@ const form = reactive({
 })
 
 // === 轮询控制 ===
-// 回测结果轮询：每 3s 检查一次，最多 40 次
+// 单一轮询合并了旧的双轮询（result + status）：每 3s 拉一次全局回测状态，
+// 仅在发现目标策略 running→completed 时才拉一次最新结果并跳转，请求量约减半。
 let pollRow = null
 let pollPrevId = null
 let resultAttempts = 0
-const resultPolling = usePolling(async () => {
-  resultAttempts++
-  try {
-    const data = await listBacktestResults(pollRow, { limit: 1 })
-    const latest = data?.items?.[0]
-    // 出现新的已完成结果（id 变化且指标已填充）→ 跳转独立详情页
-    if (latest && latest.id !== pollPrevId && latest.annual_return != null) {
-      ElMessage.success('回测完成')
-      stopPolling()
-      router.push(`/quant/backtest/${latest.id}`)
-    } else if (resultAttempts >= 40) {
-      ElMessage.warning('回测仍在进行中，请稍后点击"结果"查看')
-      stopPolling()
-    }
-  } catch (e) {
-    if (resultAttempts >= 40) stopPolling()
-  }
-}, 3000, { immediate: false })
+let lastPollStatuses = {} // {strategyId: status} 上一 tick 快照（判定 running→终态跳变）
 
-// 状态轮询：每 3s 刷新，无 running 时自动停止
-const statusPolling = usePolling(async () => {
+const backtestPolling = usePolling(async () => {
+  resultAttempts++
+  const prev = { ...lastPollStatuses }
   await loadBacktestStatuses()
-  if (!hasRunningStatus()) {
-    stopStatusPolling()
+  lastPollStatuses = { ...backtestStatuses.value }
+  const now = lastPollStatuses
+  const hasRunning = Object.values(now).some((s) => s?.status === 'running')
+
+  const sid = pollRow != null ? String(pollRow) : null
+  const targetNow = sid ? now[sid] : null
+  const justFinished = sid && targetNow && targetNow.status !== 'running' && prev[sid] === 'running'
+
+  // 目标策略刚由 running 结束（completed/failed）→ 收口
+  if (sid && justFinished) {
+    if (targetNow.status === 'failed') {
+      ElMessage.error('回测失败：' + (targetNow.error || targetNow.message || '详见日志'))
+      stopPolling()
+      return
+    }
+    // completed：拉最新结果判定是否为新结果（结果可能比状态晚一拍落库，下轮重试）
+    try {
+      const data = await listBacktestResults(pollRow, { limit: 1 })
+      const latest = Array.isArray(data) ? data[0] : data?.items?.[0]
+      if (latest?.id && latest.annual_return != null && String(latest.id) !== String(pollPrevId)) {
+        ElMessage.success('回测完成')
+        stopPolling()
+        router.push(`/quant/backtest/${latest.id}`)
+        return
+      }
+    } catch (e) {
+      // 结果尚未落库，下一轮继续
+    }
+  }
+
+  // 无运行任务且无目标（纯状态监听场景）→ 停
+  if (!hasRunning && !sid) {
+    stopPolling()
+    return
+  }
+  if (resultAttempts >= 40) {
+    if (sid) ElMessage.warning('回测仍在进行中，请稍后点击"结果"查看')
+    stopPolling()
   }
 }, 3000, { immediate: false })
 
@@ -624,13 +645,17 @@ function hasRunningStatus() {
   return Object.values(backtestStatuses.value).some((s) => s?.status === 'running')
 }
 
-// === 状态轮询（每 3s 刷新，无 running 时自动停止） ===
+// === 状态轮询（单条 3s 轮询：有目标策略时收口完成跳转，无目标仅做状态监听） ===
 function startStatusPolling() {
-  statusPolling.start()
+  backtestPolling.stop()
+  pollRow = null
+  resultAttempts = 0
+  lastPollStatuses = {}
+  backtestPolling.start()
 }
 
 function stopStatusPolling() {
-  statusPolling.stop()
+  backtestPolling.stop()
 }
 
 // === 加载策略列表 ===
@@ -735,17 +760,18 @@ async function confirmBacktest() {
   }
 }
 
-// === 轮询回测结果（每 3s 检查一次，最多 40 次） ===
+// === 轮询回测结果（单条轮询：有目标策略时每 3s 检查，最多 40 次） ===
 function startPolling(row, prevId) {
-  resultPolling.stop()
+  backtestPolling.stop()
   pollRow = row
   pollPrevId = prevId
   resultAttempts = 0
-  resultPolling.start()
+  lastPollStatuses = {}
+  backtestPolling.start()
 }
 
 function stopPolling() {
-  resultPolling.stop()
+  backtestPolling.stop()
 }
 
 // === "结果"链接/行点击：跳转聚宽版式独立详情页 ===

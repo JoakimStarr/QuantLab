@@ -1,12 +1,14 @@
 """因子扩展 API：对比、衰减分析、导出、自动入库"""
+import asyncio
 import csv
 import io
 import json
-import asyncio
 import logging
+
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
+from app.core.cache import TTLCache
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.services.factor.factor_compare import compare_factors, get_factor_decay
@@ -15,6 +17,79 @@ from app.services.factor.library import get_factor, list_factors
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/factors", tags=["factor-ext"])
+
+# 分层收益/中性化都是全市场 qlib 重活（秒级），同一因子同参数短时间重复
+# 调用直接复用（与 deep-analysis 的 1h 缓存同思路，TTL 10min 足够交互场景）
+_quantile_cache = TTLCache(ttl=600, maxsize=64)
+_neutralize_cache = TTLCache(ttl=600, maxsize=64)
+
+
+# ---------- 因子评价后台任务（eval-jobs：长计算走独立 worker，可离开页面） ----------
+
+@router.post("/eval-jobs")
+async def create_eval_job_api(
+    factor_ids: list[int] = Query(..., description="要评价/补算的因子 ID 列表"),
+    kind: str = Query("batch", pattern="^(single|batch)$"),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
+):
+    """创建后台因子评价任务：立即返回 job，worker 子进程逐个评价并可轮询进度/取消。
+
+    替代"同步长请求"（原 /factors/{id}/evaluate 与 /factors/backfill-alpha158-metrics
+    会在请求里跑完整分钟级计算），让用户发起后即可离开页面。
+    """
+    from app.core.config import settings
+    from app.services.quant.qlib_init import is_qlib_available
+
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装或行情数据未同步", 503)
+    if not factor_ids:
+        raise AppError("VALIDATION_ERROR", "至少选择一个因子", 422)
+    from app.services.factor.eval_jobs import create_eval_job, ensure_eval_capacity
+
+    cap = await ensure_eval_capacity()
+    if cap:
+        raise AppError("SYNC_IN_PROGRESS", cap, 409)
+    period = settings.quant.get("default_backtest_period", {})
+    start = start_date or period.get("start", "2020-01-01")
+    end = end_date or period.get("end", "2024-12-31")
+    job = await create_eval_job(kind, factor_ids, start, end, universe)
+    from app.services.factor.factor_eval_worker import spawn_factor_eval_worker
+
+    spawn_factor_eval_worker(job["id"])
+    return ApiResponse(ok=True, data={
+        **job, "message": "评价任务已提交，后台计算中，完成后列表自动刷新",
+    })
+
+
+@router.get("/eval-jobs")
+async def list_eval_jobs_api(limit: int = Query(20, ge=1, le=100)):
+    """评价任务列表（轻量摘要，不含 result 大字段）。"""
+    from app.services.factor.eval_jobs import list_eval_jobs
+
+    items, total = await list_eval_jobs(limit=limit)
+    return ApiResponse(ok=True, data={"items": items, "total": total})
+
+
+@router.get("/eval-jobs/{job_id}")
+async def get_eval_job_api(job_id: int):
+    from app.services.factor.eval_jobs import get_eval_job
+
+    job = await get_eval_job(job_id)
+    if job is None:
+        raise AppError("NOT_FOUND", "评价任务不存在", 404)
+    return ApiResponse(ok=True, data=job)
+
+
+@router.post("/eval-jobs/{job_id}/cancel")
+async def cancel_eval_job_api(job_id: int):
+    from app.services.factor.eval_jobs import cancel_eval_job
+
+    if not await cancel_eval_job(job_id):
+        raise AppError("NOT_FOUND", "评价任务不存在", 404)
+    return ApiResponse(ok=True, data={"id": job_id, "status": "cancelled",
+                                      "message": "已请求取消，将在当前因子计算完后停止"})
 
 
 @router.post("/compare")
@@ -143,8 +218,8 @@ async def seed_alpha158_api():
     通过 WebSocket 推送 `alpha158_progress` 事件，包含 done/total/message 字段，
     前端可订阅 ws://<host>/ws 接收实时进度。
     """
-    from app.services.factor.alpha158 import seed_alpha158
     from app.core.websocket_manager import ws_manager
+    from app.services.factor.alpha158 import seed_alpha158
 
     async def progress_cb(done: int, total: int, msg: str):
         await ws_manager.broadcast("alpha158_progress", {
@@ -201,8 +276,8 @@ async def backfill_alpha158_metrics_api(
     universe：标的池（默认 config.quant.universe，可选 etf_all 评价 ETF 因子）。
     进度通过 WebSocket `alpha158_progress` 事件推送。
     """
-    from app.services.factor.alpha158 import backfill_alpha158_metrics
     from app.core.websocket_manager import ws_manager
+    from app.services.factor.alpha158 import backfill_alpha158_metrics
 
     async def progress_cb(done: int, total: int, msg: str):
         await ws_manager.broadcast("alpha158_progress", {
@@ -235,11 +310,13 @@ async def quantile_analysis_api(
 ):
     """因子分组收益评价（分层回测）：按因子值分 n_groups 组，返回各组净值、多空收益与单调性。"""
     from app.core.config import settings
-    from app.services.quant.qlib_init import is_qlib_available
     from app.services.factor.library import get_factor
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, compute_quantile_returns,
+        compute_quantile_returns,
+        load_factor_values,
+        load_label,
     )
+    from app.services.quant.qlib_init import is_qlib_available
 
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -250,6 +327,11 @@ async def quantile_analysis_api(
     period = settings.quant.get("default_backtest_period", {})
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
+
+    cache_key = (factor_id, start, end, n_groups)
+    cached = _quantile_cache.get(cache_key)
+    if cached is not None:
+        return ApiResponse(ok=True, data=cached)
 
     def _compute_quantile():
         factor_df = load_factor_values(factor["expression"], start, end)
@@ -264,6 +346,7 @@ async def quantile_analysis_api(
 
     if "error" in result:
         return ApiResponse(ok=False, error={"code": "NO_DATA", "message": result["error"], "status": 400})
+    _quantile_cache.set(cache_key, result)
     return ApiResponse(ok=True, data=result)
 
 
@@ -279,11 +362,13 @@ async def neutralize_factor_api(
     method: market_cap(市值中性化) / industry(行业+市值中性化) / both(同 industry)
     """
     from app.core.config import settings
-    from app.services.quant.qlib_init import is_qlib_available
     from app.services.factor.library import get_factor
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, compute_ic,
+        compute_ic,
+        load_factor_values,
+        load_label,
     )
+    from app.services.quant.qlib_init import is_qlib_available
 
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -297,6 +382,11 @@ async def neutralize_factor_api(
 
     # 统一映射：both 等价于 industry（行业+市值）
     neutralize_method = "industry" if method in ("industry", "both") else "market_cap"
+
+    cache_key = (factor_id, start, end, method)
+    cached = _neutralize_cache.get(cache_key)
+    if cached is not None:
+        return ApiResponse(ok=True, data=cached)
 
     def _compute_neutralize():
         factor_df_before = load_factor_values(factor["expression"], start, end)
@@ -314,7 +404,7 @@ async def neutralize_factor_api(
         logger.warning("因子中性化失败 factor_id=%s: %s", factor_id, e)
         return ApiResponse(ok=False, error={"code": "NEUTRALIZE_ERROR", "message": str(e), "status": 500})
 
-    return ApiResponse(ok=True, data={
+    data = {
         "factor_id": factor_id,
         "factor_name": factor.get("name"),
         "method": method,
@@ -322,7 +412,9 @@ async def neutralize_factor_api(
         "ic_after": ic_after,
         "eval_start": start,
         "eval_end": end,
-    })
+    }
+    _neutralize_cache.set(cache_key, data)
+    return ApiResponse(ok=True, data=data)
 
 
 # ==================== 因子深度分析 ====================
@@ -343,10 +435,11 @@ async def deep_analysis_api(
 ):
     """因子深度分析：IC 分布/时序/显著性 + horizon 调仓分层净值 + 换手率曲线 + 衰减。"""
     import time
+
     from app.core.config import settings
-    from app.services.quant.qlib_init import is_qlib_available
     from app.core.executor import run_io_cpu
     from app.services.quant.factor_eval import deep_analyze_factor
+    from app.services.quant.qlib_init import is_qlib_available
 
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
@@ -397,10 +490,10 @@ async def ai_explain_factor_api(factor_id: int, force: bool = Query(False)):
         result = await explain_and_update_factor(factor_id, force=force)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("FACTOR_NOT_FOUND", str(e), 404)
+        raise AppError("FACTOR_NOT_FOUND", str(e), 404) from None
     except Exception as e:
         logger.exception("AI 因子解释失败 factor_id=%s", factor_id)
-        raise AppError("AI_EXPLAIN_ERROR", f"AI 因子解释失败: {e}", 500)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 因子解释失败: {e}", 500) from None
 
 
 @router.post("/ai-explain-batch")
@@ -419,10 +512,10 @@ async def ai_detail_factor_api(factor_id: int):
         result = await get_factor_ai_detail(factor_id)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("FACTOR_NOT_FOUND", str(e), 404)
+        raise AppError("FACTOR_NOT_FOUND", str(e), 404) from None
     except Exception as e:
         logger.exception("AI 详情获取失败 factor_id=%s", factor_id)
-        raise AppError("AI_EXPLAIN_ERROR", f"AI 详情获取失败: {e}", 500)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 详情获取失败: {e}", 500) from None
 
 
 @router.post("/{factor_id}/ai-chat")
@@ -434,7 +527,7 @@ async def ai_chat_factor_api(factor_id: int, payload: dict = None):
         result = await chat_followup(factor_id, question)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("AI_EXPLAIN_ERROR", str(e), 400)
+        raise AppError("AI_EXPLAIN_ERROR", str(e), 400) from None
     except Exception as e:
         logger.exception("AI 追问失败 factor_id=%s", factor_id)
-        raise AppError("AI_EXPLAIN_ERROR", f"AI 追问失败: {e}", 500)
+        raise AppError("AI_EXPLAIN_ERROR", f"AI 追问失败: {e}", 500) from None

@@ -3,14 +3,17 @@
 设计：数据通过 qlib D.features 加载，内部使用 alphalens-reloaded 计算指标，
 保留原有接口签名不变以实现外部调用无感知。
 """
-import re
 import logging
+import os
+import re
 from functools import lru_cache
+
+import alphalens
 import numpy as np
 import pandas as pd
-import alphalens
-from app.services.quant.qlib_init import init_qlib
+
 from app.core.config import settings
+from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,35 @@ def _load_instruments(market: str) -> list:
     return list(_load_instruments_cached(market))
 
 
+def _instruments_file_signature(market: str):
+    """instruments/{market}.txt 的文件签名 (mtime_ns, size)。
+
+    回填/repair 重建 instruments 后 mtime 变化，进程内成分池缓存据此自动
+    失效——长期不重启的 web 进程也能在下一次同步后读到新成分，避免陈旧
+    成分池参与因子评价。
+    """
+    path = os.path.join(settings.qlib_provider_path, "instruments", f"{market}.txt")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=16)
+def _load_instrument_spans_cached(market: str, signature) -> tuple:
+    """缓存的点按时点成分区间（按 market + 文件签名），返回 hashable tuple。"""
+    from qlib.data import D
+
+    inst_list = D.instruments(market=market)
+    code_spans = D.list_instruments(inst_list, freq="day")
+    include_bj = settings.quant.get("include_bj", False)
+    if not include_bj:
+        code_spans = {c: s for c, s in code_spans.items() if not c.lower().startswith("bj")}
+    return tuple((c, tuple((start, end) for start, end in spans))
+                 for c, spans in code_spans.items())
+
+
 def _load_instrument_spans(market: str) -> dict:
     """加载股票池点按时点成员区间 {code: [(start, end), ...]}，去掉未复权的北交所。
 
@@ -77,14 +109,13 @@ def _load_instrument_spans(market: str) -> dict:
 
     注意：alphas / all 等全量股票池本质就是"全部股票全时段有效"的
     单区间，此处同样适用。
+
+    结果按 (market, instruments 文件签名) 进程级缓存：每次调用一次 stat
+    （纳秒级）判断文件是否被同步重建，避免对 D.list_instruments 的重复 IO。
     """
-    from qlib.data import D
-    inst_list = D.instruments(market=market)
-    code_spans = D.list_instruments(inst_list, freq="day")
-    include_bj = settings.quant.get("include_bj", False)
-    if not include_bj:
-        code_spans = {c: s for c, s in code_spans.items() if not c.lower().startswith("bj")}
-    return code_spans
+    signature = _instruments_file_signature(market)
+    entries = _load_instrument_spans_cached(market, signature)
+    return {c: list(spans) for c, spans in entries}
 
 
 def _pg_fetchone(query: str, *args):
@@ -167,7 +198,7 @@ def _load_automl_factor(method: str, ids: list, start: str, end: str,
         raise FileNotFoundError(
             f"AutoML 模型 bundle 丢失 (task_id={task_id})。"
             f"请重新训练该任务以重建模型，或停用对应因子。原始错误: {e}"
-        )
+        ) from None
 
     feature_names = bundle.get("feature_names") or []
     factor_exprs = bundle.get("factor_expressions") or {}
@@ -241,6 +272,7 @@ def load_factor_values(
             )
         init_qlib()
         from qlib.data import D
+
         # 防御性 look-ahead 检查：禁止负数 Ref（未来数据），即便表达式绕过创建时校验
         from app.services.factor.expression import check_lookahead
         check_lookahead(factor_expr)
@@ -257,7 +289,7 @@ def load_factor_values(
             # ETF 无市值/行业数据，中性化无意义且行业中性化会引入噪音，显式跳过
             logger.warning("ETF 标的池不支持市值/行业中性化，跳过（universe=%s）", market)
         else:
-            from app.services.factor.neutralize import market_cap_neutralize, industry_neutralize
+            from app.services.factor.neutralize import industry_neutralize, market_cap_neutralize
             if neutralize == "market_cap":
                 df = market_cap_neutralize(df, factor_col="factor")
             else:

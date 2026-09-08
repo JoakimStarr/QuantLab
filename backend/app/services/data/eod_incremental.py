@@ -9,12 +9,13 @@ qlib bin 文件格式（通过实际数据验证）：
   - 文件大小 = 4 + 4 * N（N = 数据点数 = 日历长度）
   - 路径：{provider_uri}/features/{instrument_lower}/{field}.day.bin
 """
+import logging
 import os
 import struct
-import logging
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
 
 from app.services.data.data_clean import format_date_series
 
@@ -108,6 +109,42 @@ def _read_bin(file_path: str):
         return None, 0
 
 
+def _read_bin_meta(file_path: str) -> tuple:
+    """只读 bin 头与长度（不读整个文件），返回 (start_index, 数据点数)。
+
+    热路径（追加/定点覆盖）里判断 bin 是否与日历对齐时，避免全文件读。
+    文件缺失/损坏时返回 (None, 0)。
+    """
+    try:
+        size = os.path.getsize(file_path)
+        with open(file_path, "rb") as f:
+            hdr = f.read(QLIB_BIN_HEADER_SIZE)
+    except OSError:
+        return None, 0
+    except Exception:
+        return None, 0
+    if len(hdr) < QLIB_BIN_HEADER_SIZE:
+        return None, 0
+    n = (size - QLIB_BIN_HEADER_SIZE) // 4
+    if n < 0:
+        return None, 0
+    try:
+        start_index = int(round(struct.unpack(QLIB_BIN_HEADER_FMT, hdr)[0]))
+    except Exception:
+        return None, 0
+    return start_index, n
+
+
+# 已确保存在的 features/* 目录集合：避免热路径每文件一次 os.makedirs syscall
+_written_dirs: set = set()
+
+
+def _ensure_dir(dir_path: str) -> None:
+    if dir_path not in _written_dirs:
+        os.makedirs(dir_path, exist_ok=True)
+        _written_dirs.add(dir_path)
+
+
 def _write_bin(file_path: str, values: np.ndarray, start_index: int):
     """写入 qlib bin 文件（原子：先写临时文件再 os.replace）。
 
@@ -120,7 +157,7 @@ def _write_bin(file_path: str, values: np.ndarray, start_index: int):
         values: float32 数据数组
         start_index: 数据在日历中的起始索引
     """
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    _ensure_dir(os.path.dirname(file_path))
     tmp_path = file_path + ".tmp"
     with open(tmp_path, "wb") as f:
         # 写头部：start_index 以 float32 存储（4 字节）
@@ -128,6 +165,33 @@ def _write_bin(file_path: str, values: np.ndarray, start_index: int):
         # 写数据
         values.astype(QLIB_BIN_DTYPE).tofile(f)
     os.replace(tmp_path, file_path)
+
+
+def _write_bin_append(file_path: str, tail_values: np.ndarray) -> None:
+    """文件尾追加 float32 数据（日历尾部扩展的 fast path）。
+
+    前置条件（由调用方保证）：旧 bin 头部+旧数据已对齐旧日历，追加后
+    文件长度 = 头部 + (旧点数 + len(tail_values)) × 4，与扩展后的新日历一致。
+    仅追加数据区，不改头部与既有数据。
+    """
+    _ensure_dir(os.path.dirname(file_path))
+    with open(file_path, "ab") as f:
+        np.asarray(tail_values, dtype=QLIB_BIN_DTYPE).tofile(f)
+
+
+def _write_bin_positions(file_path: str, positions: list, values) -> None:
+    """在已存在（长度==目标日历）的 bin 上定点覆盖若干位置的值。
+
+    位置 index 语义：arr[i] 对齐 global_calendar[i]，字节偏移 = 4 + i × 4。
+    用于回填后续批次（同长窗口内补写更早日期的值）与 EOD 补停牌股缺口，
+    避免把整段历史读出再全量写回。
+    """
+    _ensure_dir(os.path.dirname(file_path))
+    vals = np.asarray(list(values), dtype=QLIB_BIN_DTYPE)
+    with open(file_path, "r+b") as f:
+        for pos, val in zip(positions, vals, strict=False):
+            f.seek(QLIB_BIN_HEADER_SIZE + int(pos) * 4)
+            f.write(struct.pack("<f", float(val)))
 
 
 def _pad_bins_to_calendar(qlib_dir: str, calendar: list) -> int:
@@ -195,7 +259,7 @@ def _get_calendar(provider_uri: str):
     cal_path = os.path.join(provider_uri, "calendars", "day.txt")
     if not os.path.exists(cal_path):
         return []
-    with open(cal_path, "r") as f:
+    with open(cal_path) as f:
         return [line.strip() for line in f if line.strip()]
 
 
@@ -225,7 +289,7 @@ def _read_instruments(provider_uri: str, universe: str):
         return []
 
     rows = []  # [(code, end_date), ...]
-    with open(pool_file, "r") as f:
+    with open(pool_file) as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -609,6 +673,7 @@ async def incremental_sync_eod(
         dict: 同步结果，包含 ok/source/success/failed/new_dates 等
     """
     import asyncio
+
     from app.core.config import settings
 
     if provider_uri is None:
@@ -676,7 +741,7 @@ async def incremental_sync_eod(
                 "baostock 主源未取到数据(ok=%s, success=%d)，回退 akshare: %s",
                 result.get("ok"), result.get("success", 0), result.get("error", ""),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("baostock 主源超时，回退 akshare")
         except Exception as e:
             logger.warning("baostock 主源异常，回退 akshare: %s", e)
@@ -726,6 +791,7 @@ async def _incremental_sync_eod_akshare(
     """
     import asyncio
     from functools import partial
+
     from app.core.ratelimit import get_akshare_bucket
 
     cal_set = set(old_calendar) if old_calendar else set()
@@ -798,7 +864,7 @@ async def _incremental_sync_eod_akshare(
             )
             success_count += 1
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("拉取 %s 超时", qlib_code)
             fail_count += 1
         except Exception as e:
@@ -853,12 +919,15 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
                     old_calendar: list = None):
     """将单只股票数据同步到 bin 文件（统一日历契约）。
 
-    设计：
+    写入策略（重构后）：
       - bin 文件 = 4 字节 start_index 头 + float32 数组，start_index 恒为 0
       - 数据数组始终与全局日历对齐：arr[i] 对应 global_calendar[i]
-      - 旧 bin 仅在数据范围落在当前全局日历内时（old_start + len <= 日历长度）
-        按日期映射保留；否则视为日历变更导致的错位数据，丢弃重建，
-        避免"首尾重复/数据错位"类损坏累积。
+      - 分三种写入模式，消除"补 1 天/补 1 批就把整段历史读出再全量写回"的放大：
+        * create    文件不存在：一次性写全长 NaN 数组并填本次日期
+        * positions 文件长度已 == 目标日历长度：只定点覆盖本次日期的字节
+        * append    新日期严格位于旧日历尾部之后（EOD 增量）：文件尾追加字节
+        其余复杂场景（旧 bin 错位 / 日历头部前插 / 需复权比例对齐）走 legacy
+        全量重写，语义与旧实现完全一致。
       - overwrite=True 用新数据覆盖所有匹配日期；False 仅写入日历中不存在的新日期。
 
     注意：merged_calendar 仅用于确定新日期的索引位置。全局日历合并
@@ -882,45 +951,84 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
     # 合并后的日历（仅用于确定新日期的索引）
     merged_cal = _merge_calendar(global_calendar, new_dates_in_df)
     merged_idx = {d: i for i, d in enumerate(merged_cal)}
+    n_merged = len(merged_cal)
+    # 旧 bin 实际对齐的日历（决定旧数据在合并日历里的位置）
+    ref_calendar = old_calendar if old_calendar is not None else global_calendar
+    ref_n = len(ref_calendar)
 
     # 筛选需要写入的日期：overwrite=True 时全部写入，否则仅写入新日期
     if overwrite:
-        write_pairs = list(zip(df_dates, range(len(df_dates))))
+        write_pairs = list(zip(df_dates, range(len(df_dates)), strict=False))
     else:
         write_pairs = [(d, i) for i, d in enumerate(df_dates) if d not in cal_set]
 
     if not write_pairs and new_dates_in_df:
         # new_dates_in_df 非空但 write_pairs 为空（理论上不会发生）
         write_pairs = [(d, df_dates.index(d)) for d in new_dates_in_df]
+    if not write_pairs:
+        # 没有需要写入的日期：不需要触碰 bin（旧实现会全量重写一遍，纯浪费）
+        return
+
+    # 复权基准比例只在"非 overwrite 且新数据覆盖旧日历已有日期"时可能出现；
+    # 一旦出现必须走 legacy 全量路径（需用旧数据末值求比例）。
+    need_ratio = (not overwrite) and any(d in cal_set for d in df_dates)
 
     for field in fields:
         if field not in df.columns:
             continue
         bin_path = os.path.join(feat_dir, f"{field}.day.bin")
-
-        # 读取旧数据
-        old_values, old_start = _read_bin(bin_path)
-
-        # 准备新数据
         new_values = df[field].values.astype(np.float32)
 
-        # ---- 旧 bin 对齐校验 ----
-        # 旧 bin 数据范围（[old_start, old_start + len)）必须落在旧 bin 对齐的
-        # 日历（old_calendar，缺省按 global_calendar）内，否则视为日历变更导致
-        # 的错位数据，无法安全映射 → 丢弃旧数据，仅用新数据重建。
-        ref_calendar = old_calendar if old_calendar is not None else global_calendar
+        old_start, old_len = _read_bin_meta(bin_path)
+        exists = old_start is not None and old_len is not None and old_len > 0
+
+        if not exists:
+            # create：一次性写全长 NaN + 本次日期，后续批次走 positions/append
+            arr = np.full(n_merged, np.nan, dtype=np.float32)
+            for d, row_i in write_pairs:
+                arr[merged_idx[d]] = new_values[row_i]
+            _write_bin(bin_path, arr, 0)
+            continue
+
+        if old_start == 0 and not need_ratio:
+            if old_len == n_merged:
+                # positions：长度已与目标日历一致，只定点覆盖本次日期（不重写历史）
+                positions = []
+                vals = []
+                for d, row_i in write_pairs:
+                    pos = merged_idx.get(d)
+                    if pos is not None and 0 <= pos < n_merged:
+                        positions.append(pos)
+                        vals.append(new_values[row_i])
+                if positions:
+                    _write_bin_positions(bin_path, positions, vals)
+                continue
+            if (not overwrite and old_len == ref_n
+                    and n_merged > old_len
+                    and all(merged_idx.get(d, -1) >= old_len for d, _ in write_pairs)):
+                # append：增量日期严格在旧日历尾部之后，文件尾追加对应 float32
+                tail = np.full(n_merged - old_len, np.nan, dtype=np.float32)
+                for d, row_i in write_pairs:
+                    pos = merged_idx.get(d)
+                    if pos is not None and old_len <= pos < n_merged:
+                        tail[pos - old_len] = new_values[row_i]
+                _write_bin_append(bin_path, tail)
+                continue
+
+        # ---- legacy 全量重写（对齐校验/丢弃重建/复权比例/头部前插等场景）----
+        old_values, old_start = _read_bin(bin_path)
         old_aligned = (
             old_values is not None
             and len(old_values) > 0
             and old_start >= 0
-            and old_start + len(old_values) <= len(merged_cal)
+            and old_start + len(old_values) <= n_merged
         )
         if old_aligned:
             # 按日期映射重建数组（用旧 bin 真实对齐的日历，而非 global_calendar 前缀）
             mapping = _build_index_mapping(
                 ref_calendar, old_start, len(old_values), merged_cal,
             )
-            arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
+            arr = np.full(n_merged, np.nan, dtype=np.float32)
             # 散布旧数据（保留已有值）
             valid = mapping >= 0
             if valid.any():
@@ -952,18 +1060,17 @@ def _sync_stock_bin(feat_dir: str, df: pd.DataFrame,
                                 )
         else:
             # 旧 bin 与当前日历不对齐：丢弃重建（并记录，便于排查）
-            arr = np.full(len(merged_cal), np.nan, dtype=np.float32)
+            arr = np.full(n_merged, np.nan, dtype=np.float32)
             if old_values is not None and len(old_values) > 0:
                 logger.warning(
                     "bin 与日历不对齐，丢弃旧数据重建 %s "
                     "(old_start=%d, old_len=%d, cal_len=%d)",
                     bin_path, old_start,
                     len(old_values) if old_values is not None else 0,
-                    len(merged_cal),
+                    n_merged,
                 )
 
         # 写入新数据（仅指定日期）
         for d, row_i in write_pairs:
-            if d in merged_idx:
-                arr[merged_idx[d]] = new_values[row_i]
+            arr[merged_idx[d]] = new_values[row_i]
         _write_bin(bin_path, arr, 0)

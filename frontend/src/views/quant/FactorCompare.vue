@@ -420,7 +420,8 @@ async function startCompare() {
 }
 
 function goBack() {
-  router.push('/quant/factors')
+  // 返回当前因子库主页面（旧版 /quant/factors 页面无导航入口，避免把用户丢进旧页）
+  router.push('/quant/factor-library')
 }
 
 // 从 URL start/end 参数还原评价区间（分享链接场景）

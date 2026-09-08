@@ -88,3 +88,23 @@ export function getFactorAiDetail(id) {
 export function chatFactorAi(id, question) {
   return request.post('/factors/' + id + '/ai-chat', { question }, { timeout: 130000 })
 }
+
+// ---------- 因子评价后台任务（eval-jobs） ----------
+// 长计算（单因子/批量补算指标）改走独立 worker job：可离开页面、可查进度/取消
+export function createFactorEvalJob(factorIds, params = {}) {
+  return request.post('/factors/eval-jobs', null, {
+    params: { factor_ids: factorIds, ...params },
+  })
+}
+
+export function listFactorEvalJobs(limit = 20) {
+  return request.get('/factors/eval-jobs', { params: { limit } })
+}
+
+export function getFactorEvalJob(id) {
+  return request.get('/factors/eval-jobs/' + id)
+}
+
+export function cancelFactorEvalJob(id) {
+  return request.post('/factors/eval-jobs/' + id + '/cancel')
+}

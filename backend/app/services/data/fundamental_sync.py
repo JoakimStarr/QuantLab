@@ -17,7 +17,6 @@ import asyncio
 import logging
 import math
 import os
-import random
 import time
 from datetime import date
 
@@ -214,6 +213,29 @@ async def _load_all_series() -> dict:
     return out
 
 
+def _broadcast_one_code(code: str, series_map: dict, cal_dates: "pd.DatetimeIndex",
+                        feat_root: str) -> int:
+    """把单只股票的各财报字段 forward-fill 写入其 bin（worker 线程内执行）。
+
+    只写本股票文件（互不冲突），可并行；返回写入的（股票 × 字段）数。
+    """
+    code_dir = os.path.join(feat_root, code)
+    if not os.path.isdir(code_dir):
+        return 0
+    written = 0
+    for field in FIN_FIELD_NAMES:
+        # features 目录名为小写（QLib 约定），DB code 为大写，此处对齐
+        series = series_map.get((code.lower(), field))
+        if series is None:
+            continue
+        values = _forward_fill_series(series, cal_dates)
+        if values is None:
+            continue
+        _write_bin(os.path.join(code_dir, f"{field}.day.bin"), values, 0)
+        written += 1
+    return written
+
+
 async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None,
                                       force: bool = False) -> int:
     """把每只股票的财报序列按 PIT forward-fill 写入各自 bin 字段。
@@ -248,22 +270,25 @@ async def broadcast_financial_to_bins(provider_uri: str, progress_cb=None,
     stock_codes = sorted(os.listdir(feat_root))
     total = len(stock_codes)
     written = 0
-    for i, code in enumerate(stock_codes):
-        code_dir = os.path.join(feat_root, code)
-        if not os.path.isdir(code_dir):
-            continue
-        for field in FIN_FIELD_NAMES:
-            # features 目录名为小写（QLib 约定），DB code 为大写，此处对齐
-            series = series_map.get((code.lower(), field))
-            if series is None:
-                continue
-            values = _forward_fill_series(series, cal_dates)
-            if values is None:
-                continue
-            _write_bin(os.path.join(code_dir, f"{field}.day.bin"), values, 0)
-            written += 1
-        if progress_cb and (i % 50 == 0 or i == total - 1):
-            progress_cb(i + 1, total, f"广播财报字段 {i + 1}/{total}（{code}）...")
+
+    # 并行广播：每只股票写自己的字段文件，互不冲突。
+    # 8 并发（asyncio.to_thread，线程内顺序写每股字段），比旧串行循环快数倍；
+    # progress_cb 在事件循环内按"已处理股票数"回调，线程安全。
+    _BROADCAST_CONCURRENCY = 8
+    sem = asyncio.Semaphore(_BROADCAST_CONCURRENCY)
+
+    async def _do_one(code: str) -> int:
+        async with sem:
+            return await asyncio.to_thread(
+                _broadcast_one_code, code, series_map, cal_dates, feat_root
+            )
+
+    processed = 0
+    for coro in asyncio.as_completed([_do_one(c) for c in stock_codes]):
+        written += await coro
+        processed += 1
+        if progress_cb and (processed % 50 == 0 or processed == total):
+            await progress_cb(processed, total, f"广播财报字段 {processed}/{total}...")
     await asyncio.to_thread(mark_broadcast, qlib_dir, "fundamental", fp)
     logger.info("财报广播完成: %d 股票 × 字段", written)
     return written
@@ -342,52 +367,111 @@ async def fetch_all_financial(codes: list[str], progress_cb=None) -> tuple[int, 
         logger.info("财报数据已是最新（覆盖报告期 %s），无需拉取", expected)
 
     total = len(todo)
+    if not total:
+        logger.info("财报拉取完成: 本次 0 只, 新增 0 行")
+        return 0, 0
+
+    # 并发拉取：多个协程共享 akshare 令牌桶限速（rate=3/s，替代旧的逐只固定
+    # sleep(0.3-0.8s)），首拉 ~5400 只从 2-3 小时降到 1 小时内。
+    # 聚合/落库在锁内串行（避免多 worker 并发 flush 重复/丢行），限速与冷却
+    # 在锁外等待。
+    from app.core.ratelimit import get_akshare_bucket
+
+    feat_root = settings.qlib_provider_path
+    bucket = get_akshare_bucket()
     all_rows: list[dict] = []
     inserted = 0
-    consecutive_fail = 0
-    cooldowns = 0
-    fetched = 0
-    failed = 0
-    # 每 100 只股票落库一次：避免千万行全攒内存（曾 3GB+）且最后一次性
-    # commit 无进度、中途崩溃全丢。落库间隔写入进度，前端能看到推进。
-    FLUSH_EVERY = 100
-    for i, code in enumerate(todo):
-        if not os.path.isdir(os.path.join(settings.qlib_provider_path, "features", code)):
-            continue
-        rows = await run_io_cpu(_fetch_stock_financial, code)
-        if rows:
-            all_rows.extend(rows)
-            consecutive_fail = 0
-            fetched += 1
-        else:
-            failed += 1
-            consecutive_fail += 1
-            if consecutive_fail >= 6:
-                cooldowns += 1
-                logger.warning("财报连续 6 只失败（第 %d 次冷却），疑似被限流，暂停 60s", cooldowns)
-                if progress_cb:
-                    progress_cb(i + 1, total, f"疑似被限流，冷却 60s（第 {i + 1}/{total} 只）...")
-                await asyncio.sleep(60)
-                consecutive_fail = 0
-                if cooldowns >= 3:
-                    logger.error("财报拉取多次冷却仍持续失败，中止本次（剩余 %d 只稍后重跑补漏）",
-                                 total - i - 1)
-                    failed += total - i - 1  # 剩余未拉计入失败
-                    break
-        # 随机抖动限频：0.3-0.8s，避免固定节奏
-        await asyncio.sleep(0.3 + random.uniform(0, 0.5))
-        # 定期落库：内存有界 + 进度可见 + 崩溃只丢一小段
-        if all_rows and ((i + 1) % FLUSH_EVERY == 0 or i + 1 == total):
-            n = await upsert_financial(all_rows)
-            inserted += n
-            all_rows = []
-            if progress_cb and i + 1 < total:
-                progress_cb(i + 1, total,
-                            f"拉取财报 {i + 1}/{total}（已入库 {inserted} 行）...")
+    state = {"fetched": 0, "failed": 0, "consecutive_fail": 0,
+             "cooldowns": 0, "abort": False, "processed": 0}
+    FLUSH_EVERY = 100  # 每 100 只落库一次：内存有界 + 进度可见 + 崩溃只丢一小段
+    pause = asyncio.Event()
+    pause.set()
+    agg_lock = asyncio.Lock()
+    n_workers = min(4, len(todo))
+    chunks = [todo[i::n_workers] for i in range(n_workers)]
 
-    # 尾批兜底（若循环被 break 提前退出）
+    async def _worker(chunk: list):
+        nonlocal all_rows, inserted
+        for code in chunk:
+            if state["abort"]:
+                return
+            # 冷却暂停点：被限流时所有 worker 停在这里等 60s
+            await pause.wait()
+            if state["abort"]:
+                return
+            if not os.path.isdir(os.path.join(feat_root, "features", code)):
+                state["processed"] += 1
+                state["failed"] += 1
+                continue
+            # 令牌桶限速（网络/反爬）：排队取得令牌才拉取
+            try:
+                ok = await bucket.acquire(1.0, timeout=180)
+            except Exception:  # noqa: BLE001
+                ok = False
+            if not ok:
+                state["processed"] += 1
+                state["failed"] += 1
+                state["consecutive_fail"] += 1
+                logger.warning("财报令牌桶超时 %s，按失败计数", code)
+                continue
+            rows = await run_io_cpu(_fetch_stock_financial, code)
+
+            cool_down_after = False
+            async with agg_lock:
+                state["processed"] += 1
+                if rows:
+                    all_rows.extend(rows)
+                    state["consecutive_fail"] = 0
+                    state["fetched"] += 1
+                else:
+                    state["failed"] += 1
+                    state["consecutive_fail"] += 1
+
+                # 定期落库（锁内串行，避免并发 flush 双写/丢行）
+                if len(all_rows) >= FLUSH_EVERY:
+                    inserted += await upsert_financial(all_rows)
+                    all_rows.clear()
+
+                # 冷却熔断：连续 6 只失败 → 全局暂停 60s；累计 3 次仍失败 → 中止
+                if state["consecutive_fail"] >= 6:
+                    state["cooldowns"] += 1
+                    state["consecutive_fail"] = 0
+                    pause.clear()
+                    logger.warning("财报连续 6 只失败（第 %d 次冷却），疑似被限流，暂停 60s", state["cooldowns"])
+                    if progress_cb:
+                        await progress_cb(
+                            state["processed"], total,
+                            f"疑似被限流，冷却 60s（已处理 {state['processed']}/{total} 只）...")
+                    if state["cooldowns"] >= 3:
+                        state["abort"] = True
+                        pause.set()  # 唤醒其余 worker 检查 abort 退出
+                        logger.error(
+                            "财报拉取多次冷却仍持续失败，中止本次（剩余 %d 只稍后重跑补漏）",
+                            total - state["processed"],
+                        )
+                        return
+                    cool_down_after = True
+
+                if progress_cb and state["processed"] % 50 == 0:
+                    await progress_cb(
+                        state["processed"], total,
+                        f"拉取财报 {state['processed']}/{total}（已入库 {inserted} 行）...")
+
+            # 冷却睡眠放在锁外，避免长时间占用聚合锁阻塞其他 worker 落库
+            if cool_down_after:
+                await asyncio.sleep(60)
+                pause.set()
+
+    if chunks:
+        await asyncio.gather(*(_worker(ch) for ch in chunks))
+
+    # 尾批兜底（含被 abort 提前中断的已拉部分）
     if all_rows:
         inserted += await upsert_financial(all_rows)
+    if state["abort"]:
+        state["failed"] += total - state["processed"]  # 剩余未拉计入失败
+    fetched = state["fetched"]
+    failed = state["failed"]
     logger.info("财报拉取完成: 本次 %d 只（跳过 %d 只已入库，失败 %d 只）, 新增 %d 行",
                 fetched, skipped, failed, inserted)
     return total, inserted
@@ -406,8 +490,12 @@ async def run_financial_sync(broadcast: bool = False, codes: list[str] = None,
         上报进度——避免多个并行阶段互相覆盖进度文件造成竞态。
     """
     from app.services.data.sync_progress import (
-        clear_progress, finish_progress, init_progress, set_worker_pid,
-        update_progress, sync_is_active,
+        clear_progress,
+        finish_progress,
+        init_progress,
+        set_worker_pid,
+        sync_is_active,
+        update_progress,
     )
 
     qlib_dir = provider_uri or settings.qlib_provider_path

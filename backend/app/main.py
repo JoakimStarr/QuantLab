@@ -1,6 +1,5 @@
 import logging
 import os
-
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -51,6 +50,9 @@ async def lifespan(app: FastAPI):
     await seed_admin_user()
     await recover_stale_sync()
     await recover_stale_mining()
+    from app.services.factor.eval_jobs import recover_stale_eval_jobs
+
+    await recover_stale_eval_jobs()
     from app.core.recovery import rerun_pending_mining
 
     await rerun_pending_mining()

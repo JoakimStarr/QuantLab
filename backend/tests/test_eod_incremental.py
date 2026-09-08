@@ -143,6 +143,77 @@ def test_sync_bin_mismatched_old_bin_rebuilt(tmp_path, caplog):
     assert any("不对齐" in r.message for r in caplog.records)
 
 
+# ---------- _sync_stock_bin 写入 fast path（追加/定点/幂等） ----------
+
+def test_sync_bin_tail_append_eod(tmp_path):
+    """EOD 尾部追加：旧 bin 对齐旧日历、新日期在尾部时只追加不重写历史。"""
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    cal = ["2024-01-15", "2024-01-16", "2024-01-17"]
+    df1 = pd.DataFrame({"date": cal, "close": [10.0, 11.0, 12.0]})
+    eod._sync_stock_bin(str(feat), df1, cal, ["close"], overwrite=True)  # create
+
+    # 模拟每日 EOD：global_calendar 仍是旧 day.txt（不含新日），overwrite=False
+    df2 = pd.DataFrame({"date": ["2024-01-18"], "close": [13.0]})
+    orig_append = eod._write_bin_append
+    with patch.object(eod, "_write_bin_append", wraps=orig_append) as m_append:
+        eod._sync_stock_bin(str(feat), df2, cal, ["close"], overwrite=False)
+    m_append.assert_called_once()  # 确认走尾端追加而非整段重写
+
+    values, start = eod._read_bin(str(feat / "close.day.bin"))
+    assert start == 0
+    assert len(values) == 4
+    assert values.tolist() == [10.0, 11.0, 12.0, 13.0]
+
+
+def test_sync_bin_tail_append_resume_idempotent(tmp_path):
+    """崩溃后重跑同一天不产生重复追加（旧 bin 比 day.txt 多一天 → 定点覆盖）。"""
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    cal = ["2024-01-15", "2024-01-16", "2024-01-17"]
+    df1 = pd.DataFrame({"date": cal, "close": [10.0, 11.0, 12.0]})
+    eod._sync_stock_bin(str(feat), df1, cal, ["close"], overwrite=True)
+    bin_path = str(feat / "close.day.bin")
+
+    df2 = pd.DataFrame({"date": ["2024-01-18"], "close": [13.0]})
+    eod._sync_stock_bin(str(feat), df2, cal, ["close"], overwrite=False)
+    # 假定 PG 已提交但 day.txt 未扩展（崩溃），重跑同一增量 → 不应再次追加
+    eod._sync_stock_bin(str(feat), df2, cal, ["close"], overwrite=False)
+
+    values, start = eod._read_bin(bin_path)
+    assert start == 0
+    assert len(values) == 4, "崩溃重跑不得重复追加"
+    assert values.tolist() == [10.0, 11.0, 12.0, 13.0]
+
+
+def test_sync_bin_positional_overwrite_newest_first(tmp_path):
+    """回填（最新→最旧）分多批写入：首批建全长文件，后续批定点覆盖，等价单次全量。"""
+    feat = tmp_path / "features" / "sh600000"
+    feat.mkdir(parents=True)
+    cal = ["2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18", "2024-01-19"]
+    expected = [10.0, 11.0, 12.0, 13.0, 14.0]
+
+    # 批 1：最新一天 → create（全长 NaN 文件 + 尾部值）
+    eod._sync_stock_bin(str(feat),
+                        pd.DataFrame({"date": ["2024-01-19"], "close": [14.0]}),
+                        cal, ["close"], overwrite=True)
+    # 批 2/3：更早的日期 → positions 定点覆盖
+    orig_pos = eod._write_bin_positions
+    with patch.object(eod, "_write_bin_positions", wraps=orig_pos) as m_pos:
+        eod._sync_stock_bin(str(feat),
+                            pd.DataFrame({"date": ["2024-01-18", "2024-01-17"], "close": [13.0, 12.0]}),
+                            cal, ["close"], overwrite=True)
+        eod._sync_stock_bin(str(feat),
+                            pd.DataFrame({"date": ["2024-01-16", "2024-01-15"], "close": [11.0, 10.0]}),
+                            cal, ["close"], overwrite=True)
+    assert m_pos.call_count == 2  # 确认后续批走定点覆盖而非整段重写
+
+    values, start = eod._read_bin(str(feat / "close.day.bin"))
+    assert start == 0
+    assert len(values) == 5
+    assert values.tolist() == expected
+
+
 def test_st_overrides_board_threshold():
     # 同一只主板股，非ST日10%才停，ST日5%即停
     t = eod._compute_tradable(

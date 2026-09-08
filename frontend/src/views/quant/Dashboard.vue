@@ -114,7 +114,7 @@ import MacroSnapshot from '@/components/dashboard/MacroSnapshot.vue'
 import DecayAlert from '@/components/dashboard/DecayAlert.vue'
 import Guide from '@/components/common/Guide.vue'
 import LazySection from '@/components/common/LazySection.vue'
-import { listFactors } from '@/api/factor'
+import { listFactors, listFactorSummary } from '@/api/factor'
 import { listStrategies, listAllBacktestResults } from '@/api/strategy'
 import { listMiningTasks } from '@/api/mining'
 import { getQuantDataStatus } from '@/api/quant'
@@ -327,12 +327,13 @@ function applyStats(s) {
   indices.value = s.indices ?? []
 }
 
-function computeFactorBySource(items) {
+function computeFactorBySourceFromSummary(categories) {
+  // /factors/summary 的类别分布（count 按 category 聚合），等价于旧的全量列表客户端数数
   const bySource = { builtin: 0, llm: 0, symbolic: 0, text: 0, automl: 0, alpha158: 0, etf: 0 }
-  items.forEach((f) => {
-    const k = (f.source || f.category || f.type || '').toLowerCase()
+  ;(categories ?? []).forEach((c) => {
+    const k = c?.key || 'other'
     if (bySource[k] == null) bySource[k] = 0
-    bySource[k]++
+    bySource[k] += c?.count ?? 0
   })
   return bySource
 }
@@ -391,8 +392,10 @@ let factorBreakdownLoaded = false
 async function fetchFactorBreakdown() {
   if (factorBreakdownLoaded) return
   try {
-    const res = await listFactors({ limit: 500 })
-    factorBySource.value = computeFactorBySource(res?.items ?? [])
+    // 用轻量 /factors/summary 替代全量列表（500 条含 expression 记录 → 一条统计），
+    // 客户端不再整表拉到前端数数
+    const summary = await listFactorSummary()
+    factorBySource.value = computeFactorBySourceFromSummary(summary?.categories)
     factorBreakdownLoaded = true
     setCache(FACTOR_BREAKDOWN_KEY, factorBySource.value, FACTOR_BREAKDOWN_TTL)
   } catch {

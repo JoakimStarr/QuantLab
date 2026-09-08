@@ -2,7 +2,10 @@
 import json
 import logging
 from datetime import datetime
-from sqlalchemy import select, func
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import defer
+
 from app.core.database import async_session
 from app.models.factor import Factor
 from app.services.factor.expression import validate_expression
@@ -46,6 +49,13 @@ async def list_factors(category: str = None, status: str = "active", sort_by: st
                     "status": Factor.status, "created_at": Factor.created_at}.get(sort_by, Factor.ic)
         col = sort_col.asc().nullslast() if sort_order == "asc" else sort_col.desc().nullslast()
         q = select(Factor)
+        # 列表接口不输出 ai_explanation/ai_chat_history（对话历史可逐条增长），
+        # 不加载这两列，避免数百条列表时逐条物化大 Text。详情接口 get_factor
+        # 不受影响（session.get 全量）。
+        q = q.options(
+            defer(Factor.ai_explanation),
+            defer(Factor.ai_chat_history),
+        )
         for f in filters:
             q = q.where(f)
         # 启用因子始终置顶，与旧版前端「active 优先」行为一致

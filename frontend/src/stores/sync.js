@@ -87,7 +87,9 @@ export const useSyncStore = defineStore('sync', () => {
       if (running.value) {
         idleTicks = 0
         await fetchProgress()
-      } else if (idleTicks % 30 === 0) {
+      } else if (idleTicks % 60 === 0) {
+        // 空闲时降频到 60s 探测一次：仍能发现"非本 store 发起"的外部同步
+        //（curl/修复/另一标签页）并展示完成 toast，同时把常驻后台流量减半
         await fetchProgress()
         idleTicks = 0
       }

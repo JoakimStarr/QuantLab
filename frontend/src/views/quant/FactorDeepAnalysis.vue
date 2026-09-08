@@ -531,7 +531,8 @@ async function runAnalysis() {
 }
 
 function goBack() {
-  router.push('/quant/factors')
+  // 返回当前因子库主页面（旧版 /quant/factors 页面无导航入口，避免把用户丢进旧页）
+  router.push('/quant/factor-library')
 }
 
 onMounted(() => {

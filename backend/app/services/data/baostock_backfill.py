@@ -18,32 +18,38 @@ from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.database import async_session
+from app.models.baostock import (
+    StockBasic,
+    StockDaily,
+    StockIndustry,
+    TradeCalendar,
+)
+from app.models.stock_data_status import StockDataStatus
+from app.models.sync_history import SyncHistory
 from app.services.data.baostock_client import (
     BaostockQuotaError,
     fetch_daily_all_a_stock_sync,
     from_baostock_code,
 )
-from app.services.data.data_clean import format_date_series, to_float_strict as _f
+from app.services.data.data_clean import format_date_series
+from app.services.data.data_clean import to_float_strict as _f
+from app.services.data.data_fields import STOCK_BIN_FIELDS as BIN_FIELDS
 from app.services.data.db_utils import bulk_upsert
-from app.services.data.eod_incremental import _sync_stock_bin, _write_calendar, _compute_tradable, _get_calendar
+from app.services.data.eod_incremental import _compute_tradable, _get_calendar, _sync_stock_bin, _write_calendar
 from app.services.data.sync_progress import (
-    init_progress, update_progress, finish_progress, clear_progress, get_progress,
+    clear_progress,
+    finish_progress,
+    get_progress,
+    init_progress,
+    update_progress,
 )
-from app.models.baostock import (
-    StockDaily, StockBasic, StockIndustry, TradeCalendar,
-)
-from app.models.sync_history import SyncHistory
-from app.models.stock_data_status import StockDataStatus
 
 logger = logging.getLogger(__name__)
-
-# 字段清单与 baostock 列映射收敛到 data_fields.py（见 STOCK_BIN_FIELDS / BAOSTOCK_DAILY_COL_MAP）
-from app.services.data.data_fields import STOCK_BIN_FIELDS as BIN_FIELDS
 
 # 每个批次拉取的交易日数（控制内存）：1 = 每下载一天即写入，
 # 数据实时落盘、崩溃丢失少；调大可减少写盘次数但内存占用更高。
@@ -394,7 +400,7 @@ def _fetch_all_sync(api_name: str, date_str: str) -> list:
     if not rows:
         return []
     fields = rs.fields
-    return [dict(zip(fields, r)) for r in rows]
+    return [dict(zip(fields, r, strict=False)) for r in rows]
 
 
 def _write_instrument_file(qlib_dir: str, name: str, entries: list) -> None:
@@ -511,9 +517,9 @@ def _rebuild_dynamic_instruments(qlib_dir: str, calendar: list,
     Returns:
         dict: 各指数文件写入的代码数（供日志/状态展示）。
     """
-    cal_start, cal_end = calendar[0], calendar[-1]
     if len(calendar) < 2:
         return {}
+    cal_end = calendar[-1]
     cache = _load_dynamic_cache()
     if cache and _dynamic_cache_fresh(cache, calendar):
         logger.info("动态成分缓存命中（构建于 %s，日历末 %s），跳过重建",
@@ -715,7 +721,7 @@ async def _run_backfill_downloads(
                 if df_all is None or df_all.empty:
                     continue
                 df_norm = _normalize_daily(df_all)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("baostock 拉取 %s 超时(120s)，跳过该日", d)
                 continue
             except BaostockQuotaError as e:
@@ -800,7 +806,7 @@ async def _run_backfill_downloads(
 
 
 async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "backfill",
-                                refresh_misc: bool = False) -> dict:
+                                refresh_misc: bool = False, skip_broadcast: bool = False) -> dict:
     """baostock 全量回填主入口（最新 → 最旧）。
 
     增量去重：是否已下载以数据库 stock_daily 为准（day.txt 由库重建、与之对齐），
@@ -817,6 +823,8 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         refresh_misc: 是否拉取 stock_basic/stock_industry。默认 False（日常同步
             不拉基础资料/行业——低频静态数据，仅新上市/行业调整时需要），
             前端/API 显式传 True 时才执行。
+        skip_broadcast: 外层编排（一键全同步/repair）已统一做宏观/外盘广播时传 True，
+            避免"回填尾部广播一次 + 编排阶段再广播一次"的重复全市场重写。
     """
     qlib_dir = settings.qlib_provider_path
     os.makedirs(os.path.join(qlib_dir, "calendars"), exist_ok=True)
@@ -853,7 +861,7 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         if to_download:
             # 流水线：下载串行（baostock 禁止并发连接），写入在后台消费者中并行执行，
             # 写盘不耽误下载；_flush_chunk 内部再按股票多线程并写。
-            success_stocks = await _run_backfill_downloads(
+            await _run_backfill_downloads(
                 to_download, global_calendar, qlib_dir, code_range,
                 chunk_days=_CHUNK_DAYS, queue_max=_QUEUE_MAX,
                 written_days=set(already_downloaded),
@@ -862,7 +870,6 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
                 old_calendar=existing_calendar,
             )
         else:
-            success_stocks = 0
             logger.info("无需下载新日期，跳过逐日拉取")
             update_progress(pct=85, status="running",
                             message=f"数据已是最新（{len(already_downloaded)} 个交易日），跳过下载")
@@ -887,8 +894,10 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         # 外盘/宏观重广播：仅当日历相对回填前发生变化时才执行——
         # 日历没变时外盘 bin 长度无需重对齐、宏观广播指纹也会判重跳过，
         # 无条件全量重广播（约 25 万次 bin 写 ×2 轮）是纯浪费。
+        # skip_broadcast=True（full_sync/repair 编排）：外层阶段已统一做
+        # 宏观/外盘/财报拉取+广播，此处不重复全市场重写。
         cal_changed = _final_cal != (existing_calendar or [])
-        if cal_changed:
+        if cal_changed and not skip_broadcast:
             # 日历可能被本轮回填扩展（如 5 年→10 年）；若此前已广播过外盘因子
             # （对齐到旧日历），这里按最终日历重新对齐广播，避免长度异常。
             try:
@@ -968,7 +977,8 @@ async def _update_sync_status(universe: str, qlib_dir: str, calendar: list,
     （calendar 可能含今天——baostock 交易日历把今天标记为交易日，但数据要收盘后
     才发布；数据未到前 latest_date 应显示昨天，拉到才显示今天）。
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from app.services.data.disk_usage import get_dir_size_mb
     now = datetime.now()
     # 真实开始时间：取进度管理器记录的任务启动时刻（init_progress 时写入），
@@ -1088,7 +1098,6 @@ async def mark_sync_failed(universe: str, error: str):
 
 async def run_baostock_backfill_task(req) -> None:
     """后台任务包装：按请求执行 baostock 回填并更新状态。"""
-    from app.schemas.quant import SyncDataRequest
     # 回填本质是全市场拉取，universe 仅作状态记录标签；默认 all 反映真实范围
     universe = req.universe or "all"
     years = req.years or int(settings.quant.get("backfill_years", 5))

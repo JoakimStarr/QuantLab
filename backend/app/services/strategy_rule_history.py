@@ -10,6 +10,7 @@ import json
 import logging
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import defer
 
 from app.core.database import async_session
 from app.models.rule_backtest_history import RuleBacktestHistory
@@ -61,6 +62,12 @@ async def list_history(limit: int = 20, offset: int = 0) -> tuple[list[dict], in
     """按时间倒序返回轻量摘要列表（不含 metrics/nav_curve/trades）。"""
     async with async_session() as session:
         base = select(RuleBacktestHistory).where(RuleBacktestHistory.is_deleted == 0)
+        # 列表摘要不需要净值曲线/成交明细两大 JSON 列（metrics 仍需加载：
+        # _initial_capital 要从 metrics 快照读初始资金）。
+        base = base.options(
+            defer(RuleBacktestHistory.nav_curve),
+            defer(RuleBacktestHistory.trades),
+        )
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
         ).scalar_one()

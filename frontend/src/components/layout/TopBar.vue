@@ -69,6 +69,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { getQlibStatus } from '@/api/quant'
 import { useSyncStore } from '@/stores/sync'
+import { registerSyncOpener } from '@/api'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
@@ -130,6 +131,8 @@ onMounted(() => {
   fetchTopbarStatus()
   // 全局同步中心常驻初始化：进度轮询 + 各域状态（单 timer，全站共享）
   syncStore.init()
+  // 数据未同步类错误（QLIB_NOT_AVAILABLE）提示里"去同步"按钮的打开回调
+  registerSyncOpener(() => syncStore.open())
 })
 </script>
 

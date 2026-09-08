@@ -48,13 +48,16 @@ async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = 
         update_progress(pct=pct, status="running", message=message)
 
     try:
-        # 阶段 1/6: A股回填（含外盘/宏观按最终日历重广播）
+        # 阶段 1/6: A股回填（skip_broadcast=True——外盘/宏观由阶段 4-6 统一广播，
+        # 避免"回填尾部 + 编排阶段"重复两次全市场广播）
         update_progress(pct=4, status="running",
                         message=f"阶段1/6: baostock A股回填 {years} 年...")
         from app.services.data.baostock_backfill import run_baostock_backfill
 
         backfill = await run_baostock_backfill(years=years, universe=universe,
-                                               refresh_misc=refresh_misc)
+                                               refresh_misc=refresh_misc,
+                                               # 阶段4-6会统一做宏观/外盘拉取+广播，回填尾部不再重复广播
+                                               skip_broadcast=True)
         steps.append(f"a-share({backfill.get('stocks', 0)}stocks)")
         logger.info("阶段1/6 完成: %s", backfill)
 
@@ -97,9 +100,9 @@ async def run_full_sync(years: int, universe: str = "all", refresh_misc: bool = 
         # 互不冲突；共享进度文件由本函数统一管理，各阶段通过 progress_cb 上报，
         # 避免多个并行阶段互相 init/finish/clear 进度造成竞态。
         _restage(56, "阶段4-6/6: 宏观/财报/外盘 并行同步+广播...")
-        from app.services.data.macro_sync import sync_macro_indicators
-        from app.services.data.fundamental_sync import run_financial_sync
         from app.services.data.external_market import sync_external_market
+        from app.services.data.fundamental_sync import run_financial_sync
+        from app.services.data.macro_sync import sync_macro_indicators
 
         def _cb(base: float, span: float, label: str):
             def cb(pct: float, msg: str) -> None:

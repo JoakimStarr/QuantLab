@@ -10,6 +10,7 @@ from .classic_backtest_history import ClassicBacktestHistory
 from .daily_report import DailyReport
 from .data_sync_schedule import DataSyncSchedule
 from .factor import Factor
+from .factor_eval_job import FactorEvalJob
 from .fundamental import FinancialIndicator
 from .macro import MacroIndicator
 from .mining_candidate import MiningCandidate
@@ -29,6 +30,7 @@ __all__ = [
     "StockDataStatus",
     "StockIndex",
     "Factor",
+    "FactorEvalJob",
     "Strategy",
     "BacktestResult",
     "MiningTask",

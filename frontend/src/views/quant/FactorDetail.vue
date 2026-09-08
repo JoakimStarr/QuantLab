@@ -302,7 +302,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
-import { getFactor, getQuantileAnalysis, neutralizeFactor, aiExplainFactor, getFactorAiDetail, chatFactorAi, backfillAlpha158Metrics } from '@/api/factor'
+import { getFactor, getQuantileAnalysis, neutralizeFactor, aiExplainFactor, getFactorAiDetail, chatFactorAi } from '@/api/factor'
 import { deepAnalysis } from '@/api/quant'
 import { fmt, numClass, formatTime } from '@/utils/format'
 import { renderMarkdown } from '@/utils/markdown'
@@ -564,23 +564,16 @@ function timeAgo(v) {
   return `${Math.floor(h / 24)} 天前`
 }
 
-// === 单因子评价（补算） ===
+// === 单因子评价（后台 job，可离开页面） ===
 async function onEvaluate() {
   if (!factor.value) return
   evaluating.value = true
   try {
-    const data = await backfillAlpha158Metrics([factorId.value], {})
-    const failed = Number(data?.eval_failed ?? data?.failed ?? 0)
-    const okCount = Number(data?.evaluated ?? 0)
-    if (failed > 0) {
-      ElMessage.warning(`${factor.value.name} 补算失败 ${failed}/${okCount + failed}`)
-    } else {
-      ElMessage.success(`${factor.value.name} 补算完成 ${okCount}`)
-    }
-    factorStore.invalidate()
+    // 走后台 eval job：worker 子进程计算，submitEval 等待终态后失效缓存并刷新
+    await factorStore.submitEval([factorId.value], { kind: 'single' })
     await loadFactor()
   } catch (e) {
-    ElMessage.error(`${factor.value.name} 补算失败：${e?.message || e}`)
+    ElMessage.error(`${factor.value.name} 评价任务提交失败：${e?.message || e}`)
   } finally {
     evaluating.value = false
   }

@@ -97,6 +97,14 @@ async def test_candidates_api_endpoint(db_ready):
     from app.main import app
     from app.services.mining.candidate_store import upsert_candidates
 
+    # 端点要求任务存在（404 前置），显式建一条任务避免依赖其它用例的序列残留
+    from app.core.database import async_session
+    from app.models.mining_task import MiningTask
+
+    async with async_session() as session:
+        session.add(MiningTask(id=11, type="llm", status="done"))
+        await session.commit()
+
     await upsert_candidates(11, [
         {"name": "mom", "expression": "$close / Ref($close, 20) - 1",
          "description": "动量", "status": "passed", "ic": 0.045},

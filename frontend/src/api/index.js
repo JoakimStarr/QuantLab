@@ -1,7 +1,31 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 
 const TOKEN_KEY = 'auth_token'
+
+// 注册"去同步中心"的打开回调（App 启动时注册；全局错误提示需要拉起 SyncCenter）
+let syncOpener = null
+export function registerSyncOpener(fn) {
+  syncOpener = fn
+}
+
+// QLIB_NOT_AVAILABLE / 数据未同步类错误：提示可操作（去同步中心），而不是只报一句失败
+function showQlibSuggestion(dataError) {
+  const msg = dataError?.message || '行情数据未同步'
+  if (syncOpener) {
+    ElMessageBox.confirm(`${msg}\n\n是否前往数据同步中心发起同步？`, '数据未同步', {
+      confirmButtonText: '去同步',
+      cancelButtonText: '知道了',
+      type: 'warning',
+    })
+      .then(() => syncOpener && syncOpener())
+      .catch(() => {})
+    return
+  }
+  const tip = dataError?.suggestion ? `${msg}（${dataError.suggestion}）` : msg
+  ElMessage.error(tip)
+}
 
 function generateId() {
   const s = 'xxxxxxxxxxxx'
@@ -90,8 +114,15 @@ request.interceptors.response.use(
         return Promise.reject(data?.error || error)
       }
       if (status === 503) {
-        ElMessage.error(data?.error?.message || '服务暂时不可用，请稍后重试')
-        return Promise.reject(data?.error || error)
+        const err = data?.error
+        if (err?.code === 'QLIB_NOT_AVAILABLE') {
+          showQlibSuggestion(err)
+          return Promise.reject(err || error)
+        }
+        const bizMsg = err?.message || '服务暂时不可用，请稍后重试'
+        const tip = err?.suggestion ? `${bizMsg}（${err.suggestion}）` : bizMsg
+        ElMessage.error(tip)
+        return Promise.reject(err || error)
       }
       if (status >= 500) {
         const serverMsg = data?.error?.message || '服务器内部错误'

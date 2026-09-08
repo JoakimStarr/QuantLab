@@ -1,12 +1,15 @@
 """策略管理与回测编排：CRUD + 因子组合 + 回测执行 + 结果落库。"""
 import json
 import logging
-from sqlalchemy import select, func
-from app.core.database import async_session
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import defer
+
 from app.core.config import settings
-from app.models.strategy import Strategy
+from app.core.database import async_session
 from app.models.backtest_result import BacktestResult
 from app.models.factor import Factor
+from app.models.strategy import Strategy
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +84,10 @@ def _compute_backtest_sync(factor_exprs: dict, weights: dict, combination_method
     universe: 标的池（None=config 默认），透传给 load_factor_values。
     asset_class: stock/etf，透传给回测后端（ETF 无整手/涨跌停放宽）。
     """
-    from app.services.quant.qlib_init import init_qlib
-    from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors, run_backtest
+    from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.portfolio import analyze_portfolio, build_nav_curve
+    from app.services.quant.qlib_init import init_qlib
 
     init_qlib()
     factor_values = {}
@@ -256,6 +259,14 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
 async def list_backtest_results(strategy_id: int = None, limit: int = 20) -> list[dict]:
     async with async_session() as session:
         q = select(BacktestResult).where(BacktestResult.is_deleted == 0)
+        # 列表只展示标量指标，不加载 nav_curve/metrics/trades 大 JSON 列
+        # （单条可达 300KB+，见 _result_summary docstring），避免每次列表
+        # 几 MB 的无谓传输；详情接口 get_backtest_result 仍走全量。
+        q = q.options(
+            defer(BacktestResult.nav_curve),
+            defer(BacktestResult.metrics),
+            defer(BacktestResult.trades),
+        )
         q = q.order_by(BacktestResult.created_at.desc()).limit(limit)
         if strategy_id:
             q = q.where(BacktestResult.strategy_id == strategy_id)

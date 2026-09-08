@@ -237,7 +237,7 @@ import { fmt, numClass } from '@/utils/format'
 import { useFactorStore } from '@/stores/factor'
 import { listUniverses } from '@/api/quant'
 import { useSyncStore } from '@/stores/sync'
-import { listFactors, listFactorSummary, addFactor, disableFactor, seedAlpha158, seedEtfFactors, backfillAlpha158Metrics, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
+import { listFactors, listFactorSummary, addFactor, disableFactor, seedAlpha158, seedEtfFactors, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
 
 const router = useRouter()
 const factorStore = useFactorStore()
@@ -724,28 +724,13 @@ async function onBackfillMetrics() {
   backfillingMetrics.value = true
   try {
     const [start, end] = backfillPeriod.value || []
-    const params = { start_date: start || undefined, end_date: end || undefined }
+    const params = { kind: 'batch', start_date: start || undefined, end_date: end || undefined }
     if (evalUniverse.value) params.universe = evalUniverse.value
-    const data = await backfillAlpha158Metrics(ids, params)
-    const total = data?.total ?? ids.length
-    const failed = Number(data?.eval_failed ?? data?.failed ?? 0)
-    const okCount = Number(data?.evaluated ?? 0)
-    if (failed > 0) {
-      const failures = data?.failures || []
-      const brief = failures
-        .slice(0, 5)
-        .map((f) => `${f.name || f.factor_id}: ${f.error || '未知原因'}`)
-        .join('；')
-      ElMessage.warning(
-        `补算完成 ${okCount}/${total}，失败 ${failed} 个` + (brief ? `（${brief}${failures.length > 5 ? '…' : ''}）` : '')
-      )
-    } else {
-      ElMessage.success(data?.message || `补算完成 ${okCount}/${total}`)
-    }
-    factorStore.invalidate()
+    // 批量补算走后台 eval job：worker 子进程逐个计算，可离开页面，完成后自动刷新
+    await factorStore.submitEval(ids, params)
     await refreshList()
   } catch {
-    /* 拦截器已提示 */
+    /* 拦截器/任务提示已反馈 */
   } finally {
     backfillingMetrics.value = false
   }
@@ -808,31 +793,19 @@ function rowClass({ rowData, rowIndex }) {
   return classes.join(' ')
 }
 
-// 单因子评价：复用补算链路同步计算
+// 单因子评价：改走后台 eval job（worker 子进程，可离开页面，完成后自动刷新）
 async function onEvaluate(row) {
   evaluatingId.value = row.id
   try {
-    const params = {}
+    const params = { kind: 'single' }
     if (evalUniverse.value) params.universe = evalUniverse.value
     const [start, end] = backfillPeriod.value || []
     if (start) params.start_date = start
     if (end) params.end_date = end
-    const data = await backfillAlpha158Metrics([row.id], params)
-    const total = data?.total ?? 1
-    const failed = Number(data?.eval_failed ?? data?.failed ?? 0)
-    const okCount = Number(data?.evaluated ?? 0)
-    if (failed > 0) {
-      const brief = (data?.failures || [])
-        .map((f) => `${f.name || f.factor_id}: ${f.error || '未知原因'}`)
-        .join('；')
-      ElMessage.warning(`${row.name} 补算失败 ${failed}/${total}${brief ? `（${brief}）` : ''}`)
-    } else {
-      ElMessage.success(`${row.name} 补算完成 ${okCount}/${total}`)
-    }
-    factorStore.invalidate()
+    await factorStore.submitEval([row.id], params)
     await refreshList()
   } catch (e) {
-    ElMessage.error(`${row.name} 补算失败：${e?.response?.data?.detail || e?.message || '未知原因'}`)
+    ElMessage.error(`${row.name} 评价任务提交失败：${e?.message || '未知原因'}`)
   } finally {
     evaluatingId.value = null
   }

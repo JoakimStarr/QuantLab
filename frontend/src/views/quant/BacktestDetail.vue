@@ -684,20 +684,28 @@ async function onRerun() {
   }
 }
 
-// 回测为独立子进程异步执行：轮询状态直到完成，然后取最新结果跳转
+// 回测为独立子进程异步执行：单状态轮询直到完成，然后取最新结果跳转。
+// 每 3s 一个请求（原实现每 2s 打状态+列表两个请求，最多 600 轮 ≈1200 请求），
+// 改为仅在状态发生终态跳变时才拉一次列表，最多 300 轮（15min）兜底。
 async function waitAndJump() {
   const sid = result.value.strategy_id
-  for (let i = 0; i < 600; i++) {
-    await new Promise((r) => setTimeout(r, 2000))
+  for (let i = 0; i < 300; i++) {
+    await new Promise((r) => setTimeout(r, 3000))
+    let st = null
     try {
       const res = await getAllBacktestStatuses()
-      const st = (res?.items || {})[sid] || { status: 'idle' }
-      if (st.status === 'running') continue
-      if (st.status === 'failed') {
-        ElMessage.error('回测失败：' + (st.error || st.message || '详见日志'))
-        break
-      }
-      // completed / idle：拉最新结果
+      st = (res?.items || {})[sid] || { status: 'idle' }
+    } catch {
+      // 轮询失败继续重试
+      continue
+    }
+    if (st.status === 'running') continue
+    if (st.status === 'failed') {
+      ElMessage.error('回测失败：' + (st.error || st.message || '详见日志'))
+      break
+    }
+    // completed / idle：拉最新结果
+    try {
       const list = await listBacktestResults(sid, { limit: 1 })
       const latest = Array.isArray(list) ? list[0] : list?.items?.[0]
       if (latest?.id && String(latest.id) !== String(route.params.id)) {
@@ -707,7 +715,7 @@ async function waitAndJump() {
       }
       break
     } catch {
-      // 轮询失败继续重试
+      // 结果可能尚未落库，下一轮重试
     }
   }
   rerunning.value = false

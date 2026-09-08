@@ -7,14 +7,22 @@ import logging
 import re
 from datetime import datetime, timedelta
 
+import numpy as np
 from fastapi import APIRouter, Query
 
+from app.core.cache import TTLCache
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.services.quant.qlib_init import init_qlib, is_qlib_available
 
 router = APIRouter(prefix="/market", tags=["market"])
 logger = logging.getLogger(__name__)
+
+# 行情接口缓存：日级 K 线数据在日内是静态的，Dashboard 轮询 / 页面切换时
+# 反复读 qlib bin 是纯浪费。overview 20s / kline 60s 的 TTL 足够轮询场景，
+# 且同步落新数据后 TTL 内最多短暂旧值（涨跌展示场景可接受）。
+_overview_cache = TTLCache(ttl=20)
+_kline_cache = TTLCache(ttl=60, maxsize=128)
 
 # 支持的指数列表
 SUPPORTED_INDICES = {
@@ -27,6 +35,23 @@ SUPPORTED_INDICES = {
     "SH000688": {"name": "科创50", "code": "sh000688", "desc": "STAR 50"},
     "SH000001": {"name": "上证指数", "code": "sh000001", "desc": "SSE Composite"},
 }
+
+
+def _quote_from_closes(closes: np.ndarray) -> dict | None:
+    """由收盘价序列算最新价/涨跌幅（overview 用）。
+
+    过滤 NaN（如"今天"数据未发布时 qlib 返回 NaN 日历日），只用真实收盘价，
+    避免 price/pct 变成 null 或 NaN。
+    """
+    closes = closes[~np.isnan(closes.astype(float))]
+    if len(closes) >= 2:
+        latest = float(closes[-1])
+        prev = float(closes[-2])
+        pct = (latest - prev) / prev * 100
+        return {"price": round(latest, 4), "pct_change": round(pct, 2)}
+    if len(closes) == 1:
+        return {"price": round(float(closes[0]), 4), "pct_change": 0}
+    return None
 
 
 @router.get("/indices")
@@ -89,6 +114,19 @@ async def get_index_kline(
         days = limit * 2 if period == "1d" else limit * 7
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
+    # K 线数据日内静态：按 (标的, 周期, 区间, limit) 做 60s 缓存，切页/轮询不再读 bin。
+    # 显式区间（回测买卖点叠加）请求的是历史静态数据，缓存同样有效。
+    cache_key = (qlib_code, period, start_date, end_date, limit)
+    cached = _kline_cache.get(cache_key)
+    if cached is not None:
+        return ApiResponse(ok=True, data={
+            "index_code": index_code,
+            "index_name": name,
+            "period": period,
+            "count": len(cached),
+            "items": cached,
+        })
+
     def _load():
         init_qlib()
         from qlib.data import D
@@ -150,6 +188,7 @@ async def get_index_kline(
     try:
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(None, _load)
+        _kline_cache.set(cache_key, items)
         return ApiResponse(ok=True, data={
             "index_code": index_code,
             "index_name": name,
@@ -190,6 +229,11 @@ async def market_overview():
     if not await is_qlib_available():
         raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
 
+    # Dashboard 轮询场景：20s TTL 缓存，避免每 1~3s 一次轮询就 8 次读 qlib bin
+    cached = _overview_cache.get("overview")
+    if cached is not None:
+        return ApiResponse(ok=True, data={"items": cached})
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
 
@@ -199,43 +243,48 @@ async def market_overview():
 
         d = chr(36)
         close_field = d + "close"
+        order = list(SUPPORTED_INDICES.items())
+        # 批量一次读全部指数 close（一次 D.features 调用），失败时逐指数兜底
         items = []
-        for code, info in SUPPORTED_INDICES.items():
-            try:
-                df = D.features(
-                    [info["code"]], [close_field],
-                    start_time=start_date, end_time=end_date, freq="day",
-                )
-                if df is not None and not df.empty:
-                    df = df.reset_index()
-                    closes = df[close_field].values
-                    # 过滤 NaN（如"今天"数据未发布时 qlib 返回 NaN 日历日）：
-                    # 只用真实收盘价，避免 price/pct 变成 null 或 NaN
-                    import numpy as np
-                    closes = closes[~np.isnan(closes.astype(float))]
-                    if len(closes) >= 2:
-                        latest = float(closes[-1])
-                        prev = float(closes[-2])
-                        pct = (latest - prev) / prev * 100
-                    elif len(closes) == 1:
-                        latest = float(closes[0])
-                        pct = 0
-                    else:
-                        continue
-                    items.append({
-                        "code": code,
-                        "name": info["name"],
-                        "price": round(latest, 4),
-                        "pct_change": round(pct, 2),
-                    })
-            except Exception as e:
-                logger.debug("获取 %s 行情失败: %s", code, e)
-                continue
+        try:
+            df = D.features(
+                [info["code"] for _, info in order], [close_field],
+                start_time=start_date, end_time=end_date, freq="day",
+            )
+            combined = df is not None and not df.empty
+        except Exception as e:  # noqa: BLE001
+            logger.debug("概览批量读取失败，逐指数兜底: %s", e)
+            combined = False
+        if combined:
+            df = df.reset_index()
+            for code, info in order:
+                try:
+                    sub = df.loc[df["instrument"] == info["code"], close_field]
+                    quote = _quote_from_closes(sub.values)
+                    if quote:
+                        items.append({"code": code, "name": info["name"], **quote})
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("获取 %s 行情失败: %s", code, e)
+        else:
+            # 兜底：逐指数独立读取（单 code 请求对缺失目录更宽容）
+            for code, info in order:
+                try:
+                    df = D.features(
+                        [info["code"]], [close_field],
+                        start_time=start_date, end_time=end_date, freq="day",
+                    )
+                    if df is not None and not df.empty:
+                        quote = _quote_from_closes(df[close_field].values)
+                        if quote:
+                            items.append({"code": code, "name": info["name"], **quote})
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("获取 %s 行情失败: %s", code, e)
         return items
 
     try:
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(None, _load)
+        _overview_cache.set("overview", items)
         return ApiResponse(ok=True, data={"items": items})
     except Exception as e:
         logger.error("市场概览失败: %s", e)
