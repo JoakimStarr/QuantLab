@@ -146,7 +146,7 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
 
     date_cols = [c for c in df.columns if str(c).isdigit() and len(str(c)) == 8]
     rows: list[dict] = []
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         name = str(r.get("指标", "")).strip()
         field = _INDICATOR_NAME_TO_FIELD.get(name)
         if field is None:

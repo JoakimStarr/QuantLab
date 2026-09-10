@@ -147,7 +147,7 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict
             _sync_stock_bin(feat_dir, out, old_calendar, ETF_BIN_FIELDS, overwrite=True)
             success += 1
             # etf_daily 窄表记录（ON CONFLICT DO NOTHING 幂等）
-            for _, r in df.iterrows():
+            for r in df.to_dict("records"):
                 pg_rows.append({
                     "code": code_lower.upper(),
                     "trade_date": str(r["date"])[:10],
@@ -395,7 +395,7 @@ async def sync_etf_tencent_aligned(provider_uri: str = None, days: int = None,
             out = _etf_out_df(df)
             feat_dir = os.path.join(provider_uri, "features", code.lower())
             _sync_stock_bin(feat_dir, out, calendar, ETF_BIN_FIELDS, overwrite=overwrite)
-            for _, r in df.iterrows():
+            for r in df.to_dict("records"):
                 pg_rows.append({
                     "code": code, "trade_date": str(r["date"])[:10],
                     "open": _f(r.get("open")), "high": _f(r.get("high")),

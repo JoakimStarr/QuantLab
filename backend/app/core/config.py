@@ -123,7 +123,12 @@ class LoggingSettings(SettingsBaseModel):
 
 
 class QuantSettings(SettingsBaseModel):
+    # 展示/按需拉取（akshare stock_zh_a_hist）使用的复权口径：qfq 前复权。
+    # 注意：qlib bin 的存储口径是后复权（hfq），由 adjust_method 表示，二者不同。
     adjust: str = "qfq"
+    # qlib bin 的价格存储口径（后复权 hfq：PIT 稳定，除权日不产生伪跳空）。
+    # 仅作语义标识；写入由 data_adjusted.apply_hfq_transform 保证。
+    adjust_method: str = "hfq"
     benchmark: str = "SH000300"
     cost_buy: float = 0.0013
     cost_sell: float = 0.0023

@@ -428,7 +428,7 @@ def _build_macro_rows(df: pd.DataFrame, indicator_key: str) -> list[dict]:
     # 过滤 REPORT_DATE 缺失/NaT 的行
     df = df.dropna(subset=["REPORT_DATE"])
     rows = []
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         report_date = r["REPORT_DATE"].date()
         for field_name, fcfg in cfg["fields"].items():
             src_col = fcfg["source"]
@@ -517,7 +517,7 @@ def _fetch_akshare_macro(indicator_key: str, cfg: dict) -> list[dict]:
     delay = cfg.get("delay", 0)
     freq = cfg.get("date_freq", "day")
     rows: list[dict] = []
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         d = _parse_macro_date(r.get(cfg["date_col"]), freq)
         if d is None:
             continue

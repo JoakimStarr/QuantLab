@@ -36,6 +36,7 @@ from app.services.data.baostock_client import (
     fetch_daily_all_a_stock_sync,
     from_baostock_code,
 )
+from app.services.data.data_adjusted import apply_hfq_transform, validate_change_consistency
 from app.services.data.data_clean import format_date_series
 from app.services.data.data_clean import to_float_strict as _f
 from app.services.data.data_fields import STOCK_BIN_FIELDS as BIN_FIELDS
@@ -118,11 +119,16 @@ def _accumulate(per_stock: dict, df: pd.DataFrame) -> None:
         })
 
 
-def _build_out_df(code_lower: str, df: pd.DataFrame) -> pd.DataFrame:
+def _build_out_df(code_lower: str, df: pd.DataFrame, adjust: bool = True) -> pd.DataFrame:
     """把 baostock 格式行（date/open/.../pctChg/isST/...）转成 qlib bin 写入帧。
 
     out 包含 BIN_FIELDS 全部字段：stock_daily 16 个数据列 + 衍生字段
     change(=pctChg/100) 和 tradable(涨跌停判定)。被回填与 PG 重建共用。
+
+    adjust=True（默认）：把 OHLC/preclose 变换为后复权价（hfq），factor=真实复权因子 A_t。
+    qlib 用 $close 估值、$factor 做整手取整，factor 必须是 复权价/真实价；旧实现写原始价
+    + factor=1.0 会让除权日出现伪跳空。调用方若只传入该股的一段（而非完整序列），
+    应传 adjust=False 并在拿到完整序列后再统一重建（见 rebuild_bins_hfq）。
     """
     df = df.sort_values("date").reset_index(drop=True)
     if df.empty:
@@ -147,17 +153,22 @@ def _build_out_df(code_lower: str, df: pd.DataFrame) -> pd.DataFrame:
         "ps_ttm": df["psTTM"].astype(float) if "psTTM" in df.columns else np.nan,
         "pcf_ncf_ttm": df["pcfNcfTTM"].astype(float) if "pcfNcfTTM" in df.columns else np.nan,
         "adjustflag": df["adjustflag"].astype(float) if "adjustflag" in df.columns else np.nan,
-        # 价格已按 adjustflag=qfq 前复权存储，factor 统一为 1.0：
-        # qlib 依赖 $factor 判断价格是否复权（factor 全 NaN 会进入 adjusted_price 模式，
-        # 导致 trade_unit=100 的整手取整失效，成交出现碎股）。
+        # 先置 1.0；adjust=True 时由 apply_hfq_transform 覆盖为真实累计复权因子 A_t。
         "factor": 1.0,
     })
-    # change = 涨跌幅(小数)；tradable 由涨跌幅+ST 判定
+    # change = 涨跌幅(小数)；tradable 由涨跌幅+ST 判定（用原始 close 即可，判定只看 pctChg）
     out["change"] = (df["pctChg"].astype(float) / 100.0).fillna(0.0)
     is_st = df["isST"] if "isST" in df.columns and df["isST"].notna().any() else None
     out["tradable"] = _compute_tradable(
         out["close"], df["pctChg"].astype(float), code=qlib_code, is_st=is_st,
     )
+    if adjust:
+        # preclose 损坏会累计污染其后所有 bar，写入前告警（baostock 为权威源，这里不跳过）
+        bad = validate_change_consistency(out["close"], out["preclose"], out["change"])
+        if bad:
+            logger.warning("%s: %d 根 bar 的 close/preclose 与 change 不一致（复权因子可能失真）",
+                           qlib_code, len(bad))
+        out = apply_hfq_transform(out)
     return out
 
 
@@ -169,29 +180,29 @@ def _write_stock_bins(code_lower: str, rows: list, global_calendar: list,
         return []
     qlib_code = code_lower.upper()
 
-    out = _build_out_df(code_lower, df)
+    # 分块写入时只拿到该股一段（20 日/批）序列，累计复权因子在批内连续、跨批不连续。
+    # 故此处先写原始价 + factor=1；run_baostock_backfill 收尾对本次写入的股票按完整
+    # 序列统一做 hfq 归一化（rebuild_bins_hfq），得到全局一致的复权价与真实 factor。
+    out = _build_out_df(code_lower, df, adjust=False)
 
     feat_dir = os.path.join(qlib_dir, "features", code_lower)
     _sync_stock_bin(feat_dir, out, global_calendar, BIN_FIELDS, overwrite=True,
                     old_calendar=old_calendar)
 
-    # stock_daily 全字段记录
-    rec = []
-    for _, r in df.iterrows():
-        rec.append({
-            "code": qlib_code,
-            "trade_date": date.fromisoformat(r["date"]),
-            "open": _f(r.get("open")), "high": _f(r.get("high")),
-            "low": _f(r.get("low")), "close": _f(r.get("close")),
-            "preclose": _f(r.get("preclose")), "volume": _f(r.get("volume")),
-            "amount": _f(r.get("amount")), "turn": _f(r.get("turn")),
-            "tradestatus": _i(r.get("tradestatus")), "pct_chg": _f(r.get("pctChg")),
-            "is_st": bool(r.get("isST")) if pd.notna(r.get("isST")) else None,
-            "pe_ttm": _f(r.get("peTTM")), "pb_mrq": _f(r.get("pbMRQ")),
-            "ps_ttm": _f(r.get("psTTM")), "pcf_ncf_ttm": _f(r.get("pcfNcfTTM")),
-            "adjustflag": _i(r.get("adjustflag")),
-        })
-    return rec
+    # stock_daily 全字段记录（to_dict("records") 向量化，避免 iterrows 逐行开销）
+    return [{
+        "code": qlib_code,
+        "trade_date": date.fromisoformat(str(r["date"])[:10]),
+        "open": _f(r.get("open")), "high": _f(r.get("high")),
+        "low": _f(r.get("low")), "close": _f(r.get("close")),
+        "preclose": _f(r.get("preclose")), "volume": _f(r.get("volume")),
+        "amount": _f(r.get("amount")), "turn": _f(r.get("turn")),
+        "tradestatus": _i(r.get("tradestatus")), "pct_chg": _f(r.get("pctChg")),
+        "is_st": bool(r.get("isST")) if pd.notna(r.get("isST")) else None,
+        "pe_ttm": _f(r.get("peTTM")), "pb_mrq": _f(r.get("pbMRQ")),
+        "ps_ttm": _f(r.get("psTTM")), "pcf_ncf_ttm": _f(r.get("pcfNcfTTM")),
+        "adjustflag": _i(r.get("adjustflag")),
+    } for r in df.to_dict("records")]
 
 
 def _i(v):
@@ -300,33 +311,29 @@ async def _insert_misc(df_basic, df_industry, trade_dates) -> None:
 
     async with async_session() as session:
         if df_basic is not None and not df_basic.empty:
-            rows = []
-            for _, r in df_basic.iterrows():
-                rows.append({
-                    # DB 统一大写口径（与 stock_daily 一致）
-                    "code": from_baostock_code(str(r["code"])).upper(),
-                    "name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
-                    "ipo_date": _parse_date(r.get("ipoDate")),
-                    "out_date": _parse_date(r.get("outDate")),
-                    "type": str(r["type"]) if pd.notna(r["type"]) else None,
-                    "status": str(r["status"]) if pd.notna(r["status"]) else None,
-                })
+            rows = [{
+                # DB 统一大写口径（与 stock_daily 一致）
+                "code": from_baostock_code(str(r["code"])).upper(),
+                "name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
+                "ipo_date": _parse_date(r.get("ipoDate")),
+                "out_date": _parse_date(r.get("outDate")),
+                "type": str(r["type"]) if pd.notna(r["type"]) else None,
+                "status": str(r["status"]) if pd.notna(r["status"]) else None,
+            } for r in df_basic.to_dict("records")]
             for chunk in _chunk(rows):
                 stmt = pg_insert(StockBasic.__table__).values(chunk)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
                 await session.execute(stmt)
 
         if df_industry is not None and not df_industry.empty:
-            rows = []
-            for _, r in df_industry.iterrows():
-                rows.append({
-                    # DB 统一大写口径（与 stock_daily 一致）
-                    "code": from_baostock_code(str(r["code"])).upper(),
-                    "code_name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
-                    "industry": str(r["industry"]) if pd.notna(r["industry"]) else None,
-                    "industry_classification": str(r["industryClassification"]) if pd.notna(r["industryClassification"]) else None,
-                    "update_date": _parse_date(r.get("updateDate")),
-                })
+            rows = [{
+                # DB 统一大写口径（与 stock_daily 一致）
+                "code": from_baostock_code(str(r["code"])).upper(),
+                "code_name": str(r["code_name"]) if pd.notna(r["code_name"]) else None,
+                "industry": str(r["industry"]) if pd.notna(r["industry"]) else None,
+                "industry_classification": str(r["industryClassification"]) if pd.notna(r["industryClassification"]) else None,
+                "update_date": _parse_date(r.get("updateDate")),
+            } for r in df_industry.to_dict("records")]
             for chunk in _chunk(rows):
                 stmt = pg_insert(StockIndustry.__table__).values(chunk)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
@@ -684,6 +691,7 @@ async def _run_backfill_downloads(
     queue_max: int = 8,
     written_days: set = None,
     old_calendar: list = None,
+    written_codes: set = None,
 ) -> int:
     """流水线式回填下载：串行拉取 + 后台并行写盘，写盘不耽误下载。
 
@@ -704,8 +712,10 @@ async def _run_backfill_downloads(
     total = len(to_download)
     success_stocks = 0
     # 本次回填已重写过 bin 的股票集合：其 bin 已按 global_calendar 对齐，
-    # 后续批次必须以 global_calendar 映射旧值（否则前几批数据被丢弃）
-    written_codes = set()
+    # 后续批次必须以 global_calendar 映射旧值（否则前几批数据被丢弃）。
+    # 可由调用方传入以收集"本次实际写入的股票"，用于回填后的 hfq 统一归一化。
+    if written_codes is None:
+        written_codes = set()
     if written_days is None:
         written_days = set(_get_calendar(qlib_dir))
 
@@ -858,6 +868,7 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
                     len(trade_dates), len(already_downloaded),
                     len(to_download), len(global_calendar))
 
+        written_codes: set = set()
         if to_download:
             # 流水线：下载串行（baostock 禁止并发连接），写入在后台消费者中并行执行，
             # 写盘不耽误下载；_flush_chunk 内部再按股票多线程并写。
@@ -868,6 +879,7 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
                 # 旧 bin 对齐的是回填前的 day.txt（位于 global_calendar 后缀），
                 # 必须传旧日历，否则旧数据会被映射到错误位置而丢失
                 old_calendar=existing_calendar,
+                written_codes=written_codes,
             )
         else:
             logger.info("无需下载新日期，跳过逐日拉取")
@@ -890,6 +902,29 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         # 否则校验会报"长度异常"（如新增"今天"一个交易日时）
         from app.services.data.eod_incremental import _pad_bins_to_calendar
         _pad_bins_to_calendar(qlib_dir, _final_cal)
+
+        # 后复权归一化：回填按 20 日/批写入，逐批的累计复权因子只在批内连续；
+        # 这里对本次写入的股票按"完整原始序列"重算全局一致的 hfq 价 + factor=A_t，
+        # 消除批次边界处因除权造成的价格跳变（幂等，可安全重复执行）。
+        if written_codes:
+            try:
+                from app.services.data.data_adjusted import rebuild_bins_hfq
+                from app.services.data.index_registry import load_index_codes
+                try:
+                    skip = await load_index_codes()
+                except Exception:  # noqa: BLE001
+                    skip = set()
+                update_progress(pct=93, status="running", message="归一化后复权因子...")
+                norm = await asyncio.to_thread(
+                    rebuild_bins_hfq, qlib_dir, sorted(written_codes), skip, True,
+                )
+                if norm.get("applied") or norm.get("anomalies"):
+                    logger.info("回填后 hfq 归一化: 处理 %d 只, 写盘 %d, 异常 %d %s",
+                                norm.get("total", 0), norm.get("applied", 0),
+                                norm.get("anomalies", 0),
+                                norm.get("anomaly_samples", [])[:3])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("回填后 hfq 归一化失败（可稍后运行 rebuild_adjusted_bins 修复）: %s", e)
 
         # 外盘/宏观重广播：仅当日历相对回填前发生变化时才执行——
         # 日历没变时外盘 bin 长度无需重对齐、宏观广播指纹也会判重跳过，
@@ -943,6 +978,13 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
             except Exception as e2:  # noqa: BLE001
                 logger.warning("zz500 成分拉取失败: %s", e2)
             _build_instruments(qlib_dir, code_range, global_calendar, hs300, zz500)
+        else:
+            # 成功路径：_rebuild_dynamic_instruments 只写 csi300/csi500，
+            # all/csiall 仅在异常回退分支写过 → 必须在此补写，否则 all.txt/
+            # csiall.txt 会停滞在最后一次 repair/回退的日期，universe=all 的
+            # 挖掘/回测会被 qlib 静默截断。传空指数列表即只写 all/csiall，
+            # 不覆盖刚写好的 csi300/csi500（_build_instruments 对空列表会跳过）。
+            _build_instruments(qlib_dir, code_range, global_calendar, [], [])
 
         # 更新同步状态
         await _update_sync_status(universe, qlib_dir, global_calendar, code_range)

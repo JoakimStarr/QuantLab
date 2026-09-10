@@ -61,7 +61,9 @@ def _rebuild_one_stock(code_upper: str, rows: list, calendar: list, qlib_dir: st
     df = _db_rows_to_df(rows)
     if df.empty:
         return
-    out = _build_out_df(code_lower, df)
+    # 传入的是该股完整 stock_daily 历史（原始价）→ adjust=True 做全量后复权，
+    # 得到全局一致的 hfq 价 + factor=A_t（与 PG 原始价可互推）。
+    out = _build_out_df(code_lower, df, adjust=True)
     feat_dir = os.path.join(qlib_dir, "features", code_lower)
     _sync_stock_bin(feat_dir, out, calendar, BIN_FIELDS, overwrite=True)
 

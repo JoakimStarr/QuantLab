@@ -240,6 +240,144 @@ def check_fieldset() -> dict:
     }
 
 
+# ------------------------------------------------------------ adjustment
+def _sample_stock_dirs(provider_uri: str, index_codes: set, max_stocks: int) -> list:
+    """取前 N 个股票目录（含 preclose/change bin，排除指数/ETF）。"""
+    from app.services.data.data_adjusted import is_stock_dir
+
+    feat_root = os.path.join(provider_uri, "features")
+    if not os.path.isdir(feat_root):
+        return []
+    out = []
+    for name in sorted(os.listdir(feat_root)):
+        d = os.path.join(feat_root, name)
+        if name in index_codes or not os.path.isdir(d):
+            continue
+        if is_stock_dir(d):
+            out.append(name)
+        if len(out) >= max_stocks:
+            break
+    return out
+
+
+def _check_adjustment_sync(provider_uri: str, calendar: list, index_codes: set,
+                           db_close: dict | None = None, max_stocks: int = 20) -> dict:
+    """复权口径 sanity check（抽样，纯 bin 读取 + 可选 PG 原始价比对）。
+
+    检查：
+      - factor 存在且在有收盘价的 bar 上有限（全 NaN / 缺失 = 未复权）
+      - factor 单调不降（A_t = cumprod(e_t), e_t>=1）——容忍 1e-6 浮点回退
+      - ``|close/preclose - 1 - change| < 1e-4``（close/preclose/factor 同乘 A_t，比值不变）
+      - 与 PG 比对：``raw = bin_close / factor`` 应等于 stock_daily.close（bin=hfq, PG=raw）
+    """
+    from app.services.data.data_adjusted import (
+        _read_bin_array,
+        validate_change_consistency,
+    )
+
+    import numpy as np
+
+    codes = _sample_stock_dirs(provider_uri, index_codes, max_stocks)
+    feat_root = os.path.join(provider_uri, "features")
+    db_close = db_close or {}
+    checked = factor_bad = nonmono = change_bad = pg_mismatch = 0
+    factor_samples: list[str] = []
+    change_samples: list[str] = []
+    pg_samples: list[str] = []
+    cal = calendar or []
+
+    for code in codes:
+        d = os.path.join(feat_root, code)
+        close, _ = _read_bin_array(os.path.join(d, "close.day.bin"))
+        factor, _ = _read_bin_array(os.path.join(d, "factor.day.bin"))
+        preclose, _ = _read_bin_array(os.path.join(d, "preclose.day.bin"))
+        change, _ = _read_bin_array(os.path.join(d, "change.day.bin"))
+        if close is None or preclose is None or change is None:
+            continue
+        checked += 1
+        finite_close = np.isfinite(close)
+        if factor is None or len(factor) != len(close):
+            factor_bad += 1
+            if len(factor_samples) < MAX_SAMPLES:
+                factor_samples.append(f"{code}: factor bin 缺失/长度不符")
+            continue
+        # factor 在有效收盘价处必须有限
+        if np.isnan(factor[finite_close]).any():
+            factor_bad += 1
+            if len(factor_samples) < MAX_SAMPLES:
+                factor_samples.append(f"{code}: factor 在有效价处为 NaN")
+        # 单调不降（A_t 只随除权增大）
+        fv = factor[finite_close]
+        if fv.size >= 2 and bool((np.diff(fv) < -1e-6).any()):
+            nonmono += 1
+            if len(factor_samples) < MAX_SAMPLES:
+                factor_samples.append(f"{code}: factor 非单调")
+        # change 一致性（比值口径，与 A_t 无关）
+        with np.errstate(divide="ignore", invalid="ignore"):
+            raw_close = np.where(factor != 0, close / factor, close)
+            raw_pre = np.where(factor != 0, preclose / factor, preclose)
+        bad = validate_change_consistency(raw_close, raw_pre, change)
+        if bad:
+            change_bad += 1
+            if len(change_samples) < MAX_SAMPLES:
+                change_samples.append(f"{code}: {len(bad)} 根 bar 不符合")
+        # PG 原始价比对（bin_close/factor == stock_daily.close）
+        ref = db_close.get(code)
+        if ref and fv.size:
+            n = min(len(close), len(cal))
+            diffs = 0
+            for i in range(n):
+                dt = cal[i]
+                dbc = ref.get(dt)
+                if dbc is None or not np.isfinite(dbc) or not np.isfinite(raw_close[i]):
+                    continue
+                if abs(raw_close[i] - dbc) > max(abs(dbc) * 1e-3, 1e-4):
+                    diffs += 1
+            if diffs:
+                pg_mismatch += 1
+                if len(pg_samples) < MAX_SAMPLES:
+                    pg_samples.append(f"{code}: {diffs} 天 raw≠PG.close")
+
+    errors = factor_bad + change_bad + pg_mismatch
+    message = (
+        f"抽样 {checked} 只：factor 异常 {factor_bad}，非单调 {nonmono}，"
+        f"change 不符 {change_bad}，与 PG 不符 {pg_mismatch}"
+    )
+    return {
+        "status": _status_from_counts(error=errors, warn=nonmono),
+        "message": message,
+        "checked_stocks": checked,
+        "factor_bad": factor_bad,
+        "factor_bad_samples": factor_samples,
+        "nonmonotonic": nonmono,
+        "change_bad": change_bad,
+        "change_bad_samples": change_samples,
+        "pg_mismatch": pg_mismatch,
+        "pg_mismatch_samples": pg_samples,
+    }
+
+
+async def check_adjustment(provider_uri: str, calendar: list,
+                           index_codes: set = frozenset(), max_stocks: int = 20) -> dict:
+    """抽样复权校验：bin(hfq) ↔ factor ↔ change ↔ PG(raw) 一致性。"""
+    sample = _sample_stock_dirs(provider_uri, index_codes, max_stocks)
+    db_close: dict = {}
+    if sample:
+        try:
+            async with async_session() as session:
+                stmt = (
+                    select(StockDaily.code, StockDaily.trade_date, StockDaily.close)
+                    .where(StockDaily.code.in_([c.upper() for c in sample]))
+                )
+                rows = (await session.execute(stmt)).all()
+            for code, td, close in rows:
+                db_close.setdefault(code.lower(), {})[td.strftime("%Y-%m-%d")] = close
+        except Exception as e:  # noqa: BLE001
+            logger.warning("复权校验读取 PG 收盘价失败（跳过 bin↔PG 比对）: %s", e)
+    return await run_io_cpu(_check_adjustment_sync, provider_uri, calendar,
+                            index_codes, db_close, max_stocks)
+
+
 # ------------------------------------------------------------- calendar
 def _exclude_pending_today(missing_dates: list, now: "datetime | None" = None) -> list:
     """排除"今天但 baostock 尚未发布"的日期。
@@ -610,6 +748,7 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
     coverage_result = await check_coverage(provider_uri, calendar, index_codes, db_ranges)
     qlib_result = await check_qlib(provider_uri, universe)
     macro_result = await run_io_cpu(check_macro, provider_uri, calendar, index_codes, fin_codes)
+    adjustment_result = await check_adjustment(provider_uri, calendar, index_codes)
 
     # 日历错位（day.txt ↔ stock_daily 不一致）：fields/coverage/qlib/macro 全部
     # 以 day.txt 为长度参照，参照本身错位时它们的结论不可信 → 统一降级为 warn，
@@ -629,8 +768,9 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
         _all_results = {
             "fields": fields_result, "coverage": coverage_result,
             "qlib": qlib_result, "macro": macro_result,
+            "adjustment": adjustment_result,
         }
-        for key in ("fields", "coverage", "qlib", "macro"):
+        for key in ("fields", "coverage", "qlib", "macro", "adjustment"):
             result = _all_results[key]
             if result["status"] == "error":
                 result["status"] = "warn"
@@ -646,6 +786,9 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
             or coverage_result["range_mismatch"]
             or macro_result["missing"]
             or macro_result["bad_size"]
+            or adjustment_result["factor_bad"]
+            or adjustment_result["change_bad"]
+            or adjustment_result["pg_mismatch"]
         ),
         "missing_field_files": fields_result["missing_field_files"],
         "db_without_bin": coverage_result["db_without_bin"],
@@ -658,6 +801,9 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
         "stocks_with_gaps": fields_result["suspicious_bin_stocks"],
         "macro_missing": macro_result["missing"],
         "macro_bad_size": macro_result["bad_size"],
+        "adjustment_factor_bad": adjustment_result["factor_bad"],
+        "adjustment_change_bad": adjustment_result["change_bad"],
+        "adjustment_pg_mismatch": adjustment_result["pg_mismatch"],
     }
     if sync_state["syncing"]:
         # 回填进行中结果不可信，禁止触发补齐（前端按 drift.needs_repair 隐藏按钮）
@@ -665,7 +811,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
 
     check_statuses = [fieldset_result["status"], fields_result["status"],
                       calendar_result["status"], coverage_result["status"],
-                      qlib_result["status"], macro_result["status"]]
+                      qlib_result["status"], macro_result["status"],
+                      adjustment_result["status"]]
     all_ok = all(s == "ok" for s in check_statuses)
     summary = "数据完整" if all_ok else (
         "存在待修复差异，可点击「一键补齐」" if drift["needs_repair"] else "存在差异（需人工处理）"
@@ -688,6 +835,8 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
         align_issues.append(f"宏观字段长度异常 {macro_result['bad_size']} 个")
     if macro_result["missing"]:
         align_issues.append(f"宏观字段缺失 {macro_result['missing']} 个")
+    if adjustment_result["factor_bad"] or adjustment_result["change_bad"]:
+        align_issues.append("复权口径异常（factor/change 不符）")
     checks_summary = "数据对齐正常，因子可直接计算" if not align_issues else "数据对齐待修复：" + "；".join(align_issues[:4])
     if sync_state["syncing"]:
         checks_summary = "回填进行中，数据对齐状态待定"
@@ -710,6 +859,7 @@ async def run_validation(provider_uri: str | None = None, universe: str = "all")
             "coverage": coverage_result,
             "qlib": qlib_result,
             "macro": macro_result,
+            "adjustment": adjustment_result,
         },
         "drift": drift,
         # 兼容旧前端字段

@@ -161,7 +161,10 @@ mining:
     - neutral
     - negative
 quant:
+  # 展示/按需拉取（akshare）口径：前复权 qfq；qlib bin 存储口径为后复权 hfq（见 adjust_method）
   adjust: qfq
+  # qlib bin 存储口径：hfq 后复权（PIT 稳定）。写入由 data_adjusted 保证，此键为语义标识
+  adjust_method: hfq
   benchmark: SH000300
   cost_buy: 0.0013
   cost_sell: 0.0023

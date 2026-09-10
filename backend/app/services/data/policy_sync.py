@@ -83,7 +83,7 @@ def _fetch_one_day(d: str) -> tuple[str, list[dict]]:
     if df is None or df.empty:
         return d, []
     rows = []
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         title = str(r.get("title") or "").strip()
         if not title:
             continue
@@ -240,7 +240,7 @@ def _fetch_em(days: list[str] | None = None) -> list[dict]:
     if df is None or df.empty:
         return []
     rows = []
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         title = str(r.get("标题") or "").strip()
         if not title:
             continue

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
+from app.services.data.data_adjusted import apply_hfq_transform, validate_change_consistency
 from app.services.data.data_clean import format_date_series
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,31 @@ def _read_bin_meta(file_path: str) -> tuple:
 
 # 已确保存在的 features/* 目录集合：避免热路径每文件一次 os.makedirs syscall
 _written_dirs: set = set()
+
+
+def _read_last_valid(bin_path: str):
+    """读取 bin 最后一个有限值（用于取已存 factor / 上一根原始收盘）；无则 None。"""
+    values, _start = _read_bin(bin_path)
+    if values is None or len(values) == 0:
+        return None
+    mask = np.isfinite(values)
+    if not mask.any():
+        return None
+    return float(values[int(np.nonzero(mask)[0][-1])])
+
+
+def _load_incremental_base(feat_dir: str):
+    """读取已存 bin 的后复权基准：返回 (base_factor|None, prev_raw_close|None)。
+
+    base_factor = 已存 factor 的最后一个有限值（缺失/非法 → None，退化为全量模式）；
+    prev_raw_close = 最后一根已存原始收盘 = hfq_close / factor（用于新 bar 的边界 e0）。
+    """
+    base = _read_last_valid(os.path.join(feat_dir, "factor.day.bin"))
+    last_close = _read_last_valid(os.path.join(feat_dir, "close.day.bin"))
+    if base is None or not np.isfinite(base) or base <= 0:
+        return None, last_close
+    prev_raw = (last_close / base) if last_close is not None else None
+    return float(base), prev_raw
 
 
 def _ensure_dir(dir_path: str) -> None:
@@ -486,8 +512,8 @@ def incremental_sync_eod_baostock(
 
     cal_set = set(old_calendar) if old_calendar else set()
     codes_set = set(c.lower() for c in codes)
-    # 写入字段与 akshare 路径保持一致：open/high/low/close/volume + tradable
-    fields_to_write = list(FIELD_MAP.values()) + ["tradable"]
+    # 写入字段：OHLCV + preclose/change/factor（后复权口径所需）+ tradable
+    fields_to_write = list(FIELD_MAP.values()) + ["preclose", "change", "factor", "tradable"]
 
     # 按股票聚合各日数据：qlib_code_lower -> list[DataFrame]
     per_stock_rows = {}
@@ -527,7 +553,7 @@ def incremental_sync_eod_baostock(
         df_all["date"] = format_date_series(df_all["date"])
 
         # 数值列转 float（baostock 可能返回字符串/对象类型）
-        num_cols = ["open", "high", "low", "close", "volume", "amount",
+        num_cols = ["open", "high", "low", "close", "preclose", "volume", "amount",
                     "pctChg", "isST"]
         for c in num_cols:
             if c in df_all.columns:
@@ -549,16 +575,18 @@ def incremental_sync_eod_baostock(
             df = df.sort_values("date").reset_index(drop=True)
             qlib_code = qlib_code_lower.upper()
 
-            # 构造写入 DataFrame（字段与 akshare 路径一致）
+            # 构造写入 DataFrame（原始价；随后按后复权口径变换）
             out = pd.DataFrame({
                 "date": df["date"].astype(str),
                 "open": df["open"].astype(float),
                 "high": df["high"].astype(float),
                 "low": df["low"].astype(float),
                 "close": df["close"].astype(float),
+                "preclose": df["preclose"].astype(float) if "preclose" in df.columns else np.nan,
                 "volume": df["volume"].astype(float),
                 "pct_change": df["pctChg"].astype(float),
             })
+            out["change"] = out["pct_change"] / 100.0
             # isST: baostock '1'=ST, '0'=非ST，转 bool 供 ST 5% 涨跌停判定
             if "isST" in df.columns:
                 is_st = df["isST"].astype(str) == "1"
@@ -569,12 +597,19 @@ def incremental_sync_eod_baostock(
             )
 
             feat_dir = os.path.join(provider_uri, "features", qlib_code_lower)
-            # 复用现有复权对齐逻辑（baostock 不复权价与旧 bin 通过 ratio 对齐）
+            # 后复权增量：以已存 factor 为基准，新 bar 的 A = base_factor × 段内累计；
+            # prev_raw_close 补上首根新增 bar 的边界除权因子（e0 = 前收/当日 preclose）。
+            base_factor, prev_raw_close = _load_incremental_base(feat_dir)
+            bad = validate_change_consistency(out["close"], out["preclose"], out["change"])
+            if bad:
+                logger.warning("%s: %d 根新增 bar 的 close/preclose 与 change 不一致（A_t 可能失真）",
+                               qlib_code, len(bad))
+            out = apply_hfq_transform(out, base_factor=base_factor, prev_raw_close=prev_raw_close)
             _sync_stock_bin(feat_dir, out, old_calendar, fields_to_write, overwrite)
             success_count += 1
 
             # 构建 stock_daily 全字段记录（ON CONFLICT DO NOTHING，重复写入幂等）
-            for _, r in df.iterrows():
+            for r in df.to_dict("records"):
                 d = r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
                 pg_rows.append({
                     "code": qlib_code,
@@ -833,7 +868,7 @@ async def _incremental_sync_eod_akshare(
                     all_new_dates.add(d)
 
             # stock_daily 记录（仅新日期；已落库的旧日期由回填补齐，不重复写）
-            for _, r in df.iterrows():
+            for r in df.to_dict("records"):
                 d = str(r["date"])[:10]
                 if d not in cal_set:
                     pg_rows.append({

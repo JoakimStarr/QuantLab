@@ -60,6 +60,7 @@ summary: 数据源、qlib bin + PostgreSQL 双轨存储、同步流程、宏观/
 - 2026-08-04：接入宏观数据（东财 + akshare → `macro_indicator` 窄表 → 广播写 bin），修复 bin 重建大小写 bug、同步僵尸锁、完整性校验窗口/instruments 问题。
 - 2026-08-05：接入财报（akshare → `financial_indicator` 窄表 → PIT forward-fill 广播 `$roe` 等）；分块回填丢数据 bug 修复。
 - 2026-08-06：接入外盘隔夜情绪因子（`$us_sp500_ret` 等）；ETF 标的池（baostock 按日全市场 ETF → `etf_daily` + `instruments/etf_all.txt` + `stock_index(type='etf')`）；指数注册表 `stock_index`。
+- 2026-09-10：复权口径修正——bin 由「原始价 + factor=1.0」改为「后复权 hfq + 真实累计复权因子 A_t」（本地按 baostock 涨跌幅复权法重建）；PG 保持原始价；新增离线迁移脚本 `rebuild_adjusted_bins.py` 与抽样复权校验（§8.5）。
 
 ### 1.2 存储双轨制设计
 
@@ -71,7 +72,7 @@ summary: 数据源、qlib bin + PostgreSQL 双轨存储、同步流程、宏观/
 **设计原则**：
 - 能进 qlib bin 的日频数值字段一律进 bin（因子引擎直接 `$` 引用）。
 - 需要 PIT 语义（按公告日查询）的数据进 PG（`macro_indicator.available_date` / `financial_indicator.available_date` 即 PIT 日期）。
-- 行情源为 baostock；价格存 **qfq 复权价**，`factor` bin 为常量 1.0（qlib 依赖 `$factor` 识别已复权价），`change` 为日收益率、`tradable` 为涨跌停/ST mask，均为派生字段。
+- 行情源为 baostock；bin 价格存 **后复权（hfq）价**，`factor` bin 为**真实累计复权因子 A_t**（qlib 用 `$close` 估值、`$factor` 做整手取整，要求 `factor = 复权价/真实价`）；`change` 为日收益率、`tradable` 为涨跌停/ST mask，均为派生字段。PG `stock_daily` 存**原始不复权价**（见 §8.5）。
 - 指数与 ETF 是**独立的 instrument 类**：只写 OHLCV（ETF 另含 volume/amount/change/tradable/factor），无 stock_daily/财报，通过 `stock_index` 表区分，校验/修复时排除。
 
 ### 1.3 关键文件职责
@@ -358,7 +359,55 @@ open / high / low / close / volume / amount / change / tradable / factor
 
 ---
 
-## 9. 已知限制与 TODO
+## 8.5 复权口径（hfq / raw / qfq）
+
+> 2026-09-10 起：qlib bin 由「原始价 + factor=1.0」改为「后复权 hfq + 真实复权因子」。
+
+**三套口径**
+
+| 场景 | 口径 | 说明 |
+|------|------|------|
+| qlib bin（`features/*/{open,high,low,close,preclose}.day.bin`） | **hfq 后复权** | `factor` bin = 累计复权因子 `A_t`；`raw = bin_close / factor` 可还原原始价 |
+| PostgreSQL `stock_daily` | **raw 原始价** | baostock 原样落库（不复权），是权威源 |
+| 前端行情 / 按需拉取（akshare） | **qfq 前复权** | `config.quant.adjust=qfq`（展示口径，与 bin 存储无关） |
+
+**官方公式（baostock「涨跌幅复权法」）**
+
+```
+增量后复权因子  e_t = 前一日收盘价 / 当日前收(preclose)   # 正常日 e=1，除权日 e>1
+累计后复权因子  A_t = cumprod(e_t)                        # 首根 bar A=1，单调不降
+后复权价        hfq_t = 原始价_t × A_t
+```
+
+实现见 `backend/app/services/data/data_adjusted.py`：
+
+- `compute_hfq_factor(raw_close, preclose)` — 逐 bar 递推 A_t。
+- `apply_hfq_transform(df, base_factor=None, prev_raw_close=None)` — 缩放 `open/high/low/close/preclose`（\*A_t）、写 `factor=A_t`；`volume/amount/change/tradable` 不动。
+  - **全量模式**（`base_factor=None`）：传入该股完整原始序列，得到全局一致的 hfq（用于 repair 从 PG 全量重建、离线脚本）。
+  - **增量模式**（`base_factor=已存 factor`）：仅新增 bar，`A = base_factor × 段内累计`，`prev_raw_close` 补首根 bar 的边界除权因子（用于 EOD）。
+  - **幂等**：若 df 已含 `factor`，先 `raw = price/factor` 还原再重算，重复执行不二次复权。
+- `validate_change_consistency(raw_close, preclose, change, tol=1e-4)` — 断言 `|close/preclose-1-change| < 1e-4`；**preclose 损坏会累计污染其后所有 bar**，写入前必须校验。
+
+**写入路径**
+
+- 回填（`baostock_backfill`）：分块（20 日/批）先写原始价，收尾对本次写入股票按**完整序列**调用 `rebuild_bins_hfq` 统一归一化（消除批次边界跳变）。
+- EOD（`eod_incremental`）：读已存 `factor` 作基准做增量复权（`_load_incremental_base`）。
+- 补齐（`repair`）：从 PG 完整历史全量重建 → 全局一致 hfq。
+- 离线迁移/修复：`backend/scripts/rebuild_adjusted_bins.py`（**默认 dry-run**，`--apply` 才写，幂等可续跑，`--apply` 时持 `sync_lock`）。
+
+**校验**（`validation.check_adjustment`，抽样）：`factor` 存在且有限、单调不降、`change` 一致，且 `bin_close/factor == stock_daily.close`（bin=hfq ↔ PG=raw）。
+
+**跨厂商差异**
+
+baostock 用 preclose 递推累计因子；akshare（东财/新浪）、通联等对分红送转的复权基准与精度处理略有出入，hfq 绝对水平可能有微小差异，但**日收益一致**（本仓库实测重建 hfq 与官方 hfq 比值恒定、std≈7.5e-09；`close/preclose-1 ≈ change` 误差 6.4e-07）。
+
+**PIT 稳定性**
+
+- **hfq（后复权）**：以最早 bar 为基准，追加新 bar **不改变历史值** → PIT 稳定，适合回测/因子。
+- **qfq（前复权）**：以最新 bar 为基准，新数据（尤其除权）到来会**整体重算历史价** → 非 PIT，仅用于展示。
+- 注：hfq 基准在**向前补齐更早历史**（prepend）时会整体缩放；日常追加（append）不受影响。
+
+
 
 | # | 模块 | 问题 |
 |---|------|------|
@@ -387,6 +436,8 @@ open / high / low / close / volume / amount / change / tradable / factor
 | 一键全同步编排 | `backend/app/services/data/full_sync.py` |
 | 一键补齐 | `backend/app/services/data/repair.py` |
 | 数据校验 | `backend/app/services/data/validation.py` |
+| 复权变换（hfq） | `backend/app/services/data/data_adjusted.py` |
+| 复权离线迁移脚本 | `backend/scripts/rebuild_adjusted_bins.py` |
 | 同步 worker | `backend/app/services/data/sync_worker.py` |
 | 进度 | `backend/app/services/data/sync_progress.py` |
 | 爬取锁 | `backend/app/services/data/sync_lock.py` |
@@ -395,4 +446,4 @@ open / high / low / close / volume / amount / change / tradable / factor
 | qlib bin | `data/qlib_bin/cn_data/` |
 | PostgreSQL | 连接见 `.env` `DATABASE_URL` / `POSTGRES_*` |
 
-*文档版本：v4.0.0 · 最后更新：2026-08-06*
+*文档版本：v4.1.0 · 最后更新：2026-09-10*
