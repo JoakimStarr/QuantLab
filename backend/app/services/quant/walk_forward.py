@@ -29,6 +29,7 @@ def run_walk_forward(
     cost_buy: float = 0.0013,       # 兼容保留，run_backtest 用 settings.quant.cost_buy
     cost_sell: float = 0.0023,      # 兼容保留，run_backtest 用 settings.quant.cost_sell
     benchmark: str = None,
+    embargo_days: int = 5,          # A6 purge/embargo：train/test 间隔交易日数（≈标签 horizon）
 ) -> dict:
     """Walk-forward 滚动回测
 
@@ -43,6 +44,9 @@ def run_walk_forward(
         rebalance: 调仓频率
         cost_buy/cost_sell: 保留兼容（实际成本由 run_backtest 从 settings.quant 读取）
         benchmark: 基准代码
+        embargo_days: 训练/测试窗之间的隔离交易日数（A6）。训练窗末端的 horizon
+            前向收益标签会伸进紧邻的测试窗，测试起点从 train_end 后第
+            embargo_days 个**交易日**开始，剔除重叠边界样本（purge/embargo）。
 
     Returns:
         {
@@ -74,6 +78,7 @@ def run_walk_forward(
     train_delta = pd.Timedelta(train_window)
     test_delta = pd.Timedelta(test_window)
     step_delta = pd.Timedelta(step)
+    embargo_days = max(0, int(embargo_days))
 
     windows = []
     oos_returns_all = []
@@ -82,10 +87,20 @@ def run_walk_forward(
     train_start = start
     window_idx = 0
 
-    while train_start + train_delta + test_delta <= end:
+    while train_start + train_delta <= end:
         train_end = train_start + train_delta
-        test_start = train_end
+        # A6 purge/embargo：test 从 train_end 后第 embargo_days 个交易日开始，
+        # 避免训练窗末端 horizon 前向收益标签与测试窗重叠（前视泄漏）
+        first_test_idx = int(np.searchsorted(all_dates, train_end, side="right"))
+        test_idx = first_test_idx + embargo_days
+        if test_idx >= len(all_dates):
+            break
+        test_start = all_dates[test_idx]
         test_end = test_start + test_delta
+        if test_end > end + pd.Timedelta(days=1):
+            train_start += step_delta
+            window_idx += 1
+            continue
 
         # 训练期：遍历 topk 找最优参数
         best_topk = topk_candidates[0]
@@ -139,6 +154,7 @@ def run_walk_forward(
                 "train_end": str(train_end.date()),
                 "test_start": str(test_start.date()),
                 "test_end": str(test_end.date()),
+                "embargo_days": embargo_days,
                 "best_topk": best_topk,
                 "train_sharpe": round(float(best_train_sharpe), 4),
                 "test_sharpe": test_metrics.get("sharpe"),

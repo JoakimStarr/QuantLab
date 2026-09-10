@@ -114,3 +114,102 @@ class TestBHCorrectedPValues:
     def test_out_of_range_clipped(self):
         q = bh_corrected_pvalues([-0.1, 1.5, 0.05])
         assert all(0.0 <= x <= 1.0 for x in q)
+
+
+class TestCrossBatchBH:
+    """A6：跨批次累计的多重检验校正。"""
+
+    def test_accumulated_history_makes_q_more_conservative(self):
+        from collections import deque
+
+        from app.services.quant.factor_validator import cross_batch_bh_correct
+
+        reg = deque(maxlen=10000)
+        q1 = cross_batch_bh_correct([0.04], registry=reg)
+        assert q1 == [pytest.approx(0.04)]
+        # 第二批：池里已有 1 个历史检验，m=3 → 本批 0.04 的 q 升至 0.06
+        q2 = cross_batch_bh_correct([0.04, 0.5], registry=reg)
+        assert q2[0] > q1[0]
+        assert q2[0] == pytest.approx(0.06)
+        assert q2[1] == pytest.approx(0.5)
+
+    def test_none_preserved_and_length_kept(self):
+        from collections import deque
+
+        from app.services.quant.factor_validator import cross_batch_bh_correct
+
+        reg = deque(maxlen=10000)
+        out = cross_batch_bh_correct([0.1, None, 0.2], registry=reg)
+        assert len(out) == 3
+        assert out[1] is None
+        assert out[0] is not None and out[2] is not None
+
+    def test_reset_clears_module_pool(self):
+        from app.services.quant.factor_validator import (
+            cross_batch_bh_correct,
+            reset_cross_batch_registry,
+        )
+
+        reset_cross_batch_registry()
+        q1 = cross_batch_bh_correct([0.05])
+        reset_cross_batch_registry()
+        q2 = cross_batch_bh_correct([0.05])
+        # 重置后两批互不可见，q 相同（各自 m=1）
+        assert q1 == q2 == [pytest.approx(0.05)]
+
+
+class TestTestICGate:
+    """A6：test_ic 方向一致性门禁（通过 monkeypatch 纯逻辑验证，无 DB）。"""
+
+    N_STOCKS = 12
+    N_DAYS = 60
+
+    @staticmethod
+    def _make_dfs(flip_test: bool):
+        rng = np.random.default_rng(7)
+        dates = pd.date_range("2024-01-01", periods=TestTestICGate.N_DAYS, freq="B")
+        stocks = [f"s{j}" for j in range(TestTestICGate.N_STOCKS)]
+        idx = pd.MultiIndex.from_product([dates, stocks], names=["datetime", "instrument"])
+        n = len(idx)
+        codes = np.tile(np.arange(TestTestICGate.N_STOCKS) + 1, TestTestICGate.N_DAYS) / TestTestICGate.N_STOCKS
+        day_of = np.repeat(np.arange(TestTestICGate.N_DAYS), TestTestICGate.N_STOCKS)
+        noise = rng.normal(0, 0.02, n)
+        label = codes + noise
+        # 测试段（后 12 天）标签与因子反向 → IC 为负
+        if flip_test:
+            label = np.where(day_of >= 48, -codes + noise, label)
+        fdf = pd.DataFrame({"factor": codes}, index=idx)
+        ldf = pd.DataFrame({"label": label}, index=idx)
+        return fdf, ldf
+
+    def _run(self, monkeypatch, flip_test: bool) -> dict:
+        from app.services.quant import factor_eval as fe
+        from app.services.quant.factor_validator import (
+            clear_ic_cache,
+            evaluate_factor_with_validation,
+        )
+
+        fdf, ldf = self._make_dfs(flip_test)
+        monkeypatch.setattr(fe, "load_factor_values", lambda *a, **k: fdf, raising=False)
+        monkeypatch.setattr(fe, "load_label", lambda *a, **k: ldf, raising=False)
+        clear_ic_cache()
+        return evaluate_factor_with_validation(
+            "test_expr", "2024-01-01", "2024-12-31",
+            ic_threshold=0.01, significance_alpha=0.05,
+            stability_threshold=0.5, positive_ratio_threshold=0.55,
+            decay_threshold=-0.01,
+        )
+
+    def test_consistent_direction_passes(self, monkeypatch):
+        result = self._run(monkeypatch, flip_test=False)
+        assert result["test_ic_pass"] is True
+        assert result["passed"] is True, result["fail_reasons"]
+        assert result["fail_reasons"] == []
+
+    def test_flipped_test_ic_fails(self, monkeypatch):
+        result = self._run(monkeypatch, flip_test=True)
+        assert result["test_ic_pass"] is False
+        assert result["passed"] is False
+        assert any("方向不一致" in r for r in result["fail_reasons"])
+        # valid 段本身表现很好，失败只能来自 test 门禁
+        assert result["valid_ic"] > 0.5

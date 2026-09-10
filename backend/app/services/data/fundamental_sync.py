@@ -5,8 +5,10 @@
   全市场 ~5400 次请求，约 2-3 小时）。baostock 季频财报按股×季（全市场 10 年
   约 130 万次请求）远超日限额，不可行。
 - 入库：financial_indicator 窄表（code, report_date, field_name, value,
-  available_date）。available_date = 报告期 + 法定披露截止延迟（近似 pub_date，
-  防 look-ahead，与宏观指标 delay 做法一致）。
+  available_date）。available_date 优先取**真实公告日**（akshare 同花顺摘要可得时），
+  取不到时回退"报告期 + 法定披露截止延迟"（保守，防 look-ahead，最多滞后 ~4 个月）。
+  行内以 source 列标记：``akshare``=真实公告日、``akshare:est``=法定截止日估算
+  （不新增列，避免改动模型/迁移；估算口径见 ``_resolve_available_date``）。
 - 广播：按 available_date(PIT) forward-fill 写 features/{code}/{field}.day.bin，
   供 qlib 因子直接引用（如 $roe / $netprofit_yoy）。
 
@@ -18,7 +20,7 @@ import logging
 import math
 import os
 import time
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 from sqlalchemy import func, select
@@ -77,6 +79,74 @@ def _compute_available_date(stat: date) -> date:
     if stat.month == 12:
         return stat.replace(year=stat.year + 1, month=4, day=30)
     return stat
+
+
+def _parse_ymd(val) -> date | None:
+    """把 akshare 返回的日期（date/datetime/'2024-04-30'/'20240430'）解析为 date。"""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "nat", "--"):
+        return None
+    s = s.split(" ")[0].split("T")[0].replace("/", "-")
+    try:
+        if len(s) == 8 and s.isdigit():
+            return date(int(s[:4]), int(s[4:6]), int(s[6:]))
+        return date.fromisoformat(s)
+    except (ValueError, IndexError):
+        return None
+
+
+def _resolve_available_date(stat: date, announce: dict | None) -> tuple[date, bool]:
+    """确定某报告期的 PIT 可用日。
+
+    优先真实公告日（``announce``：{报告期: 公告日}），否则回退法定披露截止日。
+    返回 ``(available_date, estimated)``；``estimated=True`` 表示用的是法定截止日估算。
+    真实公告日必须 >= 报告期（防止脏数据造成 look-ahead），否则同样回退估算。
+    """
+    real = (announce or {}).get(stat)
+    if real is not None and real >= stat:
+        return real, False
+    return _compute_available_date(stat), True
+
+
+def _fetch_announcement_dates(qlib_code: str) -> dict:
+    """尽力获取真实公告日 ``{报告期: 公告日}``（akshare 同花顺财务摘要）。
+
+    该接口在部分 akshare 版本/被限流时不可用，任何异常都只记 debug 并返回 {}，
+    由 ``_resolve_available_date`` 回退法定截止日——不阻断主抓取流程。
+    """
+    try:
+        import akshare as ak
+    except Exception:  # noqa: BLE001
+        return {}
+    fn = getattr(ak, "stock_financial_abstract_ths", None)
+    if fn is None:
+        return {}
+    symbol = qlib_code[2:] if len(qlib_code) >= 8 else qlib_code
+    try:
+        df = fn(symbol=symbol, indicator="按报告期")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("真实公告日拉取失败 %s: %s", qlib_code, str(e)[:80])
+        return {}
+    if df is None or getattr(df, "empty", True):
+        return {}
+    cols = [str(c) for c in df.columns]
+    report_col = next((c for c in cols if "报告期" in c), None)
+    announce_col = next((c for c in cols if "公告" in c), None)
+    if not report_col or not announce_col:
+        return {}
+    out: dict = {}
+    for r in df.to_dict("records"):
+        rep = _parse_ymd(r.get(report_col))
+        ann = _parse_ymd(r.get(announce_col))
+        if rep is not None and ann is not None:
+            out[rep] = ann
+    return out
 
 
 def expected_latest_report_date(today: date | None = None) -> date | None:
@@ -144,6 +214,9 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
     if df is None or df.empty or "指标" not in df.columns:
         return []
 
+    # A7：优先真实公告日；接口不可用时回退法定截止日（estimated）
+    announce = _fetch_announcement_dates(qlib_code)
+
     date_cols = [c for c in df.columns if str(c).isdigit() and len(str(c)) == 8]
     rows: list[dict] = []
     for r in df.to_dict("records"):
@@ -159,6 +232,7 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
                 stat = date(int(col[:4]), int(col[4:6]), int(col[6:]))
             except (ValueError, IndexError):
                 continue
+            pub_date, estimated = _resolve_available_date(stat, announce)
             rows.append({
                 # DB 统一大写口径（与 stock_daily 一致）；QLib bin 目录仍用小写（广播时 lower）
                 "code": qlib_code.upper(),
@@ -166,8 +240,9 @@ def _fetch_stock_financial(qlib_code: str, retries: int = 2) -> list[dict]:
                 "field_name": field,
                 "value": val,
                 "unit": FIN_INDICATORS[name].get("unit"),
-                "available_date": _compute_available_date(stat),
-                "source": "akshare",
+                "available_date": pub_date,
+                # 行内标记：akshare=真实公告日；akshare:est=法定截止日估算（无可信公告日）
+                "source": "akshare" if not estimated else "akshare:est",
             })
     logger.info("财务摘要 %s → %d 行", qlib_code, len(rows))
     return rows

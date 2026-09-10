@@ -6,6 +6,8 @@
 - 并行友好：验证器内部计算可拆分到进程池
 """
 import logging
+from collections import deque
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -317,6 +319,41 @@ def bh_corrected_pvalues(p_values: list) -> list:
     return out
 
 
+# ==================== 跨批次多重检验校正 ====================
+
+# 跨批次 p 值累计池：同一挖掘任务会对多批候选因子反复做显著性检验，
+# BH 只在单批内校正会低估累计假阳性。按因子维度把每批 p 值累加进池，
+# 校正时把当前批并入池后用全池统一做 BH——历史检验越多，当前批 q 越保守。
+_CROSS_BATCH_PVALS: deque = deque(maxlen=10000)
+
+
+def cross_batch_bh_correct(p_values: list, registry: deque = None) -> list:
+    """跨批次累计的 BH 校正：本批 p 值并入累计池后，用全池统一校正。
+
+    Args:
+        p_values: 本批原始 p 值列表（None 保持 None）
+        registry: 自定义累计池（测试/隔离用）；默认用模块级 _CROSS_BATCH_PVALS
+
+    Returns:
+        与输入等长的本批 q 值列表（基于"历史批次 + 本批"的总检验数 m 计算）
+    """
+    pool = _CROSS_BATCH_PVALS if registry is None else registry
+    n_before = len(pool)
+    pool.extend(p for p in p_values if p is not None)
+    corrected = bh_corrected_pvalues(list(pool))
+    batch = corrected[n_before:]
+    out = []
+    it = iter(batch)
+    for p in p_values:
+        out.append(next(it) if p is not None else None)
+    return out
+
+
+def reset_cross_batch_registry() -> None:
+    """清空跨批次累计池（新挖掘任务开始时 / 测试用）。"""
+    _CROSS_BATCH_PVALS.clear()
+
+
 # ==================== 主验证器 ====================
 
 # IC 缓存：key=md5(expr|start|end|horizon)，value=全量评价结果
@@ -489,7 +526,9 @@ def evaluate_factor_with_validation(
     Returns:
         {
             "valid_ic": float,              # 验证集 IC（主筛选指标）
-            "test_ic": float,               # 测试集 IC（仅记录，不参与筛选）
+            "test_ic": float,               # 测试集 IC（样本外确认门禁：仅做方向一致性检验，
+                                            #   不参与阈值筛选——测试集仍不是"选型用的样本外"）
+            "test_ic_pass": bool | None,    # 测试集方向一致性（None=测试段数据不足，不判定）
             "ic": float,                    # 全样本 IC（向后兼容）
             "rank_ic": float,               # 全样本 RankIC
             "icir": float,                  # 全样本 ICIR
@@ -595,9 +634,12 @@ def evaluate_factor_with_validation(
     valid_ic_std = float(valid_ic.std()) if len(valid_ic) > 1 else None
     valid_icir = float(valid_ic_mean / valid_ic_std) if valid_ic_mean and valid_ic_std else None
 
-    # 5. 测试集 IC（仅记录）
+    # 5. 测试集 IC（样本外确认门禁：方向必须与验证集一致，否则判过拟合）
     test_ic = segment_ics.get("test", pd.Series(dtype=float))
     test_ic_mean = float(test_ic.mean()) if len(test_ic) > 0 else None
+    test_ic_pass = None
+    if len(test_ic) >= 3 and valid_ic_mean is not None and test_ic_mean is not None:
+        test_ic_pass = bool(np.sign(test_ic_mean) == np.sign(valid_ic_mean))
 
     # 6. 滚动 IC 统计
     rolling_eval = RollingICEvaluator.evaluate(valid_ic)
@@ -669,11 +711,19 @@ def evaluate_factor_with_validation(
         passed = False
         fail_reasons.append("与已有因子高度相关")
 
+    # 测试集确认门禁：方向反了说明 valid 段的 IC 大概率是过拟合/运气
+    if test_ic_pass is False:
+        passed = False
+        fail_reasons.append(
+            f"test_ic={test_ic_mean} 与 valid_ic={valid_ic_mean} 方向不一致（疑似过拟合）"
+        )
+
     result = {
         # 主筛选指标
         "valid_ic": round(valid_ic_mean, 4) if valid_ic_mean is not None else None,
         "valid_icir": round(valid_icir, 4) if valid_icir is not None else None,
         "test_ic": round(test_ic_mean, 4) if test_ic_mean is not None else None,
+        "test_ic_pass": test_ic_pass,
         "passed": passed,
         "fail_reasons": fail_reasons,
 

@@ -290,13 +290,19 @@ def load_factor_values(
             logger.warning("ETF 标的池不支持市值/行业中性化，跳过（universe=%s）", market)
         else:
             from app.services.factor.neutralize import industry_neutralize, market_cap_neutralize
-            if neutralize == "market_cap":
-                df = market_cap_neutralize(df, factor_col="factor")
+            try:
+                if neutralize == "market_cap":
+                    df = market_cap_neutralize(df, factor_col="factor")
+                else:
+                    df = industry_neutralize(df, factor_col="factor")
+            except Exception as e:  # noqa: BLE001
+                # A4 门禁：中性化失败（如 PIT 市值不可用）时告警并保留原始因子值，
+                # 绝不静默回退到实时快照市值。
+                logger.warning("中性化失败，保留原始因子值: %s", str(e)[:160])
             else:
-                df = industry_neutralize(df, factor_col="factor")
-            # 用中性化后的值替换原始因子值，保持 "factor" 列名不变
-            df["factor"] = df["factor_neutralized"]
-            df = df.drop(columns=["factor_neutralized"])
+                # 用中性化后的值替换原始因子值，保持 "factor" 列名不变
+                df["factor"] = df["factor_neutralized"]
+                df = df.drop(columns=["factor_neutralized"])
 
     return df
 

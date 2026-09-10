@@ -365,23 +365,35 @@ def predict_with_automl_model(task_id, features_df: pd.DataFrame) -> pd.Series:
 
 # ---------------- 时序交叉验证 ----------------
 
-def time_series_cv_eval(model_factory, X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> dict:
-    """时序交叉验证（TimeSeriesSplit），返回各折 Spearman IC 统计。
+def _ts_cv_splits(n_samples: int, n_splits: int, embargo: int = 5) -> list:
+    """生成带 embargo gap 的时序折（纯逻辑，独立出来便于无 DB 测试）。
+
+    embargo：train 尾部与 valid 之间剔除的样本数（≈标签前向收益 horizon），
+    避免训练标签窗口伸进验证窗造成泄漏（A6）。
+    """
+    from sklearn.model_selection import TimeSeriesSplit
+
+    tscv = TimeSeriesSplit(n_splits=n_splits, gap=max(0, int(embargo)))
+    return list(tscv.split(np.zeros(n_samples)))
+
+
+def time_series_cv_eval(model_factory, X: pd.DataFrame, y: pd.Series,
+                        n_splits: int = 5, embargo: int = 5) -> dict:
+    """时序交叉验证（TimeSeriesSplit + embargo gap），返回各折 Spearman IC 统计。
 
     Args:
         model_factory: 无参 callable，每次调用返回新模型实例
         X: 特征 DataFrame
         y: 标签 Series（与 X 同索引）
         n_splits: 折数
+        embargo: train/valid 之间剔除的边界样本数（≈标签 horizon，防标签重叠泄漏）
     """
-    from sklearn.model_selection import TimeSeriesSplit
     from scipy.stats import spearmanr
 
-    tscv = TimeSeriesSplit(n_splits=n_splits)
     cv_scores = []
     X_arr = X.values if hasattr(X, "values") else np.asarray(X)
     y_arr = y.values if hasattr(y, "values") else np.asarray(y)
-    for train_idx, valid_idx in tscv.split(X_arr):
+    for train_idx, valid_idx in _ts_cv_splits(len(X_arr), n_splits, embargo):
         model = model_factory()
         model.fit(X_arr[train_idx], y_arr[train_idx])
         pred = model.predict(X_arr[valid_idx])
