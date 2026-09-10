@@ -17,6 +17,18 @@ import pytest
 from app.services.data import eod_incremental as eod
 
 
+@pytest.fixture(autouse=True)
+def _isolate_covered_dates():
+    """隔离 _covered_trade_dates 的真实 DB 依赖，避免单测连真实 stock_daily。
+
+    incremental_sync_eod 现以「stock_daily 实际覆盖的交易日」判断已同步；默认置
+    None 即回退到「按 day.txt 日历判断」的旧行为，保证既有用例确定性。需要模拟
+    「已有数据」的用例自行 patch 覆盖本 fixture 即可。
+    """
+    with patch.object(eod, "_covered_trade_dates", new=AsyncMock(return_value=None)):
+        yield
+
+
 # ---------- _get_limit_pct ----------
 
 def test_get_limit_pct_main_board():
@@ -478,3 +490,68 @@ async def test_akshare_all_failed_returns_ok_false(tmp_qlib):
     assert r["ok"] is False
     assert r["success"] == 0
     assert r["failed"] == 1
+
+
+# ---------- 候选日期：以「数据是否存在」为准，而非 day.txt 日历 ----------
+
+def test_gen_candidate_dates_skips_only_covered_data_dates():
+    """covered_dates = 已有数据的交易日；不在其中的工作日必须仍为候选。
+
+    回归：day.txt 会被 padding 到当天（含未同步的日子），若以日历判「已同步」，
+    则当天永不拉取。
+    """
+    from datetime import date
+    covered = {"2026-09-09"}  # 只有 09-09 真有数据
+    cand = eod._gen_candidate_dates(
+        date(2026, 9, 7), date(2026, 9, 11), covered, overwrite=False)
+    assert "2026-09-09" not in cand          # 已有数据 → 跳过
+    assert cand == ["2026-09-07", "2026-09-08", "2026-09-10", "2026-09-11"]
+
+
+def test_gen_candidate_dates_overwrite_includes_covered():
+    from datetime import date
+    cand = eod._gen_candidate_dates(
+        date(2026, 9, 7), date(2026, 9, 9),
+        {"2026-09-07", "2026-09-08", "2026-09-09"}, overwrite=True)
+    assert cand == ["2026-09-07", "2026-09-08", "2026-09-09"]
+
+
+async def test_eod_candidate_dates_use_db_covered_not_calendar(tmp_qlib):
+    """回归：候选日期应基于 stock_daily 已覆盖日期，而非 day.txt 日历。"""
+    base, old_dates = tmp_qlib
+    sentinel = {"2000-01-03"}  # 与 old_dates 完全不同，用于区分来源
+    seen = {}
+
+    def _fake_gen(start, end, covered, overwrite):
+        seen["covered"] = covered
+        return []
+
+    with patch.object(eod, "_covered_trade_dates",
+                      new=AsyncMock(return_value=sentinel)), \
+         patch.object(eod, "_gen_candidate_dates", side_effect=_fake_gen), \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
+        await eod.incremental_sync_eod(
+            universe="all", days=5, provider_uri=str(base),
+            overwrite=False, source="baostock",
+        )
+    assert seen["covered"] == sentinel
+
+
+async def test_eod_falls_back_to_calendar_when_db_unavailable(tmp_qlib):
+    """stock_daily 查询失败（None）→ 回退按日历判断的旧行为。"""
+    base, old_dates = tmp_qlib
+    seen = {}
+
+    def _fake_gen(start, end, covered, overwrite):
+        seen["covered"] = covered
+        return []
+
+    with patch.object(eod, "_covered_trade_dates",
+                      new=AsyncMock(return_value=None)), \
+         patch.object(eod, "_gen_candidate_dates", side_effect=_fake_gen), \
+         patch.object(eod, "_refresh_status_after_eod", new=AsyncMock()):
+        await eod.incremental_sync_eod(
+            universe="all", days=5, provider_uri=str(base),
+            overwrite=False, source="baostock",
+        )
+    assert seen["covered"] == set(old_dates)

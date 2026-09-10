@@ -445,13 +445,17 @@ def _fetch_eod_akshare(qlib_code: str, start_str: str, end_str: str):
 
 
 def _gen_candidate_dates(start_date, end_date,
-                         old_calendar: list, overwrite: bool) -> list:
+                         covered_dates, overwrite: bool) -> list:
     """生成候选同步日期（YYYY-MM-DD）。
 
-    遍历 [start_date, end_date] 区间内的工作日；overwrite=False 时跳过日历已有日期，
-    以减少对 baostock 的调用次数。非交易日（周末/节假日）由 baostock 返回空数据自然跳过。
+    遍历 [start_date, end_date] 区间内的工作日；overwrite=False 时跳过 covered_dates。
+
+    重要：covered_dates 必须是"确实已有数据的交易日"（来自 stock_daily），不能
+    用 day.txt 日历——日历会被 padding 到当天（含尚未发布/未同步的日子），若以
+    日历为准，则"日历已含但无数据"的当天会被误判为已同步而永不拉取（鸡生蛋：
+    day.txt 领先 stock_daily）。非交易日（周末/节假日）由 baostock 返回空数据自然跳过。
     """
-    cal_set = set(old_calendar) if old_calendar else set()
+    cal_set = set(covered_dates) if covered_dates else set()
     dates = []
     cur = start_date
     while cur <= end_date:
@@ -461,6 +465,31 @@ def _gen_candidate_dates(start_date, end_date,
                 dates.append(d)
         cur += timedelta(days=1)
     return dates
+
+
+async def _covered_trade_dates(start, end):
+    """窗口内 stock_daily 实际已有数据的交易日集合（YYYY-MM-DD）。
+
+    start/end 为 ``datetime.date``；返回 None 表示查询失败（调用方回退旧行为）。
+    """
+    try:
+        from app.core.database import async_session
+        from sqlalchemy import text
+        async with async_session() as session:
+            rows = (await session.execute(
+                text("SELECT DISTINCT trade_date FROM stock_daily "
+                     "WHERE trade_date >= :s AND trade_date <= :e"),
+                {"s": start, "e": end},
+            )).all()
+        out = set()
+        for r in rows:
+            d = r[0]
+            out.add(d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10])
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("查询 stock_daily 已有交易日失败，回退按日历判断: %s", e)
+        return None
+
 
 
 def incremental_sync_eod_baostock(
@@ -736,8 +765,13 @@ async def incremental_sync_eod(
 
     # baostock 主源：一次拉全市场，按股票分组写 bin
     if source == "baostock":
+        # 以「stock_daily 是否已有数据」判断已同步的交易日，而非 day.txt 日历：
+        # 日历会被 padding 到当天，用它会把「日历已含但无数据」的当天判为已同步。
+        covered = await _covered_trade_dates(start_date.date(), end_date.date())
+        if covered is None:
+            covered = set(old_calendar)  # DB 不可用 → 回退旧行为
         candidate_dates = _gen_candidate_dates(
-            start_date, end_date, old_calendar, overwrite,
+            start_date, end_date, covered, overwrite,
         )
         # 盘中排除当日（15:00 前为 A 股交易时段，当日 bar 不完整）
         # include_intraday=True 时保留当日（供智能同步"同步当日"路径使用）
