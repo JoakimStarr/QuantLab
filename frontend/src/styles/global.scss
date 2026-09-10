@@ -16,6 +16,13 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  // 跟随主题 class 切换原生控件配色（暗色 FOUC 修复的一部分：
+  // index.html 内联脚本在挂载前给 html 加 .dark，此处随即生效）
+  color-scheme: light;
+
+  &.dark {
+    color-scheme: dark;
+  }
 }
 
 body {
@@ -140,7 +147,40 @@ img {
   transform: translateY(-12px) scale(0.98);
 }
 
+// 路由 meta.transition 消费的命名过渡（18 条路由声明了 'fade-in-up'），
+// AppLayout 的 <Transition :name="route.meta.transition || 'page'"> 按路由切换
+.fade-in-up-enter-active {
+  transition: all var(--duration-slow) var(--ease-out-expo);
+}
+
+.fade-in-up-leave-active {
+  transition: all var(--duration-normal) var(--ease-in-out);
+}
+
+.fade-in-up-enter-from {
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+.fade-in-up-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
 // === Utility Classes ===
+
+// 卡片悬浮反馈：--shadow-card → --shadow-md + 轻微上浮（--ease-spring 回弹）
+// 用法：卡片元素追加 .card-hover；prefers-reduced-motion 下由全局兜底关闭
+.card-hover {
+  transition:
+    transform var(--duration-normal) var(--ease-spring),
+    box-shadow var(--duration-normal) var(--ease-spring);
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+}
 
 // Colors
 .color-up {

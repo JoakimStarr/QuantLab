@@ -54,9 +54,14 @@ export const useSyncStore = defineStore('sync', () => {
   let timer = null
   let idleTicks = 0
   let wasRunning = false
+  // 热轮询截止时间：页面（如 DataStatus）提交任务后调用 boostPolling()，
+  // 让全局单 timer 在空闲态也按 1s 拉取，直到窗口过期（避免空闲 60s 探测间隔漏掉刚提交的任务）
+  let hotUntil = 0
 
   const running = computed(() => progress.value?.status === 'running')
   const progressPct = computed(() => Math.floor(progress.value?.progress_pct || 0))
+  // 页面自行消费 progress 并处理完成提示时置 true，抑制 store 的通用完成 toast，避免重复弹两条
+  const localProgressHandler = ref(false)
 
   // ---- 进度轮询（单 timer：running 1s / 空闲每 15s 探测一次） ----
   async function fetchProgress() {
@@ -70,11 +75,14 @@ export const useSyncStore = defineStore('sync', () => {
 
   function onProgressTransition() {
     // running -> 终态：提示结果并刷新各域最近同步时间
+    // （页面标记 localProgressHandler 时由页面自行提示，这里只刷新 lastSync）
     if (wasRunning && !running.value && progress.value) {
-      if (progress.value.status === 'done') {
-        ElMessage.success(progress.value.message || '同步完成')
-      } else if (progress.value.status === 'failed') {
-        ElMessage.error(progress.value.error || progress.value.message || '同步失败')
+      if (!localProgressHandler.value) {
+        if (progress.value.status === 'done') {
+          ElMessage.success(progress.value.message || '同步完成')
+        } else if (progress.value.status === 'failed') {
+          ElMessage.error(progress.value.error || progress.value.message || '同步失败')
+        }
       }
       refreshLastSync()
     }
@@ -84,7 +92,7 @@ export const useSyncStore = defineStore('sync', () => {
   function startPolling() {
     if (timer) return
     timer = setInterval(async () => {
-      if (running.value) {
+      if (running.value || Date.now() < hotUntil) {
         idleTicks = 0
         await fetchProgress()
       } else if (idleTicks % 60 === 0) {
@@ -158,6 +166,16 @@ export const useSyncStore = defineStore('sync', () => {
     drawerOpen.value = false
   }
 
+  // 页面提交任务后调用：短暂提升轮询频率（默认 70s），保证刚提交的任务立刻被 1s 轮询捕获
+  function boostPolling(ms = 70000) {
+    hotUntil = Date.now() + ms
+  }
+
+  // 页面提交新任务时清空上一次的进度快照（进度条从零开始）
+  function clearProgress() {
+    progress.value = null
+  }
+
   // App 常驻组件（TopBar）挂载时调用一次
   function init() {
     fetchProgress()
@@ -173,9 +191,12 @@ export const useSyncStore = defineStore('sync', () => {
     drawerOpen,
     running,
     progressPct,
+    localProgressHandler,
     init,
     open,
     close,
+    boostPolling,
+    clearProgress,
     startFullSync,
     syncDomain,
     refreshLastSync,

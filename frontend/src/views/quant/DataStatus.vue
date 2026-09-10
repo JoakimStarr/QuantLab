@@ -2,14 +2,17 @@
   <PageContainer narrow>
     <PageHeader title="数据管理" subtitle="管理 qlib 数据源同步与新鲜度" />
 
-    <!-- KPI 概览 -->
-    <div class="kpi-grid mb-6">
-      <div class="kpi-card">
+    <!-- KPI 概览（v-stagger：卡片依次入场；card-hover：悬浮上浮反馈） -->
+    <div v-stagger class="kpi-grid mb-6">
+      <div class="kpi-card card-hover">
         <div class="kpi-label">股票总数</div>
-        <div class="kpi-value">{{ currentStatus.stock_count || '--' }}</div>
+        <div class="kpi-value">
+          <CountUp v-if="currentStatus.stock_count != null" :value="currentStatus.stock_count" />
+          <span v-else>--</span>
+        </div>
         <div class="kpi-sub">universe: {{ currentStatus.universe || '--' }}</div>
       </div>
-      <div class="kpi-card">
+      <div class="kpi-card card-hover">
         <div class="kpi-label">最新交易日</div>
         <div class="kpi-value">{{ currentStatus.latest_date || '--' }}</div>
         <div class="kpi-sub">
@@ -18,14 +21,14 @@
           <el-tag v-else-if="todayHalted" size="small" type="info" class="ml-2">今日休市（非交易日）</el-tag>
         </div>
       </div>
-      <div class="kpi-card">
+      <div class="kpi-card card-hover">
         <div class="kpi-label">数据时间范围</div>
         <div class="kpi-value" style="font-size: var(--font-size-lg); line-height: 1.6">
           {{ qlib.earliest_date || '--' }}<br />~ {{ currentStatus.latest_date || '--' }}
         </div>
         <div class="kpi-sub">{{ qlib.calendar_count ? qlib.calendar_count + ' 个交易日' : '--' }}</div>
       </div>
-      <div class="kpi-card">
+      <div class="kpi-card card-hover">
         <div class="kpi-label">磁盘占用</div>
         <div class="kpi-value" style="font-size: var(--font-size-lg); line-height: 1.6">
           {{ qlib.disk_usage ? humanSize(qlib.disk_usage.dir_size_bytes) : '--' }}<br />剩余
@@ -794,15 +797,16 @@
 
 <script setup>
 defineOptions({ name: 'QuantData' })
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { WarnTriangleFilled, InfoFilled, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { usePolling } from '@/composables/usePolling'
+import CountUp from '@/components/common/CountUp.vue'
 import DataPreviewDialog from '@/components/quant/DataPreviewDialog.vue'
+import { useSyncStore } from '@/stores/sync'
 import { formatDuration, formatTime, humanSize } from '@/utils/format'
 import {
   getQuantDataStatus,
@@ -832,9 +836,13 @@ const route = useRoute()
 const loading = ref(false)
 const syncing = ref(false)
 const qlib = reactive({ available: false, provider_uri: '', earliest_date: null, calendar_count: 0, disk_usage: null })
-const syncProgress = ref(null)
-// 轮询连续拿不到进度（data=null）的次数，超过阈值停止轮询，避免空转泄漏
-let nullPollCount = 0
+const syncStore = useSyncStore()
+// 进度快照消费全局 sync store（单 timer 轮询），本页不再自建 1s 定时器（E2b 去重）
+const syncProgress = computed(() => syncStore.progress)
+// 本页是否处于"跟踪同步进度"状态（提交任务或检测到外部任务运行中）
+const tracking = ref(false)
+// 跟踪期间连续拿到空进度的次数（worker 未写入/已退出），超过阈值结束跟踪
+let nullWatchCount = 0
 const previewDialogRef = ref(null)
 const syncHistory = ref([])
 const syncStats = ref(null)
@@ -986,11 +994,11 @@ async function loadStatus() {
     const data = await getQuantDataStatus()
     statusList.value = data?.items || []
     todayIsTradingDay.value = data?.today_is_trading_day ?? null
-    // syncing 状态由进度轮询统一管理；检测到外部（如定时任务）触发的 syncing 时启动
+    // syncing 状态由进度跟踪统一管理；检测到外部（如定时任务）触发的 syncing 时启动
     const cur = statusList.value[0]
-    if (cur && cur.status === 'syncing' && !progressPolling.isPolling.value && !syncing.value) {
+    if (cur && cur.status === 'syncing' && !tracking.value && !syncing.value) {
       syncing.value = true
-      startProgressPolling()
+      startTracking()
     }
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('加载数据状态失败')
@@ -1041,20 +1049,29 @@ async function loadAll() {
 // A股回填 → 指数 → 宏观 → 财报 → 外盘，独立进程顺序执行
 async function startFullSync() {
   syncing.value = true
-  syncProgress.value = null
+  syncStore.clearProgress()
   try {
     await syncFullData(syncYears.value, 'all', refreshMisc.value)
     ElMessage.success(`一键全同步已提交（A股回填 ${syncYears.value} 年 → 指数 → 宏观 → 财报 → 外盘，后台执行）`)
-    startProgressPolling()
+    startTracking()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('同步提交失败')
     syncing.value = false
   }
 }
 
-function startProgressPolling() {
-  nullPollCount = 0
-  progressPolling.start()
+// 开始/结束跟踪同步进度：提升全局轮询频率（boostPolling）并由本页接管完成提示
+// （store 的通用 toast 经 localProgressHandler 抑制，避免同一事件弹两条）
+function startTracking() {
+  nullWatchCount = 0
+  tracking.value = true
+  syncStore.localProgressHandler = true
+  syncStore.boostPolling()
+}
+
+function stopTracking() {
+  tracking.value = false
+  syncStore.localProgressHandler = false
 }
 
 // 任务标签：优先用进度文件的 kind（任务归属），回退到 data_source（真实数据源）
@@ -1076,60 +1093,54 @@ const taskLabel = (progress) => {
   )
 }
 
-async function pollSyncProgress() {
-  try {
-    const data = await getSyncProgress()
-    syncProgress.value = data
-    if (data?.status === 'done' || data?.status === 'failed') {
-      progressPolling.stop()
-      nullPollCount = 0
-      syncing.value = false
-      const taskKey = data?.kind || data?.data_source
-      const label = taskLabel(data)
-      if (data?.status === 'done') {
-        // 补齐/同步完成提示带上任务真实结果（如 "修复完成: bins(6ok/0failed/1skipped)..."）
-        ElMessage.success(label + '完成' + (data?.message && data.message !== '正在同步...' ? `（${data.message}）` : ''))
-        // 补齐完成后自动重新校验，刷新报告
-        if (taskKey === 'repair' && showIntegrityDialog.value) {
-          doIntegrityCheck()
-        }
-        // 补齐进度弹窗：成功后 2.5s 自动关闭；失败保持打开展示错误
-        if (showRepairProgressDialog.value && taskKey === 'repair') {
-          setTimeout(() => {
-            showRepairProgressDialog.value = false
-          }, 2500)
-        }
-      } else {
-        ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
+// 进度消费：watch 全局 syncStore.progress（每秒拉取由 store 单 timer 负责，含 boost 热轮询）。
+// 仅在跟踪态处理，避免浏览页面时被历史进度对象误触发。
+function handleProgress(data) {
+  if (!tracking.value) return
+  if (data?.status === 'done' || data?.status === 'failed') {
+    stopTracking()
+    syncing.value = false
+    const taskKey = data?.kind || data?.data_source
+    const label = taskLabel(data)
+    if (data?.status === 'done') {
+      // 补齐/同步完成提示带上任务真实结果（如 "修复完成: bins(6ok/0failed/1skipped)..."）
+      ElMessage.success(label + '完成' + (data?.message && data.message !== '正在同步...' ? `（${data.message}）` : ''))
+      // 补齐完成后自动重新校验，刷新报告
+      if (taskKey === 'repair' && showIntegrityDialog.value) {
+        doIntegrityCheck()
       }
-      // EOD：复位按钮 loading，短读真实结果填对话框（结果文件在进度 done 后稍后写入）
-      if (taskKey === 'eod') {
-        eodSyncing.value = false
-        readEodResultOnce()
-      }
-      loadAll()
-      return
-    }
-    if (data === null) {
-      // 连续一段时间无进度（worker 未写入/已退出且无残留文件），停止轮询
-      nullPollCount += 1
-      if (nullPollCount > 30) {
-        progressPolling.stop()
-        nullPollCount = 0
-        syncing.value = false
-        eodSyncing.value = false
-        if (showRepairProgressDialog.value) showRepairProgressDialog.value = false
+      // 补齐进度弹窗：成功后 2.5s 自动关闭；失败保持打开展示错误
+      if (showRepairProgressDialog.value && taskKey === 'repair') {
+        setTimeout(() => {
+          showRepairProgressDialog.value = false
+        }, 2500)
       }
     } else {
-      nullPollCount = 0
+      ElMessage.error(label + '失败: ' + (data?.error || '未知错误'))
     }
-  } catch (e) {
-    // 静默失败，继续轮询
+    // EOD：复位按钮 loading，短读真实结果填对话框（结果文件在进度 done 后稍后写入）
+    if (taskKey === 'eod') {
+      eodSyncing.value = false
+      readEodResultOnce()
+    }
+    loadAll()
+    return
+  }
+  if (data === null) {
+    // 连续一段时间无进度（worker 未写入/已退出且无残留文件），结束跟踪避免空等
+    nullWatchCount += 1
+    if (nullWatchCount > 30) {
+      stopTracking()
+      syncing.value = false
+      eodSyncing.value = false
+      if (showRepairProgressDialog.value) showRepairProgressDialog.value = false
+    }
+  } else {
+    nullWatchCount = 0
   }
 }
 
-// 进度轮询：每 1s 拉取同步进度；done/failed 或连续无数据时自动停止
-const progressPolling = usePolling(pollSyncProgress, 1000)
+watch(syncProgress, (val) => handleProgress(val))
 
 async function doEodSync() {
   eodSyncing.value = true
@@ -1140,8 +1151,8 @@ async function doEodSync() {
     await eodSync(eodForm.universe, eodForm.days, eodForm.overwrite, eodForm.source)
     ElMessage.success('增量同步已提交，后台执行中')
     syncing.value = true
-    syncProgress.value = null
-    startProgressPolling()
+    syncStore.clearProgress()
+    startTracking()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('增量EOD同步失败: ' + (e?.message || e))
     eodSyncing.value = false
@@ -1171,8 +1182,8 @@ async function submitSyncTask(subFlag, fn, successMsg, errorMsg) {
     await fn()
     ElMessage.success(successMsg)
     syncing.value = true
-    syncProgress.value = null
-    startProgressPolling()
+    syncStore.clearProgress()
+    startTracking()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error(errorMsg + ': ' + (e?.message || e))
   } finally {
@@ -1265,8 +1276,8 @@ async function doSmartSync() {
       ElMessage.info(`检测到缺 ${missing} 个交易日，执行增量 EOD 补齐`)
       await eodSync('all', missing, false, 'baostock')
       syncing.value = true
-      syncProgress.value = null
-      startProgressPolling()
+      syncStore.clearProgress()
+      startTracking()
       return
     }
 
@@ -1440,13 +1451,13 @@ function doRepair() {
 async function confirmRepair() {
   repairing.value = true
   syncing.value = true
-  syncProgress.value = null
+  syncStore.clearProgress()
   showRepairDialog.value = false
   showRepairProgressDialog.value = true
   try {
     await repairData({ include_baostock: repairNeedsBaostock.value, universe: 'all' })
     ElMessage.success('补齐任务已提交（独立进程后台执行）')
-    startProgressPolling()
+    startTracking()
   } catch (e) {
     showRepairProgressDialog.value = false
     if (e?.code !== 'SYNC_IN_PROGRESS') {
@@ -1494,8 +1505,7 @@ async function checkRunningSync() {
     const terminal = ['done', 'failed', 'idle', null]
     if (data && !terminal.includes(data.status) && !syncing.value) {
       syncing.value = true
-      syncProgress.value = data
-      startProgressPolling()
+      startTracking()
     }
   } catch (e) {
     // 静默失败，交给 loadStatus 的 DB 状态路径兜底
@@ -1506,6 +1516,11 @@ onMounted(() => {
   loadAll()
   loadExternalMarket()
   checkRunningSync()
+})
+
+onUnmounted(() => {
+  // 归还完成提示权：离开页面后由全局 store 的通用 toast 兜底
+  stopTracking()
 })
 
 watch(

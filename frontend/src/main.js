@@ -4,6 +4,7 @@ import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/loading/style/css'
 import App from './App.vue'
 import router from './router'
+import vStagger from './directives/vStagger'
 import { useAuthStore } from './stores/auth'
 import { initAppConfig } from '@/config/app'
 import { ElMessage } from 'element-plus/es/components/message/index'
@@ -16,6 +17,8 @@ const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
+// 列表入场 stagger 全局指令（v-stagger）
+app.directive('stagger', vStagger)
 
 // 全局错误边界：未捕获异常弹 toast 而非白屏
 app.config.errorHandler = (err, instance, info) => {

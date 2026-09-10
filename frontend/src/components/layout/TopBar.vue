@@ -12,7 +12,14 @@
           <Fold v-else />
         </el-icon>
       </button>
-      <h1 class="page-title">{{ pageTitle }}</h1>
+      <div class="title-wrap">
+        <!-- 面包屑：分组名 / 页面名（数据来自 config/nav 的 navGroups + 当前路由） -->
+        <el-breadcrumb v-if="currentGroup" separator="/" class="topbar-crumb">
+          <el-breadcrumb-item :to="currentGroup.items[0]?.path">{{ currentGroup.title }}</el-breadcrumb-item>
+          <el-breadcrumb-item>{{ pageTitle }}</el-breadcrumb-item>
+        </el-breadcrumb>
+        <h1 class="page-title">{{ pageTitle }}</h1>
+      </div>
     </div>
 
     <!-- 右侧：状态 + 主题 + 用户 -->
@@ -70,6 +77,7 @@ import { useAuthStore } from '@/stores/auth'
 import { getQlibStatus } from '@/api/quant'
 import { useSyncStore } from '@/stores/sync'
 import { registerSyncOpener } from '@/api'
+import { navGroups } from '@/config/nav'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
@@ -80,6 +88,8 @@ const router = useRouter()
 const isDark = computed(() => appStore.theme === 'dark')
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const pageTitle = computed(() => route.meta.title || 'QuantLab')
+// 当前路由所属导航分组（未收录的路由不显示面包屑，仅保留标题）
+const currentGroup = computed(() => navGroups.find((g) => g.items.some((it) => it.path === route.path)) || null)
 const dataReady = ref(false)
 
 const displayName = computed(
@@ -176,9 +186,30 @@ onMounted(() => {
   }
 }
 
+// 标题区：面包屑（小字）+ 页面标题，纵向排列
+.title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.topbar-crumb {
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+
+  :deep(.el-breadcrumb__item) {
+    .el-breadcrumb__inner {
+      font-weight: var(--font-weight-normal);
+    }
+  }
+}
+
 .page-title {
   margin: 0;
   font-size: 15px;
+  line-height: 1.25;
   font-weight: var(--font-weight-semibold);
   color: var(--text-primary);
 }

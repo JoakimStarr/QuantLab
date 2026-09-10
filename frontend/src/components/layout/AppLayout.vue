@@ -5,7 +5,7 @@
       <TopBar />
       <main class="app-content">
         <router-view v-slot="{ Component, route }">
-          <Transition name="page" mode="out-in">
+          <Transition :name="route.meta.transition || 'page'" mode="out-in">
             <keep-alive :include="keepAliveNames">
               <component :is="Component" :key="route.fullPath" />
             </keep-alive>

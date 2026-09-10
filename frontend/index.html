@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QuantLab · 量化策略研究平台</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <script>
+    // 消除暗色主题冷启动白闪：在应用挂载前同步读取本地主题并给 html 加 dark class
+    // （键名/取值与 stores/app.js 的 localStorage 'theme' 一致；color-scheme 由 global.scss 按 .dark 切换）
+    ;(function () {
+      try {
+        if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark')
+      } catch (e) {
+        /* localStorage 不可用时静默降级为亮色 */
+      }
+    })()
+  </script>
 </head>
 <body>
   <div id="app"></div>

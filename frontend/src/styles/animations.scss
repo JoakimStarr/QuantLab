@@ -1,6 +1,18 @@
 // === Core Animations (Commonly Used) ===
 // These are loaded globally and used across the application
 
+// v-stagger 指令子元素依次入场（配合 inline animation-delay 使用，fill: both）
+@keyframes staggerFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 // Fade animations (most common)
 @keyframes fadeIn {
   from {
