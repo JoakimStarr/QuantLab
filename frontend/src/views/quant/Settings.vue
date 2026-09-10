@@ -90,6 +90,10 @@
                 <span class="provider-meta-model">{{ p.model || '（未设置模型）' }}</span>
                 <span v-if="p.max_tokens" class="provider-meta-tokens">max_tokens={{ p.max_tokens }}</span>
                 <span class="provider-meta-url">{{ p.base_url }}</span>
+                <span v-if="testResults[p.id]" class="provider-meta-test">
+                  连通 {{ testResults[p.id].latency_ms ?? '--' }}ms · {{ testResults[p.id].model || '--' }}
+                  <template v-if="testResults[p.id].reply"> · 回复：{{ testResults[p.id].reply }}</template>
+                </span>
               </div>
               </div>
             </div>
@@ -126,7 +130,12 @@
                         placeholder="glm-4-flash"
                         style="width: 100%"
                       >
-                        <el-option v-for="m in modelList" :key="m" :value="m" :label="m" />
+                      <el-option
+                        v-for="m in modelList"
+                        :key="m"
+                        :value="m"
+                        :label="m === serverModelsCurrent ? `${m}（当前）` : m"
+                      />
                       </el-select>
                       <el-button class="model-fetch-btn" :loading="modelLoading" @click="fetchEditorModels">
                         获取模型
@@ -435,9 +444,10 @@ import {
   updateAIProvider,
   deleteAIProvider,
   activateAIProvider,
-  testAIProvider,
   testAISettings,
   fetchAIModelsByConfig,
+  testAIProviderConnectivity,
+  fetchAIModelsList,
 } from '@/api/settings'
 
 const loading = ref(false)
@@ -485,6 +495,20 @@ const editorSaving = ref(false)
 const editorTesting = ref(false)
 const modelList = ref([])
 const modelLoading = ref(false)
+const serverModelsCurrent = ref('')
+
+// 打开编辑器时拉取后端已配置模型列表（GET /settings/ai/models → {models, current}），
+// 供模型下拉直接选择，无需先填 base_url/api_key
+async function loadServerModels() {
+  try {
+    const data = await fetchAIModelsList()
+    modelList.value = data?.models || []
+    serverModelsCurrent.value = data?.current || ''
+  } catch {
+    modelList.value = []
+    serverModelsCurrent.value = ''
+  }
+}
 
 // 表单模型：与 GET /settings 的 data 分区结构对应
 // ai_provider 只保留 config.yaml 高级参数（providers 已由 JSON store 管理）
@@ -566,14 +590,28 @@ async function activateProvider(id) {
   }
 }
 
+// 连通性测试（POST /settings/ai-providers/test，按 provider 逻辑名）
+// 展示 latency/model：结果缓存在 testResults[provider.id]，卡片内展示
+const testResults = reactive({})
+
+// JSON store 的 provider → 后端逻辑名（内置 builtin_glm → glm；自定义用 name 小写）
+function providerLogicalName(p) {
+  if (p?.id?.startsWith('builtin_')) return p.id.slice('builtin_'.length).toLowerCase()
+  return String(p?.name || '').trim().toLowerCase()
+}
+
 async function testProvider(p) {
   testingId.value = p.id
   try {
-    const res = await testAIProvider(p.id)
-    if (res.ok) ElMessage.success(`「${p.name}」连接成功${res.reply ? `：${res.reply}` : ''}`)
-    else ElMessage.warning(`「${p.name}」${res.message}`)
+    const res = await testAIProviderConnectivity({
+      provider: providerLogicalName(p),
+      api_key: '',
+      config: { base_url: p.base_url, model: p.model },
+    })
+    testResults[p.id] = { latency_ms: res?.latency_ms, model: res?.model, reply: res?.reply }
+    ElMessage.success(`「${p.name}」连接成功：${res?.model || '模型未知'} · ${res?.latency_ms ?? '--'}ms`)
   } catch {
-    // 拦截器已提示错误
+    // 拦截器已弹错误提示
   } finally {
     testingId.value = ''
   }
@@ -615,6 +653,7 @@ function openCreate() {
   editPreset.value = '自定义'
   editorOpen.value = true
   modelList.value = []
+  loadServerModels()
 }
 
 function openEdit(p) {
@@ -628,6 +667,7 @@ function openEdit(p) {
   editPreset.value = '自定义'
   editorOpen.value = true
   modelList.value = []
+  loadServerModels()
 }
 
 function closeEditor() {
@@ -982,6 +1022,11 @@ onMounted(load)
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 480px;
+}
+.provider-meta-test {
+  font-size: 11.5px;
+  color: var(--success, #34a853);
+  font-family: var(--font-mono);
 }
 
 .provider-add {

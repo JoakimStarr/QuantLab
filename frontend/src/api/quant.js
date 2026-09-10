@@ -152,6 +152,21 @@ export function exportTrades(result_id) {
   })
 }
 
+// 因子导出（StreamingResponse，返回 blob，完整 response；format: csv|json）
+export function exportFactors(params = {}) {
+  return blobRequest.get('/factors/export', {
+    params: { category: params.category, status: params.status, format: params.format || 'csv' },
+    responseType: 'blob',
+  })
+}
+
+// 因子自动入库：从挖掘任务导入 IC 达标因子 → {imported, skipped, total_imported}
+export function autoImportFactors(taskId, icThreshold) {
+  return request.post('/factors/auto-import', null, {
+    params: { task_id: taskId, ic_threshold: icThreshold },
+  })
+}
+
 // === 因子挖掘 ===
 
 // 因子深度分析（CPU 密集，多因子×多年分层计算，可能超过默认 30s）

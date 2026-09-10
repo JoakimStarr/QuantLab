@@ -29,3 +29,17 @@ export function getMiningTask(id) {
 export function getMiningCandidates(id) {
   return request.get('/mining/tasks/' + id + '/candidates')
 }
+
+// === 挖掘模板（LLM 挖掘预设提示词） ===
+
+// 模板列表 → {items: [{key, name, description}]}
+export function listMiningTemplates() {
+  return request.get('/mining/templates')
+}
+
+// 按模板启动 LLM 挖掘 → {task_id, template, status, message}
+export function runMiningTemplate(templateKey, nCandidates) {
+  return request.post(`/mining/templates/${templateKey}/run`, null, {
+    params: { n_candidates: nCandidates },
+  })
+}

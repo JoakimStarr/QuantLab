@@ -77,10 +77,21 @@
               · 截面排序 topk
             </template>
           </span>
-          <el-button size="small" type="primary" class="card-run" @click="openConfig(item)">
-            <el-icon :size="13" class="run-icon"><Aim /></el-icon>
-            配置并回测
-          </el-button>
+          <div class="card-foot__actions">
+            <el-button
+              v-if="item.type === 'factor'"
+              size="small"
+              text
+              type="primary"
+              :loading="faLoadingKey === item.key"
+              @click="openFactorAnalysis(item)"
+              >因子表现</el-button
+            >
+            <el-button size="small" type="primary" class="card-run" @click="openConfig(item)">
+              <el-icon :size="13" class="run-icon"><Aim /></el-icon>
+              配置并回测
+            </el-button>
+          </div>
         </div>
       </el-card>
     </transition-group>
@@ -191,10 +202,21 @@
           <span class="history-title__txt">回测历史</span>
           <span class="history-count">共 {{ historyTotal }} 条</span>
         </div>
-        <el-button size="small" :loading="historyLoading" text @click="loadHistory">
-          <el-icon :size="14" class="refresh-icon"><Refresh /></el-icon>
-          刷新
-        </el-button>
+        <div class="history-head__actions">
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :disabled="selectedHistory.length < 2"
+            :loading="compareLoading"
+            @click="compareSelectedHistory"
+            >对比选中 ({{ selectedHistory.length }})</el-button
+          >
+          <el-button size="small" :loading="historyLoading" text @click="loadHistory">
+            <el-icon :size="14" class="refresh-icon"><Refresh /></el-icon>
+            刷新
+          </el-button>
+        </div>
       </div>
       <el-table
         v-loading="historyLoading"
@@ -203,7 +225,9 @@
         class="history-table"
         :row-key="(row) => row.history_id"
         @row-click="onRowClick"
+        @selection-change="onHistorySelectionChange"
       >
+        <el-table-column type="selection" width="42" reserve-selection />
         <el-table-column label="模板" min-width="120">
           <template #default="{ row }">
             <div class="cell-tpl" :title="`查看「${row.template_name}」回测结果`">
@@ -262,6 +286,79 @@
       />
     </div>
 
+    <!-- 历史对比弹窗 -->
+    <el-dialog v-model="compareDialog.visible" title="历史对比" width="880px" :close-on-click-modal="false">
+      <template v-if="compareDialog.data">
+        <SectionCard title="净值对比">
+          <v-chart v-if="compareNavOption" :option="compareNavOption" autoresize class="cmp-chart" />
+          <el-empty v-else description="所选历史无净值曲线" :image-size="64" />
+        </SectionCard>
+        <SectionCard title="指标对比" class="mt-6">
+          <el-table :data="compareDialog.data.comparison || []" size="small" max-height="300">
+            <el-table-column prop="name" label="策略" min-width="130" />
+            <el-table-column label="来源" width="70" align="center">
+              <template #default="{ row }">{{ row.source === 'rule' ? '规则' : '经典' }}</template>
+            </el-table-column>
+            <el-table-column label="区间" min-width="150">
+              <template #default="{ row }">
+                <span class="cell-mono">{{ row.start_date }} ~ {{ row.end_date }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-for="k in compareDialog.data.metrics_keys || []"
+              :key="k"
+              :label="metricLabel(k)"
+              width="92"
+              align="right"
+            >
+              <template #default="{ row }">
+                <span :class="['cell-tnum', numClass(row[k])]">{{ fmtMetricCell(k, row[k]) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </SectionCard>
+      </template>
+    </el-dialog>
+
+    <!-- 因子表现弹窗（截面经典策略） -->
+    <el-dialog
+      v-model="faDialog.visible"
+      :title="`因子表现 — ${faDialog.name || ''}`"
+      width="640px"
+      :close-on-click-modal="false"
+    >
+      <div v-loading="faDialog.loading">
+        <template v-if="faDialog.data">
+          <el-descriptions :column="3" border size="small">
+            <el-descriptions-item label="IC">{{ fmtVal(faDialog.data.ic?.ic) }}</el-descriptions-item>
+            <el-descriptions-item label="RankIC">{{ fmtVal(faDialog.data.ic?.rank_ic) }}</el-descriptions-item>
+            <el-descriptions-item label="ICIR">{{ fmtVal(faDialog.data.ic?.icir) }}</el-descriptions-item>
+            <el-descriptions-item label="IR">{{ fmtVal(faDialog.data.ic?.ir) }}</el-descriptions-item>
+            <el-descriptions-item label="样本天数">{{ faDialog.data.ic?.n_days ?? '--' }}</el-descriptions-item>
+            <el-descriptions-item label="单调性">
+              {{ fmtVal(faDialog.data.quantile?.monotonicity_score) }}
+            </el-descriptions-item>
+          </el-descriptions>
+          <template v-if="faGroupRows.length">
+            <h4 class="fa-sub">分组日均收益（Q1 → Q{{ faGroupRows.length }}）</h4>
+            <el-table :data="faGroupRows" size="small" max-height="240">
+              <el-table-column prop="group" label="分组" width="70" align="center" />
+              <el-table-column label="日均收益" align="right">
+                <template #default="{ row }">
+                  <span :class="numClass(row.mean)">{{ fmtPct(row.mean) }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
+          <p class="fa-note">
+            区间 {{ faDialog.data.start_date || '--' }} ~ {{ faDialog.data.end_date || '--' }} ·
+            标的池 {{ faDialog.data.universe || '--' }}
+          </p>
+        </template>
+        <el-empty v-else-if="!faDialog.loading" description="暂无分析数据" :image-size="64" />
+      </div>
+    </el-dialog>
+
   </PageContainer>
 </template>
 
@@ -275,7 +372,10 @@ import {
   View, RefreshRight, Delete, Aim, Refresh, ArrowUp, ArrowDown, VideoPlay, InfoFilled,
 } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
+import SectionCard from '@/components/common/SectionCard.vue'
 import SymbolSearchSelect from '@/components/common/SymbolSearchSelect.vue'
+import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import { fmtPct, fmtNum, numClass } from '@/utils/format'
 import {
   getStrategyTemplates,
@@ -289,6 +389,8 @@ import {
   getCombinedHistory,
   getClassicHistoryDetail,
   deleteClassicHistory,
+  compareClassicHistory,
+  getClassicFactorAnalysis,
 } from '@/api/classicStrategy'
 import { getQuantDataStatus, listUniverses } from '@/api/quant'
 
@@ -585,6 +687,121 @@ async function removeHistory(row) {
     if (e !== 'cancel') ElMessage.error('删除回测历史失败')
   }
 }
+
+// ================= 历史对比 =================
+const selectedHistory = ref([])
+const compareLoading = ref(false)
+const compareDialog = reactive({ visible: false, data: null })
+
+function onHistorySelectionChange(val) {
+  selectedHistory.value = val
+}
+
+async function compareSelectedHistory() {
+  const items = selectedHistory.value
+    .filter((r) => r?.history_id != null)
+    .map((r) => ({ source: r.source === 'classic' ? 'classic' : 'rule', id: r.history_id }))
+  if (items.length < 2) {
+    ElMessage.warning('请至少勾选 2 条历史记录')
+    return
+  }
+  compareLoading.value = true
+  try {
+    const data = await compareClassicHistory(items)
+    compareDialog.data = data
+    compareDialog.visible = true
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+const CMP_PCT_KEYS = new Set(['annual_return', 'annual_volatility', 'max_drawdown', 'win_rate', 'benchmark_return', 'excess_return'])
+const CMP_LABELS = {
+  annual_return: '年化收益', annual_volatility: '年化波动', sharpe: '夏普', sortino: '索提诺',
+  max_drawdown: '最大回撤', calmar: '卡玛', win_rate: '胜率', benchmark_return: '基准收益',
+  excess_return: '超额收益',
+}
+function metricLabel(k) {
+  return CMP_LABELS[k] || k
+}
+function fmtMetricCell(k, v) {
+  if (v == null || v === '') return '--'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '--'
+  return CMP_PCT_KEYS.has(k) ? fmtPct(n) : fmtNum(n)
+}
+
+// 净值对比图：nav_curves = [{result_id, curve: {dates, portfolio, benchmark?}}]
+const compareNavOption = computed(() => {
+  const curves = compareDialog.data?.nav_curves || []
+  const rows = compareDialog.data?.comparison || []
+  const nameById = new Map(rows.map((r) => [String(r.result_id), r.name || `#${r.result_id}`]))
+  const series = []
+  const legend = []
+  const datesRef = { dates: null }
+  for (const c of curves) {
+    const d = c?.curve
+    if (!d?.dates?.length || !d?.portfolio?.length) continue
+    datesRef.dates = d.dates
+    const name = nameById.get(String(c.result_id)) || `#${c.result_id}`
+    legend.push(name)
+    series.push({ name, type: 'line', data: d.portfolio, showSymbol: false, lineStyle: { width: 2 } })
+  }
+  if (!series.length) return null
+  return {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0 },
+    grid: { left: 50, right: 20, top: 30, bottom: 28 },
+    xAxis: { type: 'category', data: datesRef.dates },
+    yAxis: { type: 'value', scale: true },
+    series,
+  }
+})
+
+// ================= 单策略因子表现 =================
+const faLoadingKey = ref('')
+const faDialog = reactive({ visible: false, loading: false, name: '', data: null })
+
+async function openFactorAnalysis(item) {
+  if (!item?.key) return
+  faLoadingKey.value = item.key
+  faDialog.name = item.name
+  faDialog.data = null
+  faDialog.loading = true
+  faDialog.visible = true
+  try {
+    const [start, end] = defaultFormDates.value || []
+    const data = await getClassicFactorAnalysis(item.key, {
+      start_date: start || undefined,
+      end_date: end || undefined,
+      universe: formUniverse.value || undefined,
+    })
+    faDialog.data = data
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    faDialog.loading = false
+    faLoadingKey.value = ''
+  }
+}
+
+function fmtVal(v, digits = 3) {
+  if (v == null || v === '') return '--'
+  const n = Number(v)
+  return Number.isNaN(n) ? '--' : n.toFixed(digits)
+}
+
+// 分组日均收益行（group_stats 为按组数组，元素含 mean_daily_return；容错展示）
+const faGroupRows = computed(() => {
+  const stats = faDialog.data?.quantile?.group_stats
+  if (!Array.isArray(stats)) return []
+  return stats
+    .map((s, i) => ({ group: `Q${i + 1}`, mean: s?.mean_daily_return ?? null }))
+    .filter((r) => r.mean != null)
+})
 
 onMounted(async () => {
   loading.value = true
@@ -962,6 +1179,36 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.history-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-foot__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cmp-chart {
+  width: 100%;
+  height: 320px;
+}
+
+.fa-sub {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 14px 0 8px;
+}
+
+.fa-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .history-title {

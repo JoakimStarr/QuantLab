@@ -130,6 +130,17 @@
           @click="onAiExplain"
           >✨ AI 解释</el-button>
         <el-button type="primary" :disabled="selectedKeys.length < 2" @click="compareFactors">对比选中</el-button>
+        <el-dropdown @command="onExportCommand">
+          <el-button :loading="exporting" :icon="Download">
+            导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="csv">导出 CSV（Excel 可读）</el-dropdown-item>
+              <el-dropdown-item command="json">导出 JSON</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </SectionCard>
 
@@ -235,7 +246,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QlibExprEditor from '@/components/quant/QlibExprEditor.vue'
 import { fmt, numClass } from '@/utils/format'
 import { useFactorStore } from '@/stores/factor'
-import { listUniverses } from '@/api/quant'
+import { listUniverses, exportFactors } from '@/api/quant'
 import { useSyncStore } from '@/stores/sync'
 import { listFactors, listFactorSummary, addFactor, disableFactor, seedAlpha158, seedEtfFactors, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
 
@@ -808,6 +819,38 @@ async function onEvaluate(row) {
     ElMessage.error(`${row.name} 评价任务提交失败：${e?.message || '未知原因'}`)
   } finally {
     evaluatingId.value = null
+  }
+}
+
+// === 导出因子（StreamingResponse → blob 下载） ===
+const exporting = ref(false)
+
+function onExportCommand(format) {
+  downloadFactors(format)
+}
+
+async function downloadFactors(format) {
+  exporting.value = true
+  try {
+    // 与当前筛选联动：decaying 视图后端不支持，退回全部状态
+    const status = filterStatus.value === 'active' || filterStatus.value === 'disabled' ? filterStatus.value : undefined
+    const res = await exportFactors({
+      category: filterCategory.value || undefined,
+      status,
+      format,
+    })
+    const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data || ''])
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `factors.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success(`已导出 ${format.toUpperCase()} 文件`)
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    exporting.value = false
   }
 }
 

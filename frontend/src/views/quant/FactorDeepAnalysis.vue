@@ -107,7 +107,7 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
-import { deepAnalysis } from '@/api/quant'
+import { deepAnalysis, getQuantDataStatus } from '@/api/quant'
 import { fmt as fmtNum, numClass } from '@/utils/format'
 import { chartTheme, quantileGradient } from '@/utils/chartTheme'
 import { useThemeRev } from '@/composables/useChartTheme'
@@ -120,8 +120,13 @@ const router = useRouter()
 const factorId = computed(() => route.query.factor_id)
 const factorName = computed(() => route.query.factor_name || '因子')
 
-// 参数
-const dateRange = ref(['2020-01-01', '2024-12-31'])
+// 参数（默认近 2 年 → 今天；挂载后按数据状态刷新到最新数据日）
+function _twoYearsAgoStr() {
+  const d = new Date()
+  d.setFullYear(d.getFullYear() - 2)
+  return d.toISOString().slice(0, 10)
+}
+const dateRange = ref([_twoYearsAgoStr(), new Date().toISOString().slice(0, 10)])
 const horizon = ref(5)
 const nGroups = ref(5)
 const icWindow = 60
@@ -535,7 +540,24 @@ function goBack() {
   router.push('/quant/factor-library')
 }
 
+// 回测区间按数据状态动态刷新（默认近 2 年 → 最新数据日），避免用"今天"当终点
+async function refreshDefaultRange() {
+  try {
+    const status = await getQuantDataStatus()
+    const dates = (status?.items || []).map((it) => it.latest_date).filter(Boolean).sort()
+    if (dates.length) {
+      const end = dates[dates.length - 1]
+      const start = new Date(end)
+      start.setFullYear(start.getFullYear() - 2)
+      dateRange.value = [start.toISOString().slice(0, 10), end]
+    }
+  } catch {
+    // 拉取失败保留默认（近 2 年 → 今天）
+  }
+}
+
 onMounted(() => {
+  refreshDefaultRange()
   if (factorId.value) runAnalysis()
 })
 </script>

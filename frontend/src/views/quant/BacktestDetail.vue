@@ -17,6 +17,8 @@
         <span class="jq-head__actions">
           <el-button v-if="!detailSource" size="small" @click="openRerunPrefill">调整参数重跑</el-button>
           <el-button v-if="!detailSource" size="small" :loading="mcLoading" @click="runMonteCarlo">蒙特卡罗模拟</el-button>
+          <el-button v-if="canUseStrategyApi" size="small" :loading="reportLoading" @click="runPortfolioReport">组合报告</el-button>
+          <el-button v-if="canUseStrategyApi" size="small" :loading="reviewLoading" @click="runAiReview">AI 评审</el-button>
           <el-button size="small" @click="exportJson">导出</el-button>
           <el-button size="small" type="danger" plain @click="onDelete">删除回测</el-button>
         </span>
@@ -83,6 +85,12 @@
             <VChart :option="pnlOption" autoresize class="jq-chart jq-chart--sub" />
           </section>
 
+          <!-- 策略 K 线（仅规则策略回测结果带 indicator 时渲染） -->
+          <section v-if="hasIndicator" id="sec-kline" class="jq-card">
+            <h4 class="jq-card__title">策略 K 线</h4>
+            <BacktestKLinePanel :result="result" />
+          </section>
+
           <!-- 副图：持仓量 -->
           <section id="sec-hold" class="jq-card">
             <h4 class="jq-card__title">持仓量（由成交明细还原）</h4>
@@ -130,6 +138,14 @@
           <!-- 交易详情 -->
           <section id="sec-trades" class="jq-card">
             <h4 class="jq-card__title">交易详情（共 {{ trades.length }} 笔）</h4>
+            <el-alert
+              v-if="isReconstructed && trades.length"
+              type="warning"
+              :closable="false"
+              show-icon
+              title="成交明细由持仓快照差分重构估算（成本按固定费率），非交易所级订单"
+              class="jq-reconstruct-alert"
+            />
             <el-table v-if="trades.length" :data="pagedTrades" size="small" max-height="360">
               <el-table-column prop="date" label="日期" width="110" />
               <el-table-column prop="code" label="代码" width="110" />
@@ -172,6 +188,39 @@
                   <span class="jq-grid__ci">CI [{{ m.lo }}, {{ m.hi }}]</span>
                 </div>
               </div>
+            </template>
+          </section>
+
+          <!-- 组合绩效报告（quantstats） -->
+          <section v-if="canUseStrategyApi" id="sec-report" class="jq-card">
+            <h4 class="jq-card__title">组合报告</h4>
+            <p class="jq-note" v-if="!reportData">
+              点击页头「组合报告」生成 quantstats 绩效指标（不做 HTML tear-sheet）。
+            </p>
+            <template v-else>
+              <p class="jq-note">
+                样本 {{ reportData.n_obs ?? '--' }} 个交易日（{{ reportData.start_date || '--' }} ~ {{ reportData.end_date || '--' }}）
+              </p>
+              <div class="jq-grid">
+                <div v-for="m in reportCells" :key="m.label" class="jq-grid__item">
+                  <span class="jq-grid__label">{{ m.label }}</span>
+                  <b class="jq-grid__value">{{ m.value }}</b>
+                </div>
+              </div>
+            </template>
+          </section>
+
+          <!-- AI 评审 -->
+          <section v-if="canUseStrategyApi" id="sec-review" class="jq-card">
+            <h4 class="jq-card__title">AI 评审</h4>
+            <p class="jq-note" v-if="!reviewData">点击页头「AI 评审」让 AI 解读本次回测结果。</p>
+            <template v-else>
+              <div v-if="reviewKeyEvents.length" class="jq-review-events">
+                <el-tag v-for="(e, i) in reviewKeyEvents" :key="i" size="small" effect="plain" class="jq-review-event">
+                  {{ typeof e === 'string' ? e : JSON.stringify(e) }}
+                </el-tag>
+              </div>
+              <pre class="jq-review-pre">{{ reviewText }}</pre>
             </template>
           </section>
 
@@ -228,6 +277,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import BacktestKLinePanel from '@/components/quant/BacktestKLinePanel.vue'
 import {
   getBacktestResult,
   deleteBacktestResult,
@@ -235,6 +285,8 @@ import {
   getMonteCarlo,
   getAllBacktestStatuses,
   listBacktestResults,
+  getPortfolioReport,
+  aiReviewBacktest,
 } from '@/api/strategy'
 import { getStrategyHistoryDetail, deleteStrategyHistory } from '@/api/strategyLibrary'
 import { getClassicHistoryDetail, deleteClassicHistory } from '@/api/classicStrategy'
@@ -252,6 +304,13 @@ const result = ref(null)
 const mcData = ref(null)
 const mcLoading = ref(false)
 
+// 规则策略回测结果带 indicator（K 线面板）；qlib/vbt 回测没有
+const hasIndicator = computed(() => !!result.value?.indicator?.lines?.length)
+// 成交明细由持仓快照差分重构时后端会带 reconstructed 标记
+const isReconstructed = computed(() => result.value?.reconstructed === true)
+// 组合报告/AI 评审挂在 /strategies/{id}/ 下，需要策略 id（策略库历史详情没有）
+const canUseStrategyApi = computed(() => !detailSource.value && !!result.value?.strategy_id)
+
 const zoom = ref(1) // 1=全部；0.25=近1年；0.08=近3月；0.03=近1月（近似占比）
 const zoomOptions = [
   { label: '1个月', value: 0.03 },
@@ -266,14 +325,25 @@ const allSections = [
   { id: 'sec-overview', label: '收益概述' },
   { id: 'sec-nav', label: '净值走势' },
   { id: 'sec-daily', label: '每日盈亏' },
+  { id: 'sec-kline', label: '策略K线' },
   { id: 'sec-hold', label: '持仓量' },
   { id: 'sec-attribution', label: '归因分析' },
   { id: 'sec-trades', label: '交易详情' },
   { id: 'sec-mc', label: '蒙特卡罗' },
+  { id: 'sec-report', label: '组合报告' },
+  { id: 'sec-review', label: 'AI 评审' },
   { id: 'sec-params', label: '回测参数' },
 ]
-// 策略库历史无蒙特卡罗接口（依赖因子回测结果 id），隐藏该章节
-const sections = computed(() => (detailSource.value ? allSections.filter((s) => s.id !== 'sec-mc') : allSections))
+// 策略库历史无蒙特卡罗接口（依赖因子回测结果 id），隐藏该章节；
+// 组合报告/AI 评审依赖 strategy_id，仅因子策略回测详情展示；
+// 策略K线仅当结果带 indicator（规则策略回测）时展示。
+const sections = computed(() =>
+  allSections.filter((s) => {
+    if (s.id === 'sec-mc' || s.id === 'sec-report' || s.id === 'sec-review') return !detailSource.value
+    if (s.id === 'sec-kline') return hasIndicator.value
+    return true
+  })
+)
 
 let sectionObserver = null
 
@@ -621,6 +691,91 @@ const mcCells = computed(() => {
     }
   }
   return cells
+})
+
+/* ============ 组合报告（quantstats） ============ */
+const reportLoading = ref(false)
+const reportData = ref(null)
+
+async function runPortfolioReport() {
+  reportLoading.value = true
+  try {
+    reportData.value = await getPortfolioReport(result.value.strategy_id, {
+      result_id: result.value.id,
+      generate_html: false,
+    })
+    await nextTick()
+    document.getElementById('sec-report')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    reportLoading.value = false
+  }
+}
+
+const REPORT_PCT_KEYS = new Set([
+  'cagr', 'annual_volatility', 'max_drawdown', 'win_rate', 'avg_return',
+  'expected_daily_return', 'best_day', 'worst_day', 'best_week', 'worst_week',
+  'best_month', 'worst_month', 'var_95', 'cvar_95',
+])
+const REPORT_LABELS = {
+  sharpe: '夏普比率', sortino: '索提诺比率', calmar: '卡玛比率', cagr: '年化收益',
+  annual_volatility: '年化波动率', max_drawdown: '最大回撤', skew: '偏度',
+  kurtosis: '峰度', var_95: 'VaR (95%)', cvar_95: 'CVaR (95%)', tail_ratio: '尾部比率',
+  win_rate: '日胜率', avg_return: '日均收益', expected_daily_return: '预期日收益',
+  best_day: '最佳单日', worst_day: '最差单日', best_week: '最佳单周', worst_week: '最差单周',
+  best_month: '最佳单月', worst_month: '最差单月', consecutive_wins: '最长连盈',
+  consecutive_losses: '最长连亏', beta: '贝塔', alpha: '阿尔法', rsq: 'R²',
+  correlation: '相关系数',
+}
+
+const reportCells = computed(() => {
+  const m = reportData.value?.metrics || {}
+  const cells = []
+  for (const [k, v] of Object.entries(m)) {
+    if (v == null) continue
+    const n = Number(v)
+    let value
+    if (REPORT_PCT_KEYS.has(k)) value = (n * 100).toFixed(2) + '%'
+    else if (k.startsWith('consecutive_')) value = String(Math.round(n))
+    else if (Number.isNaN(n)) value = String(v)
+    else value = n.toFixed(3)
+    cells.push({ label: REPORT_LABELS[k] || k, value })
+  }
+  return cells
+})
+
+/* ============ AI 评审 ============ */
+const reviewLoading = ref(false)
+const reviewData = ref(null)
+
+async function runAiReview() {
+  reviewLoading.value = true
+  try {
+    reviewData.value = await aiReviewBacktest(result.value.strategy_id, result.value.id)
+    await nextTick()
+    document.getElementById('sec-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+const reviewText = computed(() => {
+  const r = reviewData.value?.review
+  if (r == null) return ''
+  if (typeof r === 'string') return r
+  try {
+    return JSON.stringify(r, null, 2)
+  } catch {
+    return String(r)
+  }
+})
+
+const reviewKeyEvents = computed(() => {
+  const e = reviewData.value?.key_events
+  return Array.isArray(e) ? e : []
 })
 
 /* ============ 参数 ============ */
@@ -1007,6 +1162,33 @@ function scrollTo(id) {
 .jq-pager {
   margin-top: 10px;
   justify-content: flex-end;
+}
+.jq-reconstruct-alert {
+  margin-bottom: 10px;
+}
+.jq-review-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.jq-review-event {
+  white-space: normal;
+  height: auto;
+}
+.jq-review-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-primary, #303133);
+  max-height: 480px;
+  overflow: auto;
 }
 
 @media (max-width: 1100px) {

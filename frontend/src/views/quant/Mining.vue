@@ -53,6 +53,13 @@
                 <div class="form-hint">大于 1 时启用迭代挖掘：每轮反馈给 LLM 逐轮改进</div>
               </el-form-item>
 
+              <el-form-item label="挖掘模板" v-if="selectedMode === 'llm'">
+                <el-select v-model="form.template" clearable placeholder="默认（通用提示词）">
+                  <el-option v-for="t in miningTemplates" :key="t.key" :label="t.name" :value="t.key" />
+                </el-select>
+                <div v-if="selectedTemplateDesc" class="form-hint">{{ selectedTemplateDesc }}</div>
+              </el-form-item>
+
               <el-form-item label="IC 阈值">
                 <el-input-number
                   v-model="form.icThreshold"
@@ -134,6 +141,21 @@
                   <div v-if="shapMap[row.id] && shapMap[row.id].length" class="detail-shap">
                     <div class="detail-shap__title">SHAP 特征重要性</div>
                     <VChart class="detail-shap__chart" :option="shapOption(row)" autoresize />
+                  </div>
+                  <!-- 一键导入（仅完成任务） -->
+                  <div v-if="row.status === 'done'" class="detail-import">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="importingId === row.id"
+                      @click="onAutoImport(row)"
+                      >一键导入达标因子</el-button
+                    >
+                    <span v-if="importResults[row.id]" class="detail-import__result">
+                      导入 {{ importResults[row.id].total_imported ?? 0 }} 个，跳过
+                      {{ importResults[row.id].skipped?.length ?? 0 }} 个（IC 阈值 {{ importThresholdText }}）
+                    </span>
                   </div>
                   <!-- 候选列表 -->
                   <div v-if="candidatesMap[row.id]" class="detail-grid">
@@ -301,7 +323,8 @@ import SparkLine from '@/components/common/SparkLine.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { usePolling } from '@/composables/usePolling'
-import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates } from '@/api/mining'
+import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates, listMiningTemplates, runMiningTemplate } from '@/api/mining'
+import { autoImportFactors, getQuantDataStatus } from '@/api/quant'
 import { getAiStatus } from '@/api/auth'
 import { useFactorStore } from '@/stores/factor'
 import { chartTheme } from '@/utils/chartTheme'
@@ -336,16 +359,81 @@ async function loadUniverses() {
   }
 }
 
-// 默认表单值（重置用）
+// 默认表单值（重置用）。回测起点动态取「最新数据日期 - 2 年」，取不到回退今天-2 年
+// （今日数据未发布时用"今天"当起点会导致尾端全 NaN，见 Strategy.vue 同款处理）
 const todayStr = () => new Date().toISOString().slice(0, 10)
+const twoYearsAgoStr = () => {
+  const d = new Date()
+  d.setFullYear(d.getFullYear() - 2)
+  return d.toISOString().slice(0, 10)
+}
 const defaultForm = () => ({
   candidates: 10,
   nRounds: 1,
   icThreshold: 0.03,
-  startDate: '2020-01-01',
+  template: '',
+  startDate: twoYearsAgoStr(),
   endDate: todayStr(),
   universe: 'csi300',
 })
+
+// 回测区间按数据状态动态刷新（默认近 2 年 → 最新数据日）
+async function refreshDefaultRange() {
+  try {
+    const status = await getQuantDataStatus()
+    const dates = (status?.items || [])
+      .map((it) => it.latest_date)
+      .filter(Boolean)
+      .sort()
+    if (dates.length) {
+      const end = dates[dates.length - 1]
+      const start = new Date(end)
+      start.setFullYear(start.getFullYear() - 2)
+      form.startDate = start.toISOString().slice(0, 10)
+      form.endDate = end
+    }
+  } catch {
+    // 拉取失败保留默认（近 2 年 → 今天）
+  }
+}
+
+// === 挖掘模板 ===
+const miningTemplates = ref([])
+async function loadMiningTemplates() {
+  try {
+    const data = await listMiningTemplates()
+    miningTemplates.value = data?.items || []
+  } catch {
+    miningTemplates.value = []
+  }
+}
+const selectedTemplateDesc = computed(
+  () => miningTemplates.value.find((t) => t.key === form.template)?.description || ''
+)
+
+// === 一键导入达标因子 ===
+const importingId = ref(null)
+const importResults = reactive({})
+const importThresholdText = computed(() => Number(form.icThreshold).toFixed(2))
+async function onAutoImport(row) {
+  importingId.value = row.id
+  try {
+    const data = await autoImportFactors(row.id, form.icThreshold)
+    importResults[row.id] = data || {}
+    const imported = data?.total_imported ?? 0
+    const skipped = data?.skipped?.length ?? 0
+    if (imported > 0) {
+      ElMessage.success(`已导入/验证 ${imported} 个达标因子${skipped ? `，跳过 ${skipped} 个` : ''}`)
+      factorStore.invalidate()
+    } else {
+      ElMessage.warning('没有可导入的达标因子')
+    }
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    importingId.value = null
+  }
+}
 
 // AI Provider 动态状态（badge 显示真实可用模型）
 const aiProviders = ref([])
@@ -630,7 +718,12 @@ async function startMining() {
   try {
     let data
     if (selectedMode.value === 'llm') {
-      data = await mineLlm({ n_candidates: form.candidates, n_rounds: form.nRounds, universe: form.universe })
+      if (form.template) {
+        // 模板挖掘：走模板预设提示词（n_rounds/universe 由模板固定，仅候选数生效）
+        data = await runMiningTemplate(form.template, form.candidates)
+      } else {
+        data = await mineLlm({ n_candidates: form.candidates, n_rounds: form.nRounds, universe: form.universe })
+      }
     } else if (selectedMode.value === 'symbolic') {
       data = await mineSymbolic({ population: 1000, generations: 20, universe: form.universe })
     } else if (selectedMode.value === 'text') {
@@ -723,6 +816,8 @@ async function submitAutoML() {
 onMounted(() => {
   loadTasks()
   loadUniverses()
+  loadMiningTemplates()
+  refreshDefaultRange()
 })
 
 onBeforeUnmount(() => {
@@ -1058,6 +1153,16 @@ onBeforeUnmount(() => {
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
+}
+.detail-import {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.detail-import__result {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 /* SHAP 特征重要性 */
 .detail-shap {

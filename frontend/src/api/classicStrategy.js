@@ -26,3 +26,17 @@ export function deleteClassicHistory(id) {
 export function getCombinedHistory(params) {
   return request.get('/classic-strategies/history/all', { params })
 }
+
+// 跨来源历史对比（≥2 条）→ {comparison, nav_curves, metrics_keys}
+// items: [{source: 'classic'|'rule', id}]
+export function compareClassicHistory(items) {
+  return request.post('/classic-strategies/history/compare', { items })
+}
+
+// 经典策略因子表现（截面因子型）：IC 摘要 + 分层收益摘要
+export function getClassicFactorAnalysis(key, params = {}) {
+  return request.get(`/classic-strategies/${key}/factor-analysis`, {
+    params: { start_date: params.start_date, end_date: params.end_date, universe: params.universe },
+    timeout: 180000,
+  })
+}

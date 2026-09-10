@@ -59,3 +59,18 @@ export function testAISettings(data) {
 export function fetchAIModelsByConfig(data) {
   return request.post('/settings/ai/models', data)
 }
+
+// 连通性测试（按 provider 逻辑名）：body {provider, api_key, config}
+// 成功 → {provider, model, latency_ms, tokens, reply, success}；api_key 缺省用已保存值
+export function testAIProviderConnectivity(data) {
+  return request.post('/settings/ai-providers/test', {
+    provider: data.provider,
+    api_key: data.api_key || '',
+    config: data.config || {},
+  })
+}
+
+// 当前已配置模型列表 → {models: [...], current}
+export function fetchAIModelsList() {
+  return request.get('/settings/ai/models')
+}

@@ -78,12 +78,13 @@
             <span class="time">{{ formatTime(row.created_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" align="center" fixed="right">
+        <el-table-column label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
               <a class="link link--primary" @click.stop="triggerBacktest(row)">回测</a>
               <a class="link link--success" @click.stop="viewResults(row)">结果</a>
               <a class="link link--warning" @click.stop="openWalkForward(row)">Walk-forward</a>
+              <a class="link link--info" @click.stop="openParamSweep(row)">扫描</a>
               <a class="link link--danger" @click.stop="archive(row)">归档</a>
             </div>
           </template>
@@ -229,6 +230,99 @@
           :loading="wfDialog.submitting"
           @click="submitWalkForward"
           >开始回测</el-button
+        >
+      </template>
+    </el-dialog>
+
+    <!-- 参数扫描对话框 -->
+    <el-dialog v-model="sweepDialog.visible" title="参数扫描" width="860px" :close-on-click-modal="false">
+      <el-form label-position="top" v-if="sweepDialog.status !== 'done'">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap">
+          <el-form-item label="topk 列表（逗号分隔）" style="flex: 1; min-width: 200px">
+            <el-input v-model="sweepDialog.form.topkText" placeholder="如 10,20,30" />
+          </el-form-item>
+          <el-form-item label="调仓频率" style="flex: 1; min-width: 200px">
+            <el-select v-model="sweepDialog.form.rebalances" multiple style="width: 100%">
+              <el-option label="每日" value="day" />
+              <el-option label="每周" value="week" />
+              <el-option label="每月" value="month" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="回测区间" style="flex: 1.4; min-width: 260px">
+            <el-date-picker
+              v-model="sweepDialog.form.range"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始"
+              end-placeholder="结束"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </el-form-item>
+        </div>
+        <div class="el-form-item__tip" style="color: var(--el-text-color-secondary); font-size: 12px">
+          扫描在独立进程中逐组合回测（n_drop = min(5, topk/5) 自动推导），完成后展示各组合指标并标出最优组合。
+        </div>
+      </el-form>
+      <div v-if="aiParamsText" class="wf-result">
+        <h4 class="wf-section-title">AI 参数建议</h4>
+        <pre class="ai-params-pre">{{ aiParamsText }}</pre>
+      </div>
+      <div v-if="sweepDialog.status === 'running'" class="wf-result">
+        <el-alert type="info" :closable="false" title="参数扫描进行中，请稍候…" />
+      </div>
+      <el-alert
+        v-if="sweepDialog.status === 'failed'"
+        type="error"
+        :closable="false"
+        :title="String(sweepDialog.error || '参数扫描失败')"
+      />
+      <div v-if="sweepDialog.status === 'done'" class="wf-result">
+        <template v-if="sweepRows.length">
+          <h4 class="wf-section-title">
+            组合结果（{{ sweepRows.length }} 组）
+            <span v-if="sweepBest" class="pill pill--primary" style="margin-left: 8px">
+              最优：topk={{ sweepBest.topk }} / {{ sweepBest.rebalance }} / 夏普 {{ fmtMetric(sweepBest.sharpe) }}
+            </span>
+          </h4>
+          <el-table :data="sweepRows" size="small" max-height="360" :row-class-name="sweepRowClass">
+            <el-table-column prop="topk" label="topk" width="70" align="center" />
+            <el-table-column prop="n_drop" label="n_drop" width="70" align="center" />
+            <el-table-column prop="rebalance" label="调仓" width="70" align="center" />
+            <el-table-column label="年化" width="90" align="right">
+              <template #default="{ row }">{{ fmtMetric(row.annual_return, 'pct') }}</template>
+            </el-table-column>
+            <el-table-column label="夏普" width="80" align="right">
+              <template #default="{ row }">{{ fmtMetric(row.sharpe) }}</template>
+            </el-table-column>
+            <el-table-column label="最大回撤" width="90" align="right">
+              <template #default="{ row }">{{ fmtMetric(row.max_drawdown, 'pct') }}</template>
+            </el-table-column>
+            <el-table-column label="超额" width="90" align="right">
+              <template #default="{ row }">{{ fmtMetric(row.excess_return, 'pct') }}</template>
+            </el-table-column>
+            <el-table-column label="胜率" width="80" align="right">
+              <template #default="{ row }">{{ fmtMetric(row.win_rate, 'pct') }}</template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="120">
+              <template #default="{ row }">
+                <span v-if="row.error" class="text-danger">{{ row.error }}</span>
+                <span v-else-if="row.cached" style="color: var(--text-tertiary)">缓存</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <el-empty v-else description="扫描完成但无有效结果" :image-size="64" />
+      </div>
+      <template #footer>
+        <el-button @click="closeParamSweep">关闭</el-button>
+        <el-button :loading="aiParamsLoading" @click="onAiSuggestParams">✨ AI 参数建议</el-button>
+        <el-button
+          v-if="sweepDialog.status !== 'done'"
+          type="primary"
+          :loading="sweepDialog.submitting || sweepDialog.status === 'running'"
+          @click="submitParamSweep"
+          >开始扫描</el-button
         >
       </template>
     </el-dialog>
@@ -429,6 +523,7 @@ defineOptions({ name: 'QuantStrategy' })
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -445,6 +540,10 @@ import {
   runWalkForward,
   getWalkForwardResults,
   aiGenerateStrategy,
+  runParamSweep,
+  getParamSweepResults,
+  aiSuggestParams,
+  archiveStrategy,
 } from '@/api/strategy'
 import { useFactorStore } from '@/stores/factor'
 import { getQuantDataStatus } from '@/api/quant'
@@ -790,9 +889,166 @@ async function viewResults(row) {
   ElMessage.info('该策略暂无回测结果，请先运行回测')
 }
 
-// === "归档"链接：仅提示 ===
-function archive(row) {
-  ElMessage.info(`归档策略「${row.name}」(id=${row.id})`)
+// === "归档"链接：软删除（DELETE /strategies/{id}，后端 archive_strategy） ===
+async function archive(row) {
+  try {
+    await ElMessageBox.confirm(`确认归档策略「${row.name}」？归档后不再出现在策略列表。`, '归档确认', {
+      type: 'warning',
+      confirmButtonText: '归档',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await archiveStrategy(row.id)
+    ElMessage.success(`策略「${row.name}」已归档`)
+    await loadStrategies()
+  } catch {
+    // 拦截器已弹错误提示
+  }
+}
+
+// === 参数扫描（独立 worker，轮询 param-sweep-results） ===
+const sweepDialog = reactive({
+  visible: false,
+  submitting: false,
+  strategyId: null,
+  strategyName: '',
+  status: '', // '' | 'running' | 'done' | 'failed'
+  error: '',
+  results: null,
+  form: { topkText: '10,20,30', rebalances: ['day', 'week'], range: [] },
+})
+
+function openParamSweep(row) {
+  sweepDialog.strategyId = row.id
+  sweepDialog.strategyName = row.name
+  sweepDialog.status = ''
+  sweepDialog.error = ''
+  sweepDialog.results = null
+  sweepDialog.submitting = false
+  sweepDialog.form.topkText = '10,20,30'
+  sweepDialog.form.rebalances = ['day', 'week']
+  sweepDialog.form.range = [...defaultBacktestRange.value]
+  sweepDialog.visible = true
+}
+
+function closeParamSweep() {
+  sweepDialog.visible = false
+  stopSweepPolling()
+}
+
+function parseNumList(text) {
+  return String(text || '')
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0)
+}
+
+async function submitParamSweep() {
+  const topkList = parseNumList(sweepDialog.form.topkText)
+  const rebalanceList = sweepDialog.form.rebalances || []
+  if (!topkList.length) {
+    ElMessage.warning('请填写有效的 topk 列表（如 10,20,30）')
+    return
+  }
+  if (!rebalanceList.length) {
+    ElMessage.warning('请至少选择一种调仓频率')
+    return
+  }
+  sweepDialog.submitting = true
+  try {
+    const [start, end] = sweepDialog.form.range || []
+    await runParamSweep(sweepDialog.strategyId, {
+      topk_list: topkList,
+      rebalance_list: rebalanceList,
+      start_date: start || undefined,
+      end_date: end || undefined,
+    })
+    sweepDialog.status = 'running'
+    ElMessage.success('参数扫描已启动')
+    startSweepPolling()
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    sweepDialog.submitting = false
+  }
+}
+
+let sweepAttempts = 0
+const sweepPolling = usePolling(async () => {
+  sweepAttempts++
+  if (sweepAttempts > 200) {
+    stopSweepPolling()
+    return
+  }
+  try {
+    const data = await getParamSweepResults(sweepDialog.strategyId)
+    if (data?.status === 'done' || data?.status === 'failed') {
+      sweepDialog.status = data.status
+      sweepDialog.error = data.error || ''
+      sweepDialog.results = data.results || null
+      stopSweepPolling()
+    }
+  } catch {
+    // 无结果时接口返回 NOT_FOUND，下一轮重试
+  }
+}, 3000, { immediate: false })
+
+function startSweepPolling() {
+  sweepAttempts = 0
+  sweepPolling.start()
+}
+
+function stopSweepPolling() {
+  sweepPolling.stop()
+}
+
+// 结果行（剔除 {best:{...}} 汇总项）与最优组合
+const sweepRows = computed(() =>
+  (sweepDialog.results || []).filter((r) => r && r.topk != null)
+)
+const sweepBest = computed(() => {
+  const b = (sweepDialog.results || []).find((r) => r && r.best)
+  return b?.best || null
+})
+
+function sweepRowClass({ row }) {
+  if (!sweepBest.value) return ''
+  return row.topk === sweepBest.value.topk && row.rebalance === sweepBest.value.rebalance
+    ? 'sweep-best-row'
+    : ''
+}
+
+function fmtMetric(v, kind = 'num') {
+  if (v == null || v === '') return '--'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '--'
+  if (kind === 'pct') return (n * 100).toFixed(2) + '%'
+  return n.toFixed(2)
+}
+
+// === AI 参数建议 ===
+const aiParamsLoading = ref(false)
+const aiParamsText = ref('')
+
+async function onAiSuggestParams() {
+  if (!sweepDialog.strategyId) return
+  aiParamsLoading.value = true
+  try {
+    const data = await aiSuggestParams(sweepDialog.strategyId)
+    const raw = data?.suggestions
+    if (typeof raw === 'string') aiParamsText.value = raw
+    else if (raw != null) aiParamsText.value = JSON.stringify(raw, null, 2)
+    else aiParamsText.value = ''
+    if (aiParamsText.value) ElMessage.success('AI 参数建议已生成')
+    else ElMessage.warning('AI 未返回参数建议')
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    aiParamsLoading.value = false
+  }
 }
 
 // === AI 生成策略 ===
@@ -980,6 +1236,7 @@ onBeforeUnmount(() => {
   stopPolling()
   stopStatusPolling()
   stopWfPolling()
+  stopSweepPolling()
 })
 </script>
 
@@ -1117,6 +1374,24 @@ onBeforeUnmount(() => {
 }
 .link--danger {
   color: var(--danger);
+}
+.link--info {
+  color: var(--info, #4b9e6f);
+}
+.ai-params-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #f5f6f7);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+}
+:deep(.sweep-best-row) {
+  background: rgba(var(--primary-rgb), 0.08) !important;
 }
 
 /* Walk-forward 样式 */
