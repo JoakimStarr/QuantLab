@@ -10,6 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
+from sqlalchemy.orm import defer
 
 from app.core.config import settings
 from app.core.database import async_session, get_db
@@ -72,11 +73,22 @@ def _spawn(task_id: int, task_type: str, params: dict) -> None:
     spawn_mining_worker(task_id, task_type, params)
 
 
-def _task_dict(r: MiningTask) -> dict:
-    result = json.loads(r.result) if r.result else None
+def _task_dict(r: MiningTask, include_result: bool = True) -> dict:
+    """任务序列化。
+
+    include_result=False（列表接口）时不反序列化 result 大字段
+    （列表查询已 defer(MiningTask.result)），仅详情路径返回完整结果。
+    AutoML 的 SHAP 重要性存在 params.result（MiningTask 无独立列），
+    同样只在详情路径暴露，保持列表轻量。
+    """
+    params = json.loads(r.params) if r.params else None
+    result = json.loads(r.result) if (include_result and r.result) else None
+    shap_importance = None
+    if include_result and isinstance(params, dict):
+        shap_importance = (params.get("result") or {}).get("shap_importance")
     return {
         "id": r.id, "type": r.type, "status": r.status,
-        "params": json.loads(r.params) if r.params else None,
+        "params": params,
         "candidates_generated": r.candidates_generated,
         "candidates_passed": r.candidates_passed,
         "best_ic": r.best_ic,
@@ -84,6 +96,7 @@ def _task_dict(r: MiningTask) -> dict:
         "improvement_curve": result.get("improvement_curve") if result else None,
         "stopped_early": result.get("stopped_early") if result else None,
         "stop_reason": result.get("stop_reason") if result else None,
+        "shap_importance": shap_importance,
         "error": r.error,
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
@@ -118,7 +131,13 @@ async def list_tasks_api(
     limit: int = Query(50, le=200),
     db=Depends(get_db),
 ):
-    q = select(MiningTask).order_by(MiningTask.created_at.desc()).limit(limit)
+    # defer result：列表不反序列化大字段（详情接口才返回完整 result）
+    q = (
+        select(MiningTask)
+        .options(defer(MiningTask.result))
+        .order_by(MiningTask.created_at.desc())
+        .limit(limit)
+    )
     if task_type:
         q = q.where(MiningTask.type == task_type)
     if status:
@@ -132,7 +151,7 @@ async def list_tasks_api(
     count_result = await db.execute(count_q)
     total = count_result.scalar() or 0
     result = await db.execute(q)
-    items = [_task_dict(r) for r in result.scalars().all()]
+    items = [_task_dict(r, include_result=False) for r in result.scalars().all()]
     return ApiResponse(ok=True, data={"items": items, "total": total})
 
 

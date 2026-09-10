@@ -14,6 +14,28 @@ logger = logging.getLogger(__name__)
 # 追问对话保留的最大消息条数（避免上下文无限膨胀）
 _MAX_CHAT_HISTORY = 20
 
+# 模型型因子的表达式前缀：本身就是不可读的模型引用（不是可解释的公式），
+# 把这种表达式喂给 LLM 只会让它凭空编造金融逻辑，因此直接返回固定说明。
+_MODEL_FACTOR_PREFIXES = ("AutoML(", "TextSentiment(")
+
+
+def _is_model_factor(expression: str | None) -> bool:
+    """表达式是否为不可读的模型型引用（AutoML 组合 / 文本情感占位）。"""
+    return (expression or "").strip().startswith(_MODEL_FACTOR_PREFIXES)
+
+
+def _model_factor_explanation(name: str = None) -> dict:
+    """模型型因子的固定解释（不调用 LLM），结构对齐 LLM 输出。"""
+    return {
+        "summary": "模型型因子，无表达式可解释",
+        "logic": (
+            f"{name or '该因子'}由 AutoML 组合模型或文本情感模型生成，"
+            "其取值来自训练好的模型预测，不存在可读的显式表达式公式。"
+        ),
+        "rationale": "有效性由模型在样本外数据上的 IC 等指标衡量，而非单一表达式的金融含义。",
+        "caveats": ["关注模型过拟合与样本外衰减", "各特征贡献可参考 SHAP 重要性"],
+    }
+
 
 def _build_explain_prompt(expr: str, name: str = None) -> list[dict]:
     user_prompt = f"""你是资深量化因子分析师。请对以下量化因子表达式做一份详细的金融逻辑解读。
@@ -102,7 +124,12 @@ def _build_followup_messages(expr: str, name: str, explanation: dict, history: l
 
 
 async def explain_factor(expression: str, name: str = None) -> dict:
-    """为单个因子表达式生成 AI 解释（不落库，供临时调用）。"""
+    """为单个因子表达式生成 AI 解释（不落库，供临时调用）。
+
+    模型型因子（AutoML/TextSentiment）无表达式可解释，直接返回固定说明。
+    """
+    if _is_model_factor(expression):
+        return _model_factor_explanation(name)
     return await _call_llm(expression, name)
 
 
@@ -133,8 +160,20 @@ async def explain_and_update_factor(factor_id: int, force: bool = False) -> dict
 
         factor_name = factor.name
         factor_expr = factor.expression
+        factor_desc = factor.description
 
-    explanation = await _call_llm(factor_expr, factor_name)
+    if _is_model_factor(factor_expr):
+        # 模型型因子：表达式不可读，不调用 LLM。已有解释直接返回；否则落一份固定说明。
+        if existing:
+            return {
+                "factor_id": factor_id,
+                "cached": True,
+                "description": existing.get("summary") or factor_desc,
+                "explanation": existing,
+            }
+        explanation = _model_factor_explanation(factor_name)
+    else:
+        explanation = await _call_llm(factor_expr, factor_name)
     summary = (explanation.get("summary") or "").strip()
     explanation["generated_at"] = datetime.now().isoformat()
 

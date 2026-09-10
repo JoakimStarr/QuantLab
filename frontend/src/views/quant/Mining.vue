@@ -130,6 +130,11 @@
                     <span class="detail-earlystop__label">提前停止:</span>
                     <span class="detail-earlystop__text">{{ row.stop_reason || '连续轮次无改善' }}</span>
                   </div>
+                  <!-- SHAP 特征重要性（AutoML 组合模型） -->
+                  <div v-if="shapMap[row.id] && shapMap[row.id].length" class="detail-shap">
+                    <div class="detail-shap__title">SHAP 特征重要性</div>
+                    <VChart class="detail-shap__chart" :option="shapOption(row)" autoresize />
+                  </div>
                   <!-- 候选列表 -->
                   <div v-if="candidatesMap[row.id]" class="detail-grid">
                     <table class="cand-table">
@@ -293,10 +298,14 @@ import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LearnTip from '@/components/common/LearnTip.vue'
 import SparkLine from '@/components/common/SparkLine.vue'
+import VChart from 'vue-echarts'
+import '@/utils/echarts'
 import { usePolling } from '@/composables/usePolling'
-import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningCandidates } from '@/api/mining'
+import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates } from '@/api/mining'
 import { getAiStatus } from '@/api/auth'
 import { useFactorStore } from '@/stores/factor'
+import { chartTheme } from '@/utils/chartTheme'
+import { useThemeRev } from '@/composables/useChartTheme'
 
 // 挖掘方式定义
 const modes = [
@@ -360,9 +369,13 @@ const tasks = ref([])
 const loading = ref(false)
 const submitting = ref(false)
 const factorStore = useFactorStore()
+const themeRev = useThemeRev()
 
 // 候选列表缓存：task_id -> [candidate]，懒加载避免列表查询打满
 const candidatesMap = reactive({})
+// SHAP 特征重要性缓存：task_id -> [[feature, importance], ...]
+// （列表接口不反序列化大字段，展开时拉详情获取）
+const shapMap = reactive({})
 
 // 候选状态标签/徽章
 const candLabel = (s) =>
@@ -376,9 +389,31 @@ const candBadgeClass = (s) =>
   })[s] || 'badge--muted'
 const candReason = (c) => c.reason || (c.fail_reasons || [])[0] || '--'
 
-// 展开行时懒加载该任务候选（缓存避免重复请求）
+// 展开行时懒加载详情（SHAP / 被 defer 的 result）与候选
 async function onExpandChange(row, expandedRows) {
   if (!expandedRows.includes(row)) return
+  await Promise.all([loadTaskDetail(row), loadCandidates(row)])
+}
+
+// 详情接口返回列表 defer 掉的 result（曲线/早停）与 AutoML 的 SHAP 重要性
+async function loadTaskDetail(row) {
+  if (shapMap[row.id] !== undefined) return
+  try {
+    const detail = await getMiningTask(row.id)
+    shapMap[row.id] = detail?.shap_importance || []
+    // 列表接口已 defer result：展开时用详情补齐曲线/早停（不覆盖已有值）
+    if (row.improvement_curve == null && detail?.improvement_curve) {
+      row.improvement_curve = detail.improvement_curve
+    }
+    if (row.stopped_early == null) row.stopped_early = detail?.stopped_early
+    if (row.stop_reason == null) row.stop_reason = detail?.stop_reason
+  } catch (e) {
+    shapMap[row.id] = []
+  }
+}
+
+// 展开行时懒加载该任务候选（缓存避免重复请求）
+async function loadCandidates(row) {
   // 空数组 [] 也是 truthy：只有真正缓存到候选才跳过拉取，否则每次展开重试
   if (candidatesMap[row.id]?.length) return
   try {
@@ -427,6 +462,37 @@ const curveTip = (row) => {
   const more = curve.length > 8 ? ` …（共 ${curve.length} 轮）` : ''
   const suffix = row.stopped_early ? `；已早停：${row.stop_reason || ''}` : ''
   return `每轮最佳IC：${shown}${more}${suffix}`
+}
+
+// SHAP 特征重要性横向条形图（按重要度取前 15）
+const shapOption = (row) => {
+  void themeRev.value
+  const items = (shapMap[row.id] || []).slice(0, 15)
+  const names = items.map((it) => it[0]).reverse()
+  const values = items.map((it) => Number(it[1]) || 0).reverse()
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (ps) =>
+        ps.length ? `${ps[0].name}<br/>重要性: ${Number(ps[0].value).toFixed(4)}` : '',
+    },
+    grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { color: chartTheme.axisText() },
+      splitLine: { lineStyle: { color: chartTheme.border() } },
+    },
+    yAxis: { type: 'category', data: names, axisLabel: { color: chartTheme.axisText() } },
+    series: [
+      {
+        type: 'bar',
+        data: values,
+        barMaxWidth: 16,
+        itemStyle: { color: chartTheme.primary() },
+      },
+    ],
+  }
 }
 
 // 状态标签映射：done 但 0 个候选通过 ≠ 成功，单独展示，避免误判为运行失败
@@ -992,6 +1058,20 @@ onBeforeUnmount(() => {
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
+}
+/* SHAP 特征重要性 */
+.detail-shap {
+  margin-bottom: 12px;
+}
+.detail-shap__title {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-weight: var(--font-weight-medium);
+  margin-bottom: 4px;
+}
+.detail-shap__chart {
+  width: 100%;
+  height: 340px;
 }
 .cand-table {
   width: 100%;
