@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.auth import router as auth_router
 from app.api.classic_strategy import router as classic_strategy_router
+from app.api.config import router as config_router
 from app.api.daily_report import router as daily_report_router
 from app.api.data_ext import router as data_ext_router
 from app.api.factor import router as factor_router
@@ -26,6 +27,8 @@ _auth = [Depends(require_user)]
 
 # auth_router（登录/状态）不鉴权
 api_router.include_router(auth_router)
+# config_router（版本等运行时信息）公开：登录页也需要展示版本
+api_router.include_router(config_router)
 # ext routers must be registered BEFORE base routers
 # to avoid /{strategy_id} catching /backtest-statuses etc.
 api_router.include_router(data_ext_router, dependencies=_auth)
