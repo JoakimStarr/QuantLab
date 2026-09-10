@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import numpy as np
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from sqlalchemy import select
@@ -60,11 +61,20 @@ async def compare_factors(factor_ids: list[int], start: str, end: str) -> dict:
     return factor_data
 
 
+def _load_daily_ic(expression: str, label_df, start: str, end: str, universe: str = None):
+    """加载因子值并计算每日 IC 序列（对比与相关矩阵共用路径）。
+
+    返回 (factor_df, daily_ic)，factor_df 供调用方继续计算 decay 等指标。
+    """
+    factor_df = load_factor_values(expression, start, end, universe=universe)
+    return factor_df, compute_daily_ic_series(factor_df, label_df)
+
+
 def _compute_one(f, label_df, close_df, start: str, end: str) -> dict:
     """计算单个因子的 IC 指标 + 衰减 + IC 时序（供线程池并行调用）。"""
     try:
         try:
-            factor_df = load_factor_values(f.expression, start, end)
+            factor_df, daily_ic = _load_daily_ic(f.expression, label_df, start, end)
         except FileNotFoundError as e:
             # AutoML bundle 丢失：跳过该因子但记录错误，避免整体 500
             logger.warning("因子 %s 加载失败（AutoML 模型缺失）: %s", f.name, e)
@@ -107,8 +117,7 @@ def _compute_one(f, label_df, close_df, start: str, end: str) -> dict:
             if ic_val is not None
         ]
 
-        # IC 时序（每日 IC，向量化计算）
-        daily_ic = compute_daily_ic_series(factor_df, label_df)
+        # IC 时序（每日 IC，已在 _load_daily_ic 中向量化计算）
         ic_timeseries = [
             {"date": str(date.date()), "factor_id": f.id, "ic": round(float(v), 4)}
             for date, v in daily_ic.items()
@@ -247,3 +256,130 @@ def _compute_decay_sync(expr: str, start: str, end: str, max_lag: int) -> dict:
     factor_df = load_factor_values(expr, start, end)
     label_df = load_label(start, end)
     return compute_decay(factor_df, label_df, max_lag=max_lag)
+
+
+# ==================== 因子 IC 相关矩阵 ====================
+
+# 相关矩阵要求的最少重叠交易日数：低于此值认为不可比，矩阵置 NaN（None）
+_CORR_MIN_OVERLAP_DAYS = 20
+
+
+def _build_ic_corr_matrix(ic_series: dict, ids: list, names: list) -> dict:
+    """由 {factor_id: 日度IC序列} 构建相关矩阵（纯函数，可离线测试）。
+
+    对齐各因子日度 IC 的公共日期，逐对计算 np.corrcoef；重叠天数不足
+    _CORR_MIN_OVERLAP_DAYS 或零方差时置 None，不抛异常。
+    """
+    n = len(ids)
+    matrix = [[None] * n for _ in range(n)]
+    overlap = [[0] * n for _ in range(n)]
+    ic_summary = {}
+
+    for i, fid in enumerate(ids):
+        s = ic_series.get(fid)
+        if s is None or len(s) < 2:
+            ic_summary[str(fid)] = {"name": names[i], "ic_mean": None,
+                                    "icir": None, "n_days": int(len(s)) if s is not None else 0}
+            continue
+        mean = float(s.mean())
+        std = float(s.std())
+        ic_summary[str(fid)] = {
+            "name": names[i],
+            "ic_mean": round(mean, 4),
+            "icir": round(mean / std, 4) if std > 1e-12 else None,
+            "n_days": int(len(s)),
+        }
+        matrix[i][i] = 1.0
+        overlap[i][i] = int(len(s))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            si, sj = ic_series.get(ids[i]), ic_series.get(ids[j])
+            if si is None or sj is None:
+                continue
+            common = si.index.intersection(sj.index)
+            a = si.loc[common].astype(float)
+            b = sj.loc[common].astype(float)
+            mask = a.notna() & b.notna()
+            a, b = a[mask], b[mask]
+            overlap[i][j] = overlap[j][i] = int(len(a))
+            if len(a) >= _CORR_MIN_OVERLAP_DAYS and float(a.std()) > 1e-12 and float(b.std()) > 1e-12:
+                c = float(np.corrcoef(a.to_numpy(), b.to_numpy())[0, 1])
+                if np.isfinite(c):
+                    matrix[i][j] = matrix[j][i] = round(c, 4)
+
+    return {"matrix": matrix, "overlap_counts": overlap, "ic_summary": ic_summary}
+
+
+async def compute_ic_correlation_matrix(
+    factor_ids: list[int], start: str, end: str, universe: str = None
+) -> dict:
+    """计算多个因子日度 IC 序列的相关矩阵。
+
+    Returns:
+        {
+            "factor_ids": [id...], "labels": [name...],
+            "matrix": n×n（不可比处为 None）,
+            "overlap_counts": n×n,
+            "ic_summary": {id: {name, ic_mean, icir, n_days}},
+            "start", "end",
+        }
+    """
+    # 去重并保持请求顺序
+    factor_ids = list(dict.fromkeys(factor_ids))
+    async with async_session() as session:
+        result = await session.execute(select(Factor).where(Factor.id.in_(factor_ids)))
+        found = result.scalars().all()
+
+    if not found:
+        return {"error": "未找到指定因子"}
+
+    by_id = {f.id: f for f in found}
+    factors = [by_id[i] for i in factor_ids if i in by_id]
+    missing = [i for i in factor_ids if i not in by_id]
+    if missing:
+        logger.warning("相关矩阵计算跳过不存在的因子: %s", missing)
+
+    # 受管 IO 线程池执行（与 compare 同款，避免占满事件循环）
+    raw = await run_io_cpu(_compute_ic_correlation_sync, factors, start, end, universe)
+    data = dict(raw)  # 缓存对象不直接改写
+    data["missing_factor_ids"] = missing
+    return data
+
+
+def _compute_ic_correlation_sync(factors, start: str, end: str, universe: str = None) -> dict:
+    """同步计算 IC 相关矩阵（在线程池中调用）。"""
+    from app.services.quant.qlib_init import init_qlib
+    init_qlib()
+
+    key = ("corr", tuple(sorted(f.id for f in factors)), start, end, universe)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    label_df = load_label(start, end, universe=universe)
+
+    ic_series: dict[int, pd.Series] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            f.id: pool.submit(_load_daily_ic, f.expression, label_df, start, end, universe)
+            for f in factors
+        }
+        for f in factors:
+            try:
+                _, s = futures[f.id].result()
+                ic_series[f.id] = s
+            except Exception as e:
+                logger.warning("因子 %s IC 序列加载失败: %s", f.name, e)
+
+    ids = [f.id for f in factors]
+    names = [f.name for f in factors]
+    data = {
+        "factor_ids": ids,
+        "labels": names,
+        **_build_ic_corr_matrix(ic_series, ids, names),
+        "start": start,
+        "end": end,
+    }
+    _cache_set(key, data)
+    return data

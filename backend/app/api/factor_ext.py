@@ -11,7 +11,7 @@ from app.core.cache import TTLCache
 from app.core.errors import AppError
 from app.core.executor import run_io_cpu
 from app.schemas.common import ApiResponse
-from app.services.factor.factor_compare import compare_factors, get_factor_decay
+from app.services.factor.factor_compare import compare_factors, compute_ic_correlation_matrix, get_factor_decay
 from app.services.factor.library import get_factor, list_factors
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,39 @@ async def compare_factors_api(
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
     result = await compare_factors(factor_ids, start, end)
+    return ApiResponse(ok=True, data=result)
+
+
+@router.get("/correlation-matrix")
+async def factor_correlation_matrix_api(
+    factor_ids: str = Query(..., description="逗号分隔的因子 ID，≤20 个"),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
+):
+    """因子 IC 相关矩阵：对齐各因子日度 IC 公共日期计算两两相关系数。
+
+    matrix 中重叠交易日不足（<20 天）或零方差处为 null。
+    """
+    from app.core.config import settings
+    from app.services.quant.qlib_init import is_qlib_available
+
+    if not await is_qlib_available():
+        raise AppError("QLIB_NOT_AVAILABLE", "qlib 未安装", 503)
+    try:
+        ids = [int(x.strip()) for x in factor_ids.split(",") if x.strip()]
+    except ValueError:
+        raise AppError("VALIDATION_ERROR", "factor_ids 必须为逗号分隔的整数", 422) from None
+    if not ids:
+        raise AppError("VALIDATION_ERROR", "至少提供一个因子", 422)
+    if len(ids) > 20:
+        raise AppError("VALIDATION_ERROR", "最多支持 20 个因子", 422)
+    period = settings.quant.get("default_backtest_period", {})
+    start = start_date or period.get("start", "2020-01-01")
+    end = end_date or period.get("end", "2024-12-31")
+    result = await compute_ic_correlation_matrix(ids, start, end, universe)
+    if "error" in result:
+        return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": result["error"], "status": 404})
     return ApiResponse(ok=True, data=result)
 
 
