@@ -7,6 +7,7 @@ from sqlalchemy.orm import defer
 
 from app.core.config import settings
 from app.core.database import async_session
+from app.core.executor import run_io_cpu
 from app.models.backtest_result import BacktestResult
 from app.models.factor import Factor
 from app.models.strategy import Strategy
@@ -143,7 +144,6 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
     universe: 标的池（None=config 默认）。
     asset_class: stock/etf（ETF 无整手/涨跌停放宽）。
     """
-    import asyncio
     strategy = await get_strategy(strategy_id)
     if strategy is None:
         raise ValueError(f"策略 {strategy_id} 不存在")
@@ -192,10 +192,9 @@ async def run_strategy_backtest(strategy_id: int, start: str = None, end: str = 
             f"已跳过的因子: {', '.join(skip_reasons)}"
         )
 
-    # sync CPU 密集计算放入线程池
-    loop = asyncio.get_running_loop()
-    computed = await loop.run_in_executor(
-        None, _compute_backtest_sync,
+    # sync CPU 密集计算放入受管 IO 线程池（qlib C 扩展释放 GIL），不用 asyncio 默认池
+    computed = await run_io_cpu(
+        _compute_backtest_sync,
         factor_exprs, weights, strategy["combination_method"],
         strategy["topk"], strategy["n_drop"], strategy["benchmark"],
         strategy["rebalance_freq"], start, end, strategy.get("orthogonalize", 0),
@@ -293,6 +292,34 @@ async def get_backtest_result(result_id: int) -> dict:
         return _result_dict(r, strategy_name)
 
 
+async def get_backtest_results_by_ids(result_ids: list[int]) -> list[dict]:
+    """按 id 批量取回测结果（回测对比专用）：单次 ``WHERE id IN (...)`` 查询。
+
+    对比场景只需标量指标 + nav_curve，因此 defer 掉 metrics/trades 大字段，
+    避免原来的 N+1（每个 id 一次会话+查询）与多 MB 无用载荷。返回顺序与入参
+    一致，忽略不存在/已软删除的 id。
+    """
+    if not result_ids:
+        return []
+    async with async_session() as session:
+        q = (
+            select(BacktestResult)
+            .where(BacktestResult.id.in_(result_ids), BacktestResult.is_deleted == 0)
+            .options(defer(BacktestResult.metrics), defer(BacktestResult.trades))
+        )
+        result = await session.execute(q)
+        rows = {r.id: r for r in result.scalars().all()}
+        ids = {r.strategy_id for r in rows.values() if r.strategy_id}
+        names = {}
+        if ids:
+            sres = await session.execute(select(Strategy.id, Strategy.name).where(Strategy.id.in_(ids)))
+            names = dict(sres.all())
+        return [
+            _result_dict_compare(rows[rid], names.get(rows[rid].strategy_id))
+            for rid in result_ids if rid in rows
+        ]
+
+
 async def delete_backtest_result(result_id: int) -> bool:
     """软删除回测结果（is_deleted=1），前端可手动清理重复/过期记录。"""
     async with async_session() as session:
@@ -365,5 +392,31 @@ def _result_summary(r: BacktestResult, strategy_name: str = None) -> dict:
         "turnover": r.turnover,
         "win_rate": r.win_rate,
         "benchmark_return": r.benchmark_return, "excess_return": r.excess_return,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def _result_dict_compare(r: BacktestResult, strategy_name: str = None) -> dict:
+    """回测对比专用轻量字典：不含 metrics/trades。
+
+    调用方（get_backtest_results_by_ids）已 defer 这两列，访问会触发异步惰性加载
+    报错，故这里只读取标量指标 + nav_curve + 策略名。
+    """
+    return {
+        "id": r.id, "strategy_id": r.strategy_id, "name": strategy_name,
+        "start_date": r.start_date, "end_date": r.end_date,
+        "topk": r.topk, "n_drop": r.n_drop, "rebalance_freq": r.rebalance_freq,
+        "combination_method": r.combination_method,
+        "orthogonalize": r.orthogonalize,
+        "benchmark": r.benchmark,
+        "backend": r.backend,
+        "initial_capital": r.initial_capital,
+        "annual_return": r.annual_return, "annual_volatility": r.annual_volatility,
+        "sharpe": r.sharpe, "sortino": r.sortino,
+        "max_drawdown": r.max_drawdown, "calmar": r.calmar,
+        "turnover": r.turnover,
+        "win_rate": r.win_rate,
+        "benchmark_return": r.benchmark_return, "excess_return": r.excess_return,
+        "nav_curve": json.loads(r.nav_curve) if r.nav_curve else None,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }

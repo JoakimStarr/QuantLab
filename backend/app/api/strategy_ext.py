@@ -12,14 +12,47 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.errors import AppError
+from app.core.executor import run_io_cpu
 from app.models.task_result import TaskResult
 from app.schemas.common import ApiResponse
 from app.services.strategy import backtest_status
-from app.services.strategy.manager import get_backtest_result
+from app.services.strategy.manager import get_backtest_result, get_backtest_results_by_ids
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/strategies", tags=["strategy-ext"])
+
+# 对比响应中单条净值曲线的最大点数：回测曲线可达数千点，多条叠加后响应数 MB，
+# 前端折线图不需要全量精度，等间隔降采样（含首尾）即可。
+_NAV_CURVE_MAX_POINTS = 500
+
+
+def _downsample_nav_curve(curve, max_points: int = _NAV_CURVE_MAX_POINTS):
+    """对净值曲线等间隔降采样到 max_points 个点（含首尾），保持原结构。
+
+    支持存储格式 ``{dates, portfolio, benchmark}`` 与旧格式 ``[{date, nav}, ...]``；
+    对 dict 中同名列表列（dates/portfolio/benchmark）用同一组下标切片，保持对齐。
+    """
+    if max_points < 2:
+        return curve
+    if isinstance(curve, dict):
+        length = len(curve.get("dates") or [])
+    elif isinstance(curve, list):
+        length = len(curve)
+    else:
+        return curve
+    if length <= max_points:
+        return curve
+    step = (length - 1) / (max_points - 1)
+    idx = sorted({int(round(i * step)) for i in range(max_points)})
+    if isinstance(curve, dict):
+        out = dict(curve)
+        for key in ("dates", "portfolio", "benchmark"):
+            vals = curve.get(key)
+            if isinstance(vals, list):
+                out[key] = [vals[i] for i in idx if i < len(vals)]
+        return out
+    return [curve[i] for i in idx]
 
 
 class MonteCarloRequest(BaseModel):
@@ -115,17 +148,16 @@ async def compare_backtests_api(
     if len(result_ids) < 2:
         raise AppError("VALIDATION_ERROR", "至少选择 2 个回测结果进行对比", 422)
 
-    results = []
-    nav_curves = []
-    for rid in result_ids:
-        r = await get_backtest_result(rid)
-        if r:
-            results.append(r)
-            if r.get("nav_curve"):
-                nav_curves.append({"result_id": rid, "curve": r["nav_curve"]})
+    # 单次 WHERE id IN 批量查询（defer metrics/trades），替代原来逐 id 的 N+1
+    results = await get_backtest_results_by_ids(result_ids)
 
     if len(results) < 2:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "部分回测结果不存在", "status": 404})
+
+    nav_curves = []
+    for r in results:
+        if r.get("nav_curve"):
+            nav_curves.append({"result_id": r["id"], "curve": _downsample_nav_curve(r["nav_curve"])})
 
     # 对比表格
     comparison = []
@@ -244,7 +276,10 @@ async def portfolio_report_api(
         b_nav = pd.Series(nav_curve["benchmark"], index=pd.to_datetime(dates)).astype(float)
         benchmark = b_nav.pct_change().dropna()
 
-    report = generate_portfolio_report(
+    # empyrical/scipy + 可选 HTML/文件 IO 为同步重活，放入受管 IO 线程池，
+    # 避免阻塞事件循环（否则 /health 等请求一并卡住）。
+    report = await run_io_cpu(
+        generate_portfolio_report,
         returns, benchmark=benchmark,
         title=f"策略 {strategy_id} 组合绩效报告（回测 {r.get('start_date')}~{r.get('end_date')}）",
         generate_html=generate_html,

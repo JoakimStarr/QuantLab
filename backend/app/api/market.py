@@ -2,7 +2,6 @@
 
 通过 qlib 读取指数 OHLCV 数据，支持日线/周线/月线 K 线，以及多指数实时行情概览。
 """
-import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Query
 
 from app.core.cache import TTLCache
 from app.core.errors import AppError
+from app.core.executor import run_io_cpu
 from app.schemas.common import ApiResponse
 from app.services.quant.qlib_init import init_qlib, is_qlib_available
 
@@ -186,8 +186,7 @@ async def get_index_kline(
         return items
 
     try:
-        loop = asyncio.get_running_loop()
-        items = await loop.run_in_executor(None, _load)
+        items = await run_io_cpu(_load)
         _kline_cache.set(cache_key, items)
         return ApiResponse(ok=True, data={
             "index_code": index_code,
@@ -282,8 +281,7 @@ async def market_overview():
         return items
 
     try:
-        loop = asyncio.get_running_loop()
-        items = await loop.run_in_executor(None, _load)
+        items = await run_io_cpu(_load)
         _overview_cache.set("overview", items)
         return ApiResponse(ok=True, data={"items": items})
     except Exception as e:

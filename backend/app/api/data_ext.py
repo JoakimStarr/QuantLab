@@ -7,9 +7,11 @@ from typing import Optional
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy import select
 
+from app.core.cache import TTLCache
 from app.core.config import settings
 from app.core.database import async_session, get_db
 from app.core.errors import AppError
+from app.core.executor import run_io_cpu
 from app.models.stock_index import StockIndex
 from app.models.sync_history import SyncHistory
 from app.schemas.common import ApiResponse
@@ -20,6 +22,9 @@ from app.services.data.sync_progress import ensure_no_bin_sync, get_progress
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quant/data", tags=["data-ext"])
+
+# 数据预览短缓存：同一 (code, limit) 在 60s 内反复预览（切换/刷新）无需重读 qlib bin。
+_preview_cache = TTLCache(ttl=60, maxsize=64)
 
 
 def _read_eod_result() -> dict | None:
@@ -139,7 +144,13 @@ async def data_preview_api(
 
     if not code:
         code = "csi300"
-    import asyncio
+
+    # 缓存键：代码大小写不敏感，limit 参与（条数不同结果不同）
+    cache_key = (code.upper(), limit)
+    cached = _preview_cache.get(cache_key)
+    if cached is not None:
+        return ApiResponse(ok=True, data={"items": cached, "code": cache_key[0], "count": len(cached)})
+
     from app.services.quant.qlib_init import init_qlib
 
     def _load():
@@ -188,8 +199,11 @@ async def data_preview_api(
         close_series = df["$close"]
         df = df[close_series.notna()]
         df = df.sort_index(ascending=False).head(limit)
+        # 列式 DataStore → records 一次性转换，比逐行 iterrows（每次新建 Series）快得多
+        df = df.reset_index()
         rows = []
-        for (inst, dt), row in df.iterrows():
+        for rec in df.to_dict("records"):
+            dt = rec.get("datetime")
             # 处理 dt 可能是 str 或 datetime 的情况
             if hasattr(dt, "date"):
                 date_str = str(dt.date())
@@ -198,12 +212,12 @@ async def data_preview_api(
             else:
                 date_str = str(dt)[:10]
             # 回填进行中或停牌日会读到 NaN，统一转 null，避免 int(NaN) 崩溃
-            open_v, close_v = _clean_num(row.get("$open")), _clean_num(row.get("$close"))
-            high_v, low_v = _clean_num(row.get("$high")), _clean_num(row.get("$low"))
-            volume_v = _clean_num(row.get("$volume"))
+            open_v, close_v = _clean_num(rec.get("$open")), _clean_num(rec.get("$close"))
+            high_v, low_v = _clean_num(rec.get("$high")), _clean_num(rec.get("$low"))
+            volume_v = _clean_num(rec.get("$volume"))
             rows.append({
                 "date": date_str,
-                "code": inst,
+                "code": rec.get("instrument"),
                 "open": round(open_v, 2) if open_v is not None else None,
                 "close": round(close_v, 2) if close_v is not None else None,
                 "high": round(high_v, 2) if high_v is not None else None,
@@ -212,8 +226,8 @@ async def data_preview_api(
             })
         return rows
 
-    loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(None, _load)
+    data = await run_io_cpu(_load)
+    _preview_cache.set(cache_key, data)
     return ApiResponse(ok=True, data={"items": data, "code": code.upper(), "count": len(data)})
 
 

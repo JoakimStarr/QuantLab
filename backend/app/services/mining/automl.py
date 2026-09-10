@@ -11,7 +11,6 @@ AutoML 学习因子间的非线性映射，预测前向收益作为综合打分�
 """
 import json
 import logging
-import asyncio
 import os
 from pathlib import Path
 from datetime import datetime
@@ -19,6 +18,7 @@ import numpy as np
 import pandas as pd
 from app.core.database import async_session
 from app.core.config import settings
+from app.core.executor import run_io_cpu
 from app.core.gpu_utils import is_gpu_available, get_device
 from app.models.mining_task import MiningTask
 from app.models.factor import Factor
@@ -67,8 +67,8 @@ async def _run_walk_forward(task_id: int, merged: pd.DataFrame, names: list,
 
     X = merged[names]
     y = merged["label"]
-    scores = await asyncio.get_running_loop().run_in_executor(
-        None, walk_forward_predict, _factory, X, y, train_window, step
+    scores = await run_io_cpu(
+        walk_forward_predict, _factory, X, y, train_window, step
     )
 
     score_df = pd.DataFrame({"factor": scores}, index=merged.index).dropna()
@@ -175,7 +175,7 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
             label_df = load_label(start, end, universe=universe)
             return X_df, label_df, names
 
-        X_df, label_df, names = await asyncio.get_running_loop().run_in_executor(None, _load_all)
+        X_df, label_df, names = await run_io_cpu(_load_all)
         merged = X_df.join(label_df, how="inner").dropna()
         if len(merged) < 200:
             raise ValueError(f"AutoML 数据不足: {len(merged)} 行")
@@ -220,7 +220,7 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
             model.fit(X_tr, y_tr)
             return model
 
-        model = await asyncio.get_running_loop().run_in_executor(None, _fit)
+        model = await run_io_cpu(_fit)
 
         # 模型持久化（bundle 含特征元信息，回测时自包含重建特征）
         model_path = _model_path(task_id)
@@ -243,8 +243,8 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
                         lgb_params["device"] = "gpu"
                         lgb_params["gpu_device_id"] = 0
                     return LGBMRegressor(**lgb_params)
-            cv_result = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: time_series_cv_eval(_model_factory, merged[names], merged["label"], n_splits=5)
+            cv_result = await run_io_cpu(
+                lambda: time_series_cv_eval(_model_factory, merged[names], merged["label"], n_splits=5)
             )
             logger.info("AutoML 时序CV: mean_ic=%.4f, std_ic=%.4f", cv_result["mean_ic"], cv_result["std_ic"])
         except Exception as e:

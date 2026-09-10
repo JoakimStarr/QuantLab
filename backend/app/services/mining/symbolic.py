@@ -9,12 +9,12 @@
 """
 import json
 import logging
-import asyncio
 import os
 from datetime import datetime
 import numpy as np
 import pandas as pd
 from app.core.config import settings
+from app.core.executor import run_io_cpu
 from app.core.gpu_utils import is_gpu_available, get_device
 from app.services.factor.expression import validate_expression
 from app.services.factor.library import add_factor, update_factor_metrics
@@ -327,9 +327,9 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
         start = period.get("start", "2020-01-01")
         end = period.get("end", "2024-12-31")
 
-        # 构建数据集（CPU 密集）
-        X, y, feature_names, merged_index = await asyncio.get_running_loop().run_in_executor(
-            None, _build_dataset, start, end, universe
+        # 构建数据集（qlib IO + pandas 计算，放受管 IO 线程池，避免默认池无界占用）
+        X, y, feature_names, merged_index = await run_io_cpu(
+            _build_dataset, start, end, universe
         )
         if len(X) < 100:
             raise ValueError(f"符号回归数据不足: {len(X)} 行")
@@ -369,7 +369,7 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
             verbose=0,
             metric="spearman",  # 秩相关更稳健
         )
-        await asyncio.get_running_loop().run_in_executor(None, est.fit, X_train, y_train)
+        await run_io_cpu(est.fit, X_train, y_train)
 
         # 计算 train/valid IC，检测过拟合（train IC - valid IC > 0.05 视为过拟合）
         train_pred = est.predict(X_train)
