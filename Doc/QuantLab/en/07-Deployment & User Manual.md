@@ -69,7 +69,7 @@ Log level/dir, executor pool sizes, rate limits, qlib provider.
 
 ### 3.2 Start dev services
 ```bash
-./start.sh dev    # backend :8000 (--reload) + frontend :3000
+./start.sh dev    # backend (--reload) + frontend Vite HMR, detached; ports from .env BACKEND_PORT/FRONTEND_PORT (default 8101/3001); logs to logs/backend.out, logs/frontend.out
 ```
 Or separately:
 ```bash

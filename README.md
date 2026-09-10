@@ -60,12 +60,14 @@ cp .env.example .env   # setup.sh 已自动复制，按需修改
 # 至少需要配置一个 AI Provider（推荐 OPENCODEZEN_API_KEY）
 # 还需配置 PostgreSQL 连接（POSTGRES_PASSWORD 等），详见 docs/QUICKSTART.md
 
-# 启动
-./start.sh
+# 启动（开发模式，后台运行不占用终端）
+./start.sh dev
 # 后端：  http://localhost:8101   （端口见 .env 的 BACKEND_PORT）
 # 前端：  http://localhost:3001   （端口见 .env 的 FRONTEND_PORT）
 # 文档：  http://localhost:8101/docs  (Swagger UI)
 # 指标：  http://localhost:8101/metrics (Prometheus)
+# 停止 ./start.sh stop ｜ 重启 ./start.sh restart ｜ 状态 ./start.sh status
+# 生产模式 ./start.sh start（构建前端 + vite preview 服务构建产物）；全部命令见 ./start.sh help
 ```
 
 ### 2.2 生产部署

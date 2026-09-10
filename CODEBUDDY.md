@@ -18,9 +18,15 @@ Python is pinned to 3.11 (`pyqlib` does not support 3.13). The venv lives at `.v
 # One-time environment bootstrap (venv + deps + data dirs + .env)
 ./setup.sh
 
-# Start dev services (backend/frontend ports come from `.env`: BACKEND_PORT=8101, FRONTEND_PORT=3001)
-./start.sh dev        # 应用日志写 logs/quantlab.log + logs/error.log，worker 写 logs/sync.log
+# Start services (unified interface: start|dev|stop|restart|status|help)
+# dev = backend uvicorn --reload + Vite HMR, detached (logs/backend.out, logs/frontend.out)
+./start.sh dev        # ports from `.env`: BACKEND_PORT=8101, FRONTEND_PORT=3001
+                      # 应用日志写 logs/quantlab.log + logs/error.log，worker 写 logs/sync.log
                       # （结构化 JSON，前端"日志管理"页可视化查看；前端页面日志在浏览器 DevTools）
+./start.sh start      # prod: npm run build → vite preview(3001) serving dist + backend(8101)
+./start.sh stop       # 停止本项目服务（按 .runtime_ports + 端口校验进程归属）
+./start.sh restart    # 重启（沿用上次模式；restart dev|prod 可显式指定）
+./start.sh status     # 运行状态
 
 # Backend alone (from repo root; port from .env BACKEND_PORT, default 8101)
 .venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8101  # cwd=backend

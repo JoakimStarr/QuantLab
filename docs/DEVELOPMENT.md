@@ -131,7 +131,7 @@ QuantLab/
 ├── logs/                        日志输出
 ├── config.yaml                  主配置
 ├── .env / .env.example          环境变量
-├── start.sh                     一键启动脚本（dev 模式）
+├── start.sh                     一键启动脚本（start/dev/stop/restart/status）
 ├── setup.sh                     环境引导脚本（venv + npm install）
 ├── requirements.txt
 ├── pyproject.toml               ruff/pytest/mypy 配置
@@ -230,15 +230,18 @@ QuantLab/
 ```bash
 cd ~/QuantLab
 ./setup.sh            # 首次：环境引导（建 .venv + 装依赖）
-./start.sh            # 启动（dev 模式）
+./start.sh dev        # 启动（dev 模式，后台运行；停止用 ./start.sh stop）
 ```
 
 `start.sh dev` 会：
-1. 检查 `.env` 中 `BACKEND_PORT` / `FRONTEND_PORT` 端口占用
-2. 检查 `.venv` 与 `node_modules`，缺失则安装
-3. 后台启动 `uvicorn app.main:app --reload --host 0.0.0.0 --port ${BACKEND_PORT}`（cwd=backend，默认 8101）
-4. 后台启动 `npm run dev -- --port ${FRONTEND_PORT}`（cwd=frontend，默认 3001）
-5. 等待端口就绪后输出访问地址
+1. 先清理本项目的旧实例（按 `.runtime_ports` 记录的 PID + 进程工作目录校验，避免双实例并存）
+2. 读取 `.env` 的 `BACKEND_PORT` / `FRONTEND_PORT`，被占用时询问 [k] kill 或 [q] 退出（本脚本不做端口顺延）
+3. 后台启动 `uvicorn app.main:app --reload --host 0.0.0.0 --port ${BACKEND_PORT}`（cwd=backend，默认 8101），输出写 `logs/backend.out`
+4. 轮询后端 `/health` 就绪后，后台启动 `npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT}`（cwd=frontend，默认 3001），输出写 `logs/frontend.out`
+5. 轮询前端首页就绪后输出访问地址；实际端口/模式/PID 记入 `.runtime_ports`
+
+> 其他命令：`./start.sh start`（生产模式：`npm run build` → `vite preview` 服务 `frontend/dist` + 后端）、
+> `./start.sh stop`、`./start.sh restart [dev|prod]`、`./start.sh status`、`./start.sh help`。
 
 ### 4.2 后端手动启动
 

@@ -119,7 +119,7 @@ ADMIN_PASSWORD=admin123
 ### 第 4 步：启动
 
 ```bash
-./start.sh
+./start.sh dev        # 开发模式（Vite HMR + 后端 --reload），后台运行不占用终端
 ```
 
 启动后访问（端口在 `.env` 的 `BACKEND_PORT` / `FRONTEND_PORT` 配置）：
@@ -128,7 +128,7 @@ ADMIN_PASSWORD=admin123
 - Swagger 文档：http://localhost:8101/docs
 - Prometheus 指标：http://localhost:8101/metrics
 
-按 `Ctrl+C` 停止所有服务。
+用 `./start.sh stop` 停止所有服务（`./start.sh status` 查看状态，`./start.sh help` 查看全部命令）。
 
 ---
 

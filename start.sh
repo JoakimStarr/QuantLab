@@ -1,431 +1,728 @@
 #!/bin/bash
-# QuantLab 启动脚本：同时启动前后端
-# Usage:
-#   ./start.sh          静默启动（默认）：后台分离运行，脚本执行完自动退出，可关闭终端；停止用 ./start.sh stop
-#   ./start.sh dev      开发模式：前台运行，Ctrl+C 停止（终端不可关闭）
-#   ./start.sh stop     停止静默模式启动的服务
+# ============================================================================
+# 统一启动脚本（逻辑基准：paper_hot/start.sh，QuantLab / Quantlerning 共用同一套逻辑）
 #
-# Python 环境优先级：
-#   1. conda env `quant`  （推荐，pyqlib/gplearn/LightGBM 等原生依赖齐备）
-#   2. 项目 .venv
-#   3. 系统 python3
+# 接口：
+#   ./start.sh            等同 ./start.sh start（生产模式）
+#   ./start.sh start      生产模式：构建前端产物 → 后端 → 独立前端进程
+#   ./start.sh dev        开发模式：后端(+可选 reload) → 前端 HMR
+#   ./start.sh stop       停止本项目服务（只终止工作目录属于本项目的进程）
+#   ./start.sh restart    重启（默认沿用上次模式，可 restart dev / restart prod）
+#   ./start.sh status     查看运行状态
+#   ./start.sh help       帮助
+#
+# 状态文件：<项目根>/.runtime_ports（记录 mode / 实际端口 / PID，供 stop、status、restart 使用）
+# 环境变量：FORCE_BUILD=1 强制重建前端；PORT_CONFLICT=kill|shift 预置端口冲突处理；PORT_MAX_TRIES=N 顺延上限
+# ============================================================================
 
-set -u
-# 不使用 -e：后台进程非零退出由 wait_for_port 处理
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+# ─────────────────── 项目配置区（各项目唯一的差异，改这里即可复用） ───────────────────
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODE="${1:-silent}"
+PROJECT_NAME="QuantLab"
 
-# 端口从 .env 读取（BACKEND_PORT / FRONTEND_PORT），改端口只改 .env 即可。
-# 用 sed 解析 KEY=value 而非 source，避免 .env 中出现 shell 语法时误执行。
-env_val() {
-    local key=$1 default=$2 val
-    val="$(sed -n "s/^[[:space:]]*${key}=//p" "$SCRIPT_DIR/.env" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
-    echo "${val:-$default}"
-}
-BACKEND_PORT="$(env_val BACKEND_PORT 8101)"
-FRONTEND_PORT="$(env_val FRONTEND_PORT 3001)"
+BACKEND_DIR_NAME="backend"
+FRONTEND_DIR_NAME="frontend"
+BACKEND_MODULE="app.main:app"          # uvicorn 目标（cwd = backend/）
+HEALTH_PATH="/health"                  # 后端健康检查路径
 
-# ============ Python 解释器检测 ============
-PYTHON_BIN=""
-# 1. 优先：项目 .venv（setup.sh 创建）
-if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
-# 2. 兜底：当前 conda 激活的环境
-elif [ -n "${CONDA_PREFIX:-}" ] && [ -x "$CONDA_PREFIX/bin/python" ]; then
-    PYTHON_BIN="$CONDA_PREFIX/bin/python"
-# 3. 兜底：系统 python3
-else
-    PYTHON_BIN="$(command -v python3)"
-fi
+# Python 解释器候选：项目内相对路径（目录或可执行文件均可），找不到再查 PATH
+PYTHON_CANDIDATES=(".venv" "$CONDA_PREFIX/bin/python" "python3")
 
-if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
-    echo -e "\033[31m[ERROR] 未找到可用的 Python 解释器\033[0m" >&2
-    exit 1
-fi
+# dev 模式是否给 uvicorn 加 --reload（本项目一直启用，保持原行为）
+BACKEND_RELOAD=1
 
-# ============ 颜色输出 ============
-red()    { echo -e "\033[31m$*\033[0m"; }
-green()  { echo -e "\033[32m$*\033[0m"; }
-yellow() { echo -e "\033[33m$*\033[0m"; }
-blue()   { echo -e "\033[34m$*\033[0m"; }
+# 端口来源：PORT_ENV_FILE 里首行匹配 PORT_ENV_KEY_* 的值；文件不存在或键缺失时用默认值
+# （vite.config.js 也从同一个 .env 读取这两键作为 server.port 与 /api、/ws 代理目标）
+PORT_ENV_FILE=".env"
+PORT_ENV_KEY_BACKEND="BACKEND_PORT"
+PORT_ENV_KEY_FRONTEND="FRONTEND_PORT"
+PORT_DEFAULT_BACKEND=8101
+PORT_DEFAULT_FRONTEND=3001
 
-# ============ 工具函数 ============
-port_pid() {
-    lsof -ti :"$1" 2>/dev/null || true
-}
+# 固定端口：前端代理目标在 vite.config.js 构建/启动期从 .env 读取，顺延会与之失配
+ALLOW_PORT_SHIFT=0
 
-# 杀掉进程及其子进程（先按进程组，再逐个兜底）
-# 注意：当 PGID 组长已死（僵尸）时 kill -- -PGID 无效（孤儿进程组），
-# 必须逐个 kill 目标进程本身。
-kill_tree() {
-    local pid=$1
-    if [ -z "$pid" ]; then return; fi
-    local pgid
-    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ -n "$pgid" ] && [ "$pgid" -gt 1 ]; then
-        # 先尝试按进程组杀（覆盖 uvicorn/vite/npm/tee 整个启动链）
-        kill -- -"$pgid" 2>/dev/null || true
-    fi
-    # 再逐个杀目标进程本身（兜底：孤儿进程组 / 组长已死的情况）
-    kill "$pid" 2>/dev/null || true
-    kill -9 "$pid" 2>/dev/null || true
-}
+BACKEND_LOG_REL="logs/backend.out"
+FRONTEND_LOG_REL="logs/frontend.out"
 
-# 端口冲突处理：显示占用进程并询问用户是否杀掉重启。
-# 返回 0=已杀掉并释放端口；返回 1=用户选择不杀（由调用方决定退出）。
-ask_kill_port() {
-    local port=$1
-    local name=$2
-    local pids
-    pids=$(port_pid "$port")
-    [ -z "$pids" ] && return 0
+# dev 启动前清理的前端产物/缓存（空 = 不清理；Vite 的依赖预构建缓存会自动失效）
+DEV_CLEAN_TARGET=""
 
+# 前端命令模板（%P = 前端端口）
+DEV_FRONTEND_CMD=(npm run dev -- --host 0.0.0.0 --port "%P")
+PROD_FRONTEND_CMD=(npm run preview -- --host 0.0.0.0 --port "%P")
+PROD_BUILD_CMD=(npm run build)
+PROD_BUILD_MARKER="frontend/dist/index.html"   # 存在则跳过构建（FORCE_BUILD=1 强制重建）
+
+# Vite 由 vite.config.js 的 proxy 代理 /api，无需注入 BACKEND_API_URL
+EXPORT_BACKEND_API_URL=0
+# ──────────────────────────────────────────────────────────────────────────────────
+
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+BACKEND_LOG="$BACKEND_LOG_REL"
+case "$BACKEND_LOG" in /*) ;; *) BACKEND_LOG="$PROJECT_DIR/$BACKEND_LOG" ;; esac
+FRONTEND_LOG="$FRONTEND_LOG_REL"
+case "$FRONTEND_LOG" in /*) ;; *) FRONTEND_LOG="$PROJECT_DIR/$FRONTEND_LOG" ;; esac
+# 记录实际端口 / 进程 / 启动模式（stop、status、restart 用于定位）
+RUNTIME_FILE="$PROJECT_DIR/.runtime_ports"
+# 端口顺延最大次数（基础端口被占用后 +1 逐级寻找空闲端口）
+PORT_MAX_TRIES=${PORT_MAX_TRIES:-100}
+
+# ============================== 帮助 ==============================
+usage() {
+    echo "Usage: ./start.sh <command>"
     echo ""
-    yellow "端口 $port ($name) 已被以下进程占用:"
-    for p in $pids; do
-        ps -w -o pid=,cmd= -p "$p" 2>/dev/null | sed 's/^/    /' || echo "    PID $p (进程不存在?)"
-    done
+    echo "Commands:"
+    echo "  start      启动生产模式（默认）"
+    echo "  dev        启动开发模式（热重载 / HMR）"
+    echo "  stop       停止所有服务"
+    echo "  restart    重启服务（默认沿用上次启动模式；可用 restart dev / restart prod 显式指定）"
+    echo "  status     查看服务运行状态"
+    echo "  help       -h --help  显示本帮助"
+    echo ""
+    echo "Examples:"
+    echo "  ./start.sh           # 等同 ./start.sh start"
+    echo "  ./start.sh dev"
+    echo "  ./start.sh restart   # 沿用上次模式重启"
+    echo "  ./start.sh restart dev"
+    echo ""
+    echo "端口说明："
+    if [ -n "$PORT_ENV_FILE" ]; then
+        echo "  默认后端 ${PORT_DEFAULT_BACKEND}、前端 ${PORT_DEFAULT_FRONTEND}（来源：${PORT_ENV_FILE}）。"
+    else
+        echo "  固定后端 ${PORT_DEFAULT_BACKEND}、前端 ${PORT_DEFAULT_FRONTEND}（同时写在"
+        echo "  前端 vite.config 与后端 CORS 中，改端口需一并修改）。"
+    fi
+    if [ "$ALLOW_PORT_SHIFT" = "1" ]; then
+        echo "  若端口被占用，启动时会先展示占用进程并询问处理方式：[k] kill 占用进程继续使用，"
+        echo "  [n] 顺延 +1 使用新端口（${PORT_DEFAULT_FRONTEND} 被占用则尝试 $((PORT_DEFAULT_FRONTEND + 1)) 等），[q] 退出。"
+        echo "  可用 PORT_CONFLICT=kill|shift 预置选择（非交互环境默认自动顺延）。"
+    else
+        echo "  本项目端口不自动顺延：被占用时会询问 [k] kill 占用进程或 [q] 退出；"
+        echo "  也可用 PORT_CONFLICT=kill 预置（非交互环境默认放弃启动，不会自动终止进程）。"
+    fi
+    if [ "$EXPORT_BACKEND_API_URL" = "1" ]; then
+        echo "  前端通过运行期代理把 /api 指向后端实际端口，因此后端端口变化无需重建前端。"
+    fi
+    echo ""
+    echo "其他说明："
+    echo "  - 启动前若检测到本项目的旧实例仍在运行，会先自动停止，避免双实例并存。"
+    echo "  - 本机 systemd 常驻服务与本脚本共用端口；本脚本不会终止 systemd 托管的进程，"
+    echo "    端口被常驻服务占用时会提示需要先停止的 unit（sudo systemctl stop <unit>）。"
+    if [ -n "$DEV_CLEAN_TARGET" ]; then
+        echo "  - dev 模式启动时会清空 ${DEV_CLEAN_TARGET##*/}（依赖或导入结构变更后旧产物会导致前端报错）。"
+    fi
+    echo "  - 健康检查为轮询等待（后端 30s / 前端 60s），替代旧的固定 sleep。"
+}
 
-    while true; do
-        printf "\033[33m是否杀掉这些进程并重新启动 $name？[y/N] \033[0m"
-        if ! read -r answer; then
-            # 非交互环境（stdin 非 TTY/EOF），无法确认 → 安全起见不杀
-            red "非交互环境无法确认，请手动释放端口 $port 后重试。"
-            return 1
+# ───────────────────────── 停止服务 ─────────────────────────
+# 本机 systemd 常驻服务与 start.sh 手动启动的服务共用同一批端口（见 README/部署说明）。
+# start.sh 一律不触碰 systemd 托管的进程：它们由 Restart=always 守护，杀掉只会被立刻拉起、
+# 与 start.sh 来回拉锯；需要释放端口时由用户显式 `sudo systemctl stop <unit>`。
+systemd_unit_of() {
+    local pid="$1"
+    sed -n 's#.*/system\.slice/\([^/]*\.service\)$#\1#p' "/proc/$pid/cgroup" 2>/dev/null | head -1
+}
+
+# 端口占用者是 systemd 常驻服务时，返回 " [systemd: <unit>]" 供 status 提示
+port_owner_note() {
+    local port="$1" pid unit
+    pid=$(lsof -t -i:"$port" 2>/dev/null | head -1)
+    if [ -n "$pid" ]; then
+        unit=$(systemd_unit_of "$pid")
+        if [ -n "$unit" ]; then
+            echo " [systemd: ${unit}]"
         fi
-        case "${answer:-N}" in
-            y|Y|yes|YES)
-                for p in $pids; do
-                    kill_tree "$p"
-                done
-                # 等待端口真正释放（最多 10s）
-                local i=0
-                while [ -n "$(port_pid "$port")" ] && [ $i -lt 10 ]; do
-                    sleep 1
-                    i=$((i + 1))
-                done
-                if [ -n "$(port_pid "$port")" ]; then
-                    red "端口 $port 未能释放（仍有进程占用），请手动处理后再试。"
-                    return 1
+    fi
+    return 0
+}
+
+# 仅当进程工作目录位于本项目内、且不由 systemd 托管时才终止（防止误杀其他项目或常驻服务）
+# 启动时经 setsid 创建独立进程组，故先按进程组终止（可连带清理 npm/next/uvicorn 子进程树）
+# 先发 SIGTERM 让 SQLite 有机会关闭 WAL 日志并刷盘，超时后才 SIGKILL 强制终止
+kill_project_pids() {
+    local pids="$1" name="$2"
+    local pid cwd pgid unit pids_to_kill="" waited
+
+    # 第一阶段：筛选属于本项目、且非 systemd 托管的进程
+    for pid in $pids; do
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
+        case "$cwd" in
+            "$PROJECT_DIR"/*)
+                unit=$(systemd_unit_of "$pid")
+                if [ -n "$unit" ]; then
+                    echo -e "   ${YELLOW}跳过 $name (PID: $pid)：由 systemd 托管（${unit}），需 sudo systemctl stop ${unit}${NC}"
+                    continue
                 fi
-                green "端口 $port 已释放"
-                return 0
-                ;;
-            n|N|no|NO|"")
-                yellow "已跳过，端口 $port ($name) 保持占用。"
-                return 1
-                ;;
-            *)
-                echo "请输入 y 或 n"
+                pids_to_kill="$pids_to_kill $pid"
                 ;;
         esac
     done
+
+    # 第二阶段：SIGTERM（先杀进程组再杀进程本身；pgid==pid 说明该进程是 setsid 会话组长）
+    for pid in $pids_to_kill; do
+        pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [ -n "$pgid" ] && [ "$pgid" = "$pid" ] && [ "$pgid" != "$$" ]; then
+            kill -TERM -- "-$pgid" 2>/dev/null || true
+        fi
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    # 第三阶段：等待优雅退出（最多 5 秒）
+    waited=0
+    for pid in $pids_to_kill; do
+        while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 5 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+    done
+
+    # 第四阶段：仍未退出的强制终止
+    for pid in $pids_to_kill; do
+        pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+        if kill -0 "$pid" 2>/dev/null; then
+            if [ -n "$pgid" ] && [ "$pgid" = "$pid" ] && [ "$pgid" != "$$" ]; then
+                kill -KILL -- "-$pgid" 2>/dev/null || true
+            fi
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+        echo "   $name stopped (PID: $pid)"
+    done
 }
 
-# 等待端口真正就绪：端口有进程 + HTTP 探测（仅 backend）
-wait_for_port() {
-    local port=$1
-    local name=$2
-    local timeout=${3:-30}
-    local probe_url="${4:-}"
-    local i=0
-    while [ $i -lt "$timeout" ]; do
-        if [ -n "$(port_pid "$port")" ]; then
-            # 如果提供了 HTTP 探测 URL，等真正能响应才返回
-            if [ -n "$probe_url" ]; then
-                if curl -fsS -m 2 "$probe_url" >/dev/null 2>&1; then
+stop_services() {
+    echo "🛑 Stopping ${PROJECT_NAME}..."
+    load_ports
+    load_runtime_ports
+
+    # 1) 终止上次启动记录的进程（.runtime_ports 中记录的 PID）
+    if [ -f "$RUNTIME_FILE" ]; then
+        kill_project_pids "$(grep -E '^backend_pid=' "$RUNTIME_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' \r')" "Backend"
+        kill_project_pids "$(grep -E '^frontend_pid=' "$RUNTIME_FILE" 2>/dev/null | cut -d= -f2 | tr -d ' \r')" "Frontend"
+    fi
+
+    # 2) 兜底：按端口清理（同样校验属于本项目）
+    kill_project_pids "$(lsof -t -i:$BACKEND_PORT 2>/dev/null || true)" "Backend(port $BACKEND_PORT)"
+    kill_project_pids "$(lsof -t -i:$FRONTEND_PORT 2>/dev/null || true)" "Frontend(port $FRONTEND_PORT)"
+
+    rm -f "$RUNTIME_FILE"
+    echo ""
+    echo "✅ ${PROJECT_NAME} has been stopped"
+}
+
+# ───────── 启动前自动清理本项目的旧实例 ─────────
+# 背景：旧实例未停时再次 start 会端口顺延另起新进程，导致双实例并存、
+# 浏览器连到陈旧的 dev server（典型症状：Loading CSS chunk ... failed）。
+# 仅清理「记录在案且确实存活」的进程；记录的进程均已退出时只清掉过期记录。
+stop_stale_instance() {
+    [ -f "$RUNTIME_FILE" ] || return 0
+    local bp fp pid alive=""
+    bp=$(grep -E '^backend_pid=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    fp=$(grep -E '^frontend_pid=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    for pid in $bp $fp; do
+        kill -0 "$pid" 2>/dev/null && alive="$alive $pid"
+    done
+    if [ -z "$alive" ]; then
+        # 记录的进程均已退出：仅清理过期记录
+        rm -f "$RUNTIME_FILE"
+        return 0
+    fi
+    echo -e "${YELLOW}♻️  检测到本项目的旧实例仍在运行 (PID:${alive})，先自动停止以避免双实例${NC}"
+    kill_project_pids "$bp" "Backend(stale)"
+    kill_project_pids "$fp" "Frontend(stale)"
+    # 兜底：端口上的占用者。uvicorn --reload / --workers 的子进程、npm 派生的 vite/next
+    # 都不在记录里，只清记录会导致随后的端口冲突。
+    kill_project_pids "$(lsof -t -i:$BACKEND_PORT 2>/dev/null || true)" "Backend(port $BACKEND_PORT)"
+    kill_project_pids "$(lsof -t -i:$FRONTEND_PORT 2>/dev/null || true)" "Frontend(port $FRONTEND_PORT)"
+    rm -f "$RUNTIME_FILE"
+    sleep 1
+}
+
+# ───────────────────────── 查看状态 ─────────────────────────
+status_services() {
+    echo "📊 ${PROJECT_NAME} service status:"
+    load_ports
+    load_runtime_ports
+    local mode
+    mode=$(grep -E '^mode=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    mode=${mode:-unknown}
+    echo "   Last start mode: ${mode}"
+    echo ""
+    if lsof -t -i:$BACKEND_PORT >/dev/null 2>&1; then
+        echo -e "   Backend  (port $BACKEND_PORT): ${GREEN}RUNNING${NC} (PID: $(lsof -t -i:$BACKEND_PORT | tr '\n' ' '))$(port_owner_note "$BACKEND_PORT")"
+    else
+        echo -e "   Backend  (port $BACKEND_PORT): ${RED}STOPPED${NC}"
+    fi
+    if lsof -t -i:$FRONTEND_PORT >/dev/null 2>&1; then
+        echo -e "   Frontend (port $FRONTEND_PORT): ${GREEN}RUNNING${NC} (PID: $(lsof -t -i:$FRONTEND_PORT | tr '\n' ' '))$(port_owner_note "$FRONTEND_PORT")"
+    else
+        echo -e "   Frontend (port $FRONTEND_PORT): ${RED}STOPPED${NC}"
+    fi
+}
+
+# ───────────────────────── 启动服务（统一实现） ─────────────────────────
+# prod 与 dev 仅前端行为不同（构建产物 + 独立前端进程 vs HMR），后端启动逻辑完全一致。
+resolve_python() {
+    local cand path
+    for cand in "${PYTHON_CANDIDATES[@]}"; do
+        [ -n "$cand" ] || continue
+        path="$cand"
+        case "$path" in /*) ;; *) path="$PROJECT_DIR/$path" ;; esac
+        # 项目内的虚拟环境目录 → 取其 bin/python
+        if [ -x "$path/bin/python" ]; then
+            PYTHON_BIN="$path/bin/python"
+            return 0
+        fi
+        # 项目内的可执行文件（如 .venv/bin/python、./python）
+        if [ -x "$path" ] && [ ! -d "$path" ]; then
+            PYTHON_BIN="$path"
+            return 0
+        fi
+        # 裸命令名（如 python3）→ 查 PATH
+        case "$cand" in
+            */*) ;;
+            *)
+                if command -v "$cand" >/dev/null 2>&1; then
+                    PYTHON_BIN="$(command -v "$cand")"
                     return 0
                 fi
-            else
-                return 0
-            fi
-        fi
-        printf "\r  等待 %s 启动... %ds/%ds" "$name" "$i" "$timeout"
-        sleep 1
-        i=$((i + 1))
+                ;;
+        esac
     done
-    echo ""
-    red "错误: $name 启动超时 (port $port)"
     return 1
 }
 
-# ============ 进程清理 ============
-BACKEND_PID=""
-FRONTEND_PID=""
-# 静默模式正常完成标记：置 1 后 cleanup 不再杀已分离的服务
-SILENT_OK=0
-
-cleanup() {
-    local exit_code=$?
-    # 避免 cleanup 被嵌套调用（cleanup 本身也会触发 EXIT trap）
-    if [ "${CLEANUP_RUNNING:-0}" = "1" ]; then return; fi
-    CLEANUP_RUNNING=1
-
-    if [ "${SILENT_OK:-0}" = "1" ]; then
-        # 静默模式正常完成：服务已分离运行，交由 ./start.sh stop 管理
-        exit 0
-    fi
-    # 本脚本未启动任何服务（silent 启动失败 / stop 命令等）→ 静默退出，不打扰
-    if [ -z "$BACKEND_PID" ] && [ -z "$FRONTEND_PID" ]; then
-        exit "$exit_code"
-    fi
-
-    echo ""
-    yellow "正在停止所有服务..."
-    [ -n "$BACKEND_PID"  ] && kill_tree "$BACKEND_PID"
-    [ -n "$FRONTEND_PID" ] && kill_tree "$FRONTEND_PID"
-    # 给子进程 2 秒退出时间，再强杀
-    sleep 2
-    [ -n "$BACKEND_PID"  ] && kill -9 "$BACKEND_PID"  2>/dev/null || true
-    [ -n "$FRONTEND_PID" ] && kill -9 "$FRONTEND_PID" 2>/dev/null || true
-    wait 2>/dev/null
-    green "已停止"
-    exit "$exit_code"
-}
-trap 'cleanup' SIGINT SIGTERM SIGHUP EXIT
-
-# ============ 静默启动（默认模式） ============
-# 分离运行：setsid 新会话 + stdin 断开 + 输出重定向，脚本执行完即退出，终端可关闭。
-# PID 写 logs/backend.pid / frontend.pid，用 ./start.sh stop 停止。
-start_silent() {
-    echo "========================================="
-    echo "  QuantLab - 静默启动"
-    echo "========================================="
-    blue "Python: $PYTHON_BIN"
-    echo ""
-
-    # 端口检查（非交互，不询问；若为旧实例请先 stop）
-    if [ -n "$(port_pid "$BACKEND_PORT")" ]; then
-        red "端口 $BACKEND_PORT (后端) 已被占用。若为旧实例，请先运行 ./start.sh stop。"
+require_python() {
+    if ! resolve_python; then
+        echo -e "${RED}Error: 未找到可用的 Python 解释器（候选：${PYTHON_CANDIDATES[*]}）${NC}" >&2
+        echo -e "${RED}       请先按项目文档创建虚拟环境并安装依赖${NC}" >&2
         exit 1
     fi
-    if [ -n "$(port_pid "$FRONTEND_PORT")" ]; then
-        red "端口 $FRONTEND_PORT (前端) 已被占用。若为旧实例，请先运行 ./start.sh stop。"
-        exit 1
-    fi
-
-    # 依赖检查（与 dev 模式一致）
-    if ! "$PYTHON_BIN" -c "import uvicorn, fastapi" >/dev/null 2>&1; then
-        red "未找到 uvicorn/fastapi，请先运行 ./setup.sh 安装依赖。"
-        exit 1
-    fi
-    if [ ! -d "$SCRIPT_DIR/frontend/node_modules" ]; then
-        yellow "前端依赖未安装，正在安装..."
-        (cd "$SCRIPT_DIR/frontend" && npm install) || { red "npm install 失败"; exit 1; }
-    fi
-
-    mkdir -p "$SCRIPT_DIR/logs"
-
-    # 启动后端：结构化日志由应用写 quantlab.log/error.log，stdout 丢弃避免重复，
-    # stderr 收 backend.out 便于排查启动失败（import 错误等）。
-    # 注意：不用 set -m（否则子 shell 是组长，setsid 会 fork 导致 $! 失效）；
-    # 无组长 + exec setsid → 原地新会话，PID 即 $!，kill_tree 可精确停整个进程组。
-    blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
-    (
-        cd "$SCRIPT_DIR/backend"
-        if command -v setsid >/dev/null 2>&1; then
-            exec setsid "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" \
-                </dev/null 2>>"$SCRIPT_DIR/logs/backend.out" >/dev/null
-        else
-            exec nohup "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" \
-                </dev/null 2>>"$SCRIPT_DIR/logs/backend.out" >/dev/null
-        fi
-    ) &
-    BACKEND_PID=$!
-    echo "$BACKEND_PID" > "$SCRIPT_DIR/logs/backend.pid"
-
-    echo ""
-    wait_for_port "$BACKEND_PORT" "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
-        red "后端启动失败，查看日志: tail -f logs/quantlab.log logs/backend.out"
-        exit 1
-    }
-    echo ""
-
-    # 启动前端（Vite 输出收 frontend.out）
-    blue "[2/2] 启动前端 (port $FRONTEND_PORT)..."
-    (
-        cd "$SCRIPT_DIR/frontend"
-        if command -v setsid >/dev/null 2>&1; then
-            exec setsid npm run dev -- --port "$FRONTEND_PORT" \
-                </dev/null >>"$SCRIPT_DIR/logs/frontend.out" 2>&1
-        else
-            exec nohup npm run dev -- --port "$FRONTEND_PORT" \
-                </dev/null >>"$SCRIPT_DIR/logs/frontend.out" 2>&1
-        fi
-    ) &
-    FRONTEND_PID=$!
-    echo "$FRONTEND_PID" > "$SCRIPT_DIR/logs/frontend.pid"
-
-    wait_for_port "$FRONTEND_PORT" "前端" 30 || {
-        red "前端启动失败，查看日志: tail -f logs/frontend.out"
-        exit 1
-    }
-
-    SILENT_OK=1
-
-    echo ""
-    green "========================================="
-    green "  服务已静默启动（可关闭本终端）"
-    green "========================================="
-    echo "  Backend:  http://localhost:$BACKEND_PORT"
-    echo "  API Docs: http://localhost:$BACKEND_PORT/docs"
-    echo "  Frontend: http://localhost:$FRONTEND_PORT"
-    echo "  PID:      后端 $BACKEND_PID / 前端 $FRONTEND_PID (logs/*.pid)"
-    echo "  停止:     ./start.sh stop"
-    echo "  Logs:     logs/quantlab.log logs/error.log logs/sync.log"
-    echo "            logs/backend.out(启动 stderr) logs/frontend.out(前端)"
-    green "========================================="
-    exit 0
 }
 
-# ============ 停止静默服务 ============
-stop_services() {
-    echo "正在停止 QuantLab 服务..."
-    local found=0
-    for pf in "$SCRIPT_DIR/logs/backend.pid" "$SCRIPT_DIR/logs/frontend.pid"; do
-        [ -f "$pf" ] || continue
-        local pid
-        pid="$(cat "$pf" 2>/dev/null || true)"
-        rm -f "$pf"
-        [ -n "$pid" ] || continue
-        if ps -p "$pid" >/dev/null 2>&1; then
-            found=1
-            kill_tree "$pid"
-            yellow "  已停止 PID $pid ($(basename "$pf"))"
-        else
-            yellow "  PID $pid 已不存在 ($(basename "$pf"))，清理记录"
+# 分离启动并取回真实 PID（结果写入 LAUNCH_PID）。
+# 注意：本机 shell 开了作业控制，后台进程本身即进程组长，此时 setsid 会先 fork 再设新会话，
+# 所以 `setsid ... &` 的 $! 只是随即退出的中间层，不能作为服务 PID（会导致 stop 找不到进程）。
+# 这里改由内层 shell 先写 PID 再 exec（exec 不换 PID），取到的就是真正的服务进程，
+# 同时也是新的会话/进程组长，便于事后按进程组整体终止。
+# 参数：<日志文件> <命令...>
+launch_detached() {
+    local log="$1"
+    shift
+    local pidfile pid="" i=0
+    mkdir -p "$(dirname "$log")"
+    pidfile=$(mktemp -t "${PROJECT_NAME// /-}.XXXXXX") || return 1
+    setsid nohup bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pidfile" "$@" > "$log" 2>&1 &
+    while [ "$i" -lt 25 ]; do
+        if [ -s "$pidfile" ]; then
+            pid=$(tr -d ' \r' < "$pidfile")
+            break
         fi
+        sleep 0.2
+        i=$((i + 1))
     done
+    rm -f "$pidfile"
+    [ -n "$pid" ] || return 1
+    LAUNCH_PID="$pid"
+    return 0
+}
 
-    local leftovers=""
-    for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
-        if [ -n "$(port_pid "$port")" ]; then
-            leftovers="$leftovers $port"
-        fi
+start_backend() {
+    echo "📦 Starting backend server..."
+    cd "$PROJECT_DIR/$BACKEND_DIR_NAME"
+    require_python
+    local -a cmd=("$PYTHON_BIN" -m uvicorn "$BACKEND_MODULE" --host 0.0.0.0 --port "$BACKEND_PORT")
+    if [ "$BACKEND_RELOAD" = "1" ]; then
+        cmd+=("--reload")
+    fi
+    if ! launch_detached "$BACKEND_LOG" "${cmd[@]}"; then
+        echo -e "${RED}Error: 后端启动失败（未取到进程 PID），请检查 ${BACKEND_LOG_REL}${NC}" >&2
+        exit 1
+    fi
+    echo "backend_pid=${LAUNCH_PID}" >> "$RUNTIME_FILE"
+    echo "   Backend started (PID: ${LAUNCH_PID})"
+}
+
+# 生产模式：先构建前端产物（失败则不启动任何服务），再起后端与前端
+ensure_prod_build() {
+    if [ -n "$PROD_BUILD_MARKER" ] && [ -f "$PROJECT_DIR/$PROD_BUILD_MARKER" ] && [ -z "${FORCE_BUILD:-}" ]; then
+        echo "   Skip build (existing $PROD_BUILD_MARKER found, set FORCE_BUILD=1 to rebuild)"
+        return 0
+    fi
+    cd "$PROJECT_DIR/$FRONTEND_DIR_NAME"
+    echo "🔨 Building frontend (production)..."
+    if ! "${PROD_BUILD_CMD[@]}"; then
+        echo -e "${RED}Error: 前端构建失败，已中止启动（未启动任何服务）${NC}" >&2
+        rm -f "$RUNTIME_FILE"
+        return 1
+    fi
+}
+
+# 前端命令模板里的 %P 替换为实际端口后执行
+run_frontend_cmd() {
+    local log="$1"
+    shift
+    local -a cmd=()
+    local arg
+    for arg in "$@"; do
+        cmd+=("${arg//%P/$FRONTEND_PORT}")
     done
-    if [ -n "$leftovers" ]; then
-        red "端口$leftovers 仍有进程占用（PID 文件可能丢失），可手动:"
-        echo "  lsof -ti :$BACKEND_PORT -ti :$FRONTEND_PORT | xargs kill"
+    if ! launch_detached "$log" "${cmd[@]}"; then
+        echo -e "${RED}Error: 前端启动失败（未取到进程 PID），请检查 ${FRONTEND_LOG_REL}${NC}" >&2
+        exit 1
+    fi
+    echo "frontend_pid=${LAUNCH_PID}" >> "$RUNTIME_FILE"
+    echo "   Frontend started (PID: ${LAUNCH_PID})"
+}
+
+start_frontend_dev() {
+    cd "$PROJECT_DIR/$FRONTEND_DIR_NAME"
+    if [ -n "$DEV_CLEAN_TARGET" ]; then
+        rm -rf "$PROJECT_DIR/$DEV_CLEAN_TARGET"
+    fi
+    echo ""
+    echo "📱 Starting frontend server (dev with HMR)..."
+    run_frontend_cmd "$FRONTEND_LOG" "${DEV_FRONTEND_CMD[@]}"
+}
+
+start_frontend_prod() {
+    cd "$PROJECT_DIR/$FRONTEND_DIR_NAME"
+    echo ""
+    echo "📱 Starting frontend server (production)..."
+    run_frontend_cmd "$FRONTEND_LOG" "${PROD_FRONTEND_CMD[@]}"
+}
+
+start_services() {
+    local mode="${1:-prod}"
+    local label="Production" color="$GREEN"
+    if [ "$mode" = "dev" ]; then
+        label="Development"; color="$YELLOW"
+    fi
+    echo -e "🚀 Starting ${PROJECT_NAME} (${color}${label}${NC} Mode)..."
+
+    load_ports
+    stop_stale_instance
+    resolve_ports "$mode"
+    echo "   Ports: backend=${BACKEND_PORT}, frontend=${FRONTEND_PORT}"
+
+    if [ "$mode" != "dev" ]; then
+        ensure_prod_build || exit 1
     fi
 
-    if [ "$found" = "1" ]; then
-        green "QuantLab 已停止"
+    start_backend
+
+    # 等后端健康后再启前端：避免前端先就绪、浏览器打开即吃到代理 500（socket hang up）
+    wait_for_http "http://localhost:${BACKEND_PORT}${HEALTH_PATH}" "Backend" "${BACKEND_LOG_REL}" 30 || true
+
+    if [ "$mode" = "dev" ]; then
+        start_frontend_dev
+        echo -e "${YELLOW}⚠️  DEV MODE: Hot reload enabled, not for production use${NC}"
     else
-        yellow "未找到运行中的 QuantLab 服务（无有效 PID 文件）"
+        start_frontend_prod
+    fi
+
+    print_urls "$label"
+    health_check
+}
+
+# ───────────────────────── 重启服务 ─────────────────────────
+# 默认沿用上次启动模式（.runtime_ports 中的 mode= 记录，缺省 prod）；
+# 也可显式指定：./start.sh restart dev | ./start.sh restart prod
+restart_services() {
+    local target="${1:-}"
+    if [ -z "$target" ]; then
+        target=$(grep -E '^mode=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+        target=${target:-prod}
+    fi
+    stop_services
+    echo ""
+    if [ "$target" = "dev" ]; then
+        start_services dev
+    else
+        start_services prod
     fi
 }
 
-# ============ 模式分发 ============
-case "$MODE" in
-    silent)
-        start_silent
+# ───────────────────────── 端口处理 ─────────────────────────
+# ───────── 从 PORT_ENV_FILE 读取端口配置（配置缺失时用默认值） ─────────
+load_ports() {
+    BACKEND_PORT=""
+    FRONTEND_PORT=""
+    if [ -n "$PORT_ENV_FILE" ] && [ -f "$PROJECT_DIR/$PORT_ENV_FILE" ]; then
+        local env_file="$PROJECT_DIR/$PORT_ENV_FILE"
+        BACKEND_PORT=$(grep -E "^${PORT_ENV_KEY_BACKEND}=" "$env_file" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+        FRONTEND_PORT=$(grep -E "^${PORT_ENV_KEY_FRONTEND}=" "$env_file" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    fi
+    BACKEND_PORT=${BACKEND_PORT:-$PORT_DEFAULT_BACKEND}
+    FRONTEND_PORT=${FRONTEND_PORT:-$PORT_DEFAULT_FRONTEND}
+}
+
+# ───────── 仅 stop/status 使用：采用上次实际运行端口（仅当该端口确有进程监听时才采信） ─────────
+load_runtime_ports() {
+    [ -f "$RUNTIME_FILE" ] || return 0
+    local rb rf
+    rb=$(grep -E '^backend_port=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    rf=$(grep -E '^frontend_port=' "$RUNTIME_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' \r')
+    if [ -n "$rb" ] && port_in_use "$rb"; then
+        BACKEND_PORT=$rb
+    fi
+    if [ -n "$rf" ] && port_in_use "$rf"; then
+        FRONTEND_PORT=$rf
+    fi
+}
+
+# 判定端口当前是否有进程监听
+port_in_use() {
+    lsof -t -i:"$1" >/dev/null 2>&1
+}
+
+# 交互式处理端口冲突：让用户决定 kill 占用进程、（允许时）顺延新端口或退出
+# 返回值：0 = 端口已释放可继续使用；1 = 放弃启动；2 = 顺延下一个端口（仅 ALLOW_PORT_SHIFT=1）
+# 可用 PORT_CONFLICT=kill|shift 预置选择
+handle_port_conflict() {
+    local port="$1" name="$2"
+    local choice pid_list pid_display
+    local conflict_mode="${PORT_CONFLICT:-ask}"
+
+    # 每行一个 PID（不转成空格分隔，避免 zsh/bash 对未加引号变量分词行为不一致）
+    pid_list=$(lsof -t -i:"$port" 2>/dev/null)
+    pid_display=$(echo "$pid_list" | tr '\n' ' ')
+
+    echo "" >&2
+    echo -e "${YELLOW}⚠️  ${name} 端口 ${port} 已被占用${NC}" >&2
+    lsof -i:"$port" 2>/dev/null | tail -n +2 | sed 's/^/     /' >&2
+    # 占用者若由 systemd 托管（Restart=always），kill 只会被立刻拉回，故直接放弃并给出该停的 unit
+    local oc_pid oc_unit oc_units=""
+    for oc_pid in $pid_list; do
+        oc_unit=$(systemd_unit_of "$oc_pid")
+        if [ -n "$oc_unit" ]; then
+            case " $oc_units " in
+                *" $oc_unit "*) ;;
+                *) oc_units="$oc_units $oc_unit" ;;
+            esac
+        fi
+    done
+    if [ -n "$oc_units" ]; then
+        echo "" >&2
+        echo -e "${RED}   端口 ${port} 由 systemd 常驻服务占用，start.sh 不会终止它。${NC}" >&2
+        echo -e "${RED}   需要手动调试请先释放端口：${NC}" >&2
+        for oc_unit in $oc_units; do
+            echo -e "${RED}     sudo systemctl stop ${oc_unit}${NC}" >&2
+        done
+        echo -e "${YELLOW}   （长期改由 start.sh 管理：sudo systemctl disable --now <unit>；"
+        echo -e "     调试完恢复常驻：sudo systemctl start <unit>）${NC}" >&2
+        return 1
+    fi
+
+    if [ "$ALLOW_PORT_SHIFT" = "1" ]; then
+        case "$conflict_mode" in
+            kill)
+                choice="k" ;;
+            shift|new)
+                choice="n" ;;
+            *)
+                if [ ! -t 0 ]; then
+                    echo -e "${YELLOW}   非交互环境（无终端），默认顺延新端口；可用 PORT_CONFLICT=kill|shift 预设行为${NC}" >&2
+                    choice="n"
+                else
+                    while true; do
+                        echo "" >&2
+                        echo "   请选择处理方式：" >&2
+                        echo "     [k] kill 占用进程，继续使用该端口" >&2
+                        echo "     [n] 顺延使用新端口（+1 递增）" >&2
+                        echo "     [q] 退出启动" >&2
+                        read -r -p "   请输入 [k/n/q]: " choice
+                        case "$choice" in
+                            [kKnNqQ]) break ;;
+                            *) echo -e "${RED}   无效输入，请输入 k / n / q${NC}" >&2 ;;
+                        esac
+                    done
+                    choice=$(echo "$choice" | tr 'A-Z' 'a-z')
+                fi
+                ;;
+        esac
+    else
+        # 固定端口：顺延会与前端写死的端口/代理配置失配，故不提供顺延
+        case "$conflict_mode" in
+            kill)
+                choice="k" ;;
+            *)
+                if [ ! -t 0 ]; then
+                    echo -e "${RED}   本项目的端口为固定端口，非交互环境不会自动终止占用进程；${NC}" >&2
+                    echo -e "${RED}   请先释放端口 ${port}，或设 PORT_CONFLICT=kill 明确授权终止${NC}" >&2
+                    return 1
+                else
+                    while true; do
+                        echo "" >&2
+                        echo "   请选择处理方式：" >&2
+                        echo "     [k] kill 占用进程，继续使用该端口" >&2
+                        echo "     [q] 退出启动（端口固定，不支持顺延）" >&2
+                        read -r -p "   请输入 [k/q]: " choice
+                        case "$choice" in
+                            [kKqQ]) break ;;
+                            *) echo -e "${RED}   无效输入，请输入 k / q${NC}" >&2 ;;
+                        esac
+                    done
+                    choice=$(echo "$choice" | tr 'A-Z' 'a-z')
+                fi
+                ;;
+        esac
+    fi
+
+    case "$choice" in
+        k)
+            echo -e "   Killing process(es) on port $port: ${pid_display:-无}" >&2
+            # 先优雅终止，未成功再强制
+            for pid in $pid_list; do
+                kill "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            for pid in $pid_list; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            done
+            if port_in_use "$port"; then
+                echo -e "${RED}Error: ${name} 端口 ${port} 的占用进程无法终止${NC}" >&2
+                return 1
+            fi
+            echo -e "${GREEN}   端口 ${port} 已释放${NC}" >&2
+            return 0
+            ;;
+        n)
+            return 2
+            ;;
+        q)
+            echo -e "${RED}Aborted by user${NC}" >&2
+            return 1
+            ;;
+    esac
+}
+
+# 解析可用端口：基础端口可用则直接使用；被占用时按 handle_port_conflict 的结果处理
+# （ALLOW_PORT_SHIFT=0 时不会 +1，顺延分支不可达）
+next_free_port() {
+    local base="$1" name="$2"
+    local port="$base"
+    local n="$PORT_MAX_TRIES"
+    local i=0
+    while port_in_use "$port"; do
+        i=$((i + 1))
+        if [ "$i" -gt "$n" ]; then
+            echo -e "${RED}Error: ${name} 端口冲突处理超过 ${n} 次仍不可用${NC}" >&2
+            return 1
+        fi
+        if [ "$port" -eq "$base" ]; then
+            handle_port_conflict "$port" "$name"
+            case $? in
+                1) return 1 ;;
+                2) port=$((port + 1)) ;;   # 顺延（仅 ALLOW_PORT_SHIFT=1 时可能返回）
+            esac
+            continue
+        fi
+        if [ "$ALLOW_PORT_SHIFT" != "1" ]; then
+            echo -e "${RED}Error: ${name} 端口固定为 ${base}，不可顺延${NC}" >&2
+            return 1
+        fi
+        port=$((port + 1))
+    done
+    if [ "$port" -ne "$base" ]; then
+        echo -e "${YELLOW}⚠️  ${name} 端口 ${base} 已被占用，顺延使用空闲端口 ${port}${NC}" >&2
+    fi
+    echo "$port"
+    return 0
+}
+
+# 仅用于启动流程：按顺序解析实际可用端口，并导出前端运行时所需的后端地址
+# mode 参数（dev|prod）写入 .runtime_ports，供 restart 沿用上次模式
+resolve_ports() {
+    local mode="${1:-prod}"
+    BACKEND_PORT=$(next_free_port "$BACKEND_PORT" "backend") || exit 1
+    FRONTEND_PORT=$(next_free_port "$FRONTEND_PORT" "frontend") || exit 1
+    if [ "$EXPORT_BACKEND_API_URL" = "1" ]; then
+        # 前端（Next rewrites）在运行期据此代理 /api，仅需注入后端实际地址
+        export BACKEND_API_URL="http://localhost:${BACKEND_PORT}"
+    fi
+    # 记录实际端口与模式，供本次启动后的 stop / status / restart 使用
+    cat > "$RUNTIME_FILE" <<EOF
+mode=${mode}
+backend_port=${BACKEND_PORT}
+frontend_port=${FRONTEND_PORT}
+EOF
+}
+
+print_urls() {
+    MODE=$1
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "✅ ${PROJECT_NAME} ${MODE} is running!"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "📱 Frontend:  http://localhost:${FRONTEND_PORT}"
+    echo "🔧 Backend:   http://localhost:${BACKEND_PORT}"
+    echo "📚 API Docs:  http://localhost:${BACKEND_PORT}/docs"
+    echo ""
+    echo "To stop:  ./start.sh stop"
+    echo "Status:   ./start.sh status"
+    echo ""
+}
+
+# ───────── 就绪等待（轮询重试，替代固定 sleep） ─────────
+# dev 首次编译、后端 reload 都可能超过固定等待时长；轮询直至就绪或超时。
+# 返回 0 = 就绪；1 = 超时（调用方用 || true 兜底，不影响 set -e）
+wait_for_http() {
+    local url="$1" name="$2" log_hint="$3" tries="${4:-30}"
+    local i=0
+    while [ "$i" -lt "$tries" ]; do
+        if curl -sf --max-time 5 -o /dev/null "$url" 2>/dev/null; then
+            echo -e "${GREEN}✅ ${name} 就绪 (${url})${NC}"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    echo -e "${RED}⚠️  ${name} 在 ${tries}s 内未就绪（${url}），请检查 ${log_hint}${NC}"
+    return 1
+}
+
+# 健康检查：后端 /health + 前端首页，均带重试等待
+health_check() {
+    wait_for_http "http://localhost:${BACKEND_PORT}${HEALTH_PATH}" "Backend" "${BACKEND_LOG_REL}" 30 || true
+    wait_for_http "http://localhost:${FRONTEND_PORT}" "Frontend" "${FRONTEND_LOG_REL}" 60 || true
+}
+
+# ───────────────────────── 命令分发 ─────────────────────────
+COMMAND="${1:-start}"
+
+case "$COMMAND" in
+    start)
+        start_services prod
         ;;
     dev)
-    echo "========================================="
-    echo "  QuantLab - 量化策略回测研究平台"
-    echo "========================================="
-    blue "Python: $PYTHON_BIN"
-    echo ""
-
-    # 端口占用检查：冲突时询问用户是否杀掉重启
-    if [ -n "$(port_pid "$BACKEND_PORT")" ]; then
-        if ! ask_kill_port "$BACKEND_PORT" "后端"; then
-            red "已取消启动，请先释放端口 $BACKEND_PORT"
-            exit 1
-        fi
-    fi
-    if [ -n "$(port_pid "$FRONTEND_PORT")" ]; then
-        if ! ask_kill_port "$FRONTEND_PORT" "前端"; then
-            red "已取消启动，请先释放端口 $FRONTEND_PORT"
-            exit 1
-        fi
-    fi
-
-    # 后端依赖检查
-    if ! "$PYTHON_BIN" -c "import uvicorn, fastapi" >/dev/null 2>&1; then
-        red "未找到 uvicorn/fastapi，请安装依赖:"
-        echo "  $PYTHON_BIN -m pip install -r requirements.txt"
-        exit 1
-    fi
-    # 关键第三方库检查（避免运行时才发现缺失）
-    if ! "$PYTHON_BIN" -c "import fastapi_users_db_sqlalchemy, empyrical, alphalens, tenacity, structlog, prometheus_fastapi_instrumentator, cachetools, zxcvbn" >/dev/null 2>&1; then
-        red "后端依赖缺失，请先安装:"
-        echo "  $PYTHON_BIN -m pip install -r requirements.txt"
-        exit 1
-    fi
-
-    # 前端依赖检查
-    if [ ! -d "$SCRIPT_DIR/frontend/node_modules" ]; then
-        yellow "前端依赖未安装，正在安装..."
-        (cd "$SCRIPT_DIR/frontend" && npm install) || { red "npm install 失败"; exit 1; }
-    fi
-
-    # 启动后端（结构化日志由应用写入 logs/quantlab.log + logs/error.log，
-    # console handler 默认同步输出到终端；不再 tee 到 backend.log，
-    # 避免同一内容写三份：终端 + quantlab.log + backend.log）
-    # 注：长同步任务（baostock 全量回填/EOD/repair）已迁移到独立 worker 子进程
-    # （.venv/bin/python -m app.services.data.sync_worker，start_new_session 脱离本进程组），
-    # 因此 --reload 触发重启时会立即退出，不会像以前那样"等待后台任务完成"而卡死。
-    # 所有 worker 统一写 logs/sync.log（JSON，worker_kind 字段区分任务类型）。
-    blue "[1/2] 启动后端 (port $BACKEND_PORT)..."
-    mkdir -p "$SCRIPT_DIR/logs"
-    set -m
-    (
-        cd "$SCRIPT_DIR/backend"
-        "$PYTHON_BIN" -u -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT"
-    ) &
-    BACKEND_PID=$!
-    set +m
-
-    # 等后端健康检查通过后，再启动前端（避免前端启动时后端尚未就绪）
-    echo ""
-    wait_for_port "$BACKEND_PORT"  "后端" 60 "http://localhost:$BACKEND_PORT/health" || {
-        red "后端启动失败，查看日志: tail -f logs/quantlab.log"
-        exit 1
-    }
-    echo ""
-
-    # 启动前端（Vite 输出直接到终端；前端页面错误可在浏览器 DevTools 查看）
-    blue "[2/2] 启动前端 (port $FRONTEND_PORT)..."
-    set -m
-    (
-        cd "$SCRIPT_DIR/frontend"
-        npm run dev -- --port "$FRONTEND_PORT"
-    ) &
-    FRONTEND_PID=$!
-    set +m
-
-    # 前端只检查端口
-    wait_for_port "$FRONTEND_PORT" "前端" 30 || {
-        red "前端启动失败，查看上方终端输出"
-        exit 1
-    }
-    echo ""
-
-    green "========================================="
-    green "  所有服务已启动"
-    green "========================================="
-    echo "  Backend:  http://localhost:$BACKEND_PORT"
-    echo "  API Docs: http://localhost:$BACKEND_PORT/docs"
-    echo "  Frontend: http://localhost:$FRONTEND_PORT"
-    echo "  Logs:     logs/quantlab.log  logs/error.log  logs/sync.log  (前端日志页可视化查看)"
-    green "========================================="
-    yellow "按 Ctrl+C 停止所有服务"
-    echo ""
-
-    wait
+        start_services dev
         ;;
     stop)
         stop_services
         ;;
+    restart)
+        restart_services "${2:-}"
+        ;;
+    status)
+        status_services
+        ;;
+    help|-h|--help)
+        usage
+        ;;
     *)
-        echo "Usage: ./start.sh [silent|dev|stop]"
-        echo "  silent - 静默启动（默认）：后台分离运行，脚本退出后终端可关闭；停止用 ./start.sh stop"
-        echo "  dev    - 本地开发模式：前台运行，Ctrl+C 停止（终端不可关闭）"
-        echo "  stop   - 停止静默模式启动的服务"
+        echo -e "${RED}Unknown command: $COMMAND${NC}"
+        echo ""
+        usage
         exit 1
         ;;
 esac
