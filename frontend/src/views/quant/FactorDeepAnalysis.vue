@@ -33,65 +33,83 @@
       </div>
     </SectionCard>
 
-    <el-empty v-if="!factorId" description="缺少 factor_id 参数，请从因子库进入" :image-size="120" />
+    <EmptyState v-if="!factorId" description="缺少 factor_id 参数，请从因子库进入" size="lg" />
 
     <template v-else>
       <!-- 数值卡片行 -->
       <div v-loading="loading" class="stat-row">
-        <el-card v-for="card in statCards" :key="card.key" class="stat-card" shadow="hover">
-          <div class="stat-card__label">{{ card.label }}</div>
-          <div class="stat-card__value" :class="card.cls">
-            {{ card.value }}<span v-if="card.suffix" class="stat-card__suffix">{{ card.suffix }}</span>
-          </div>
-          <div v-if="card.note" class="stat-card__note">{{ card.note }}</div>
-        </el-card>
+        <StatCard
+          v-for="card in statCards"
+          :key="card.key"
+          :label="card.label"
+          :value="card.value"
+          :unit="card.unit"
+          :tone="card.tone"
+        >
+          {{ card.note }}
+        </StatCard>
       </div>
 
       <!-- IC 时序 & IC 分布 -->
       <el-row :gutter="20">
         <el-col :span="12">
-          <SectionCard title="IC 时序" subtitle="日 IC（浅色）与 60 日均线（深色），虚线为 0 轴">
-            <div class="chart-area">
-              <el-empty v-if="!hasIcTs" description="暂无数据" :image-size="80" />
-              <v-chart v-else class="chart" :option="icTimeseriesOption" autoresize />
-            </div>
-          </SectionCard>
+          <ChartCard
+            title="IC 时序"
+            subtitle="日 IC（浅色）与 60 日均线（深色），虚线为 0 轴"
+            :loading="loading"
+            :has-data="hasIcTs"
+            :height="360"
+          >
+            <v-chart class="chart" :option="icTimeseriesOption" autoresize />
+          </ChartCard>
         </el-col>
         <el-col :span="12">
-          <SectionCard title="IC 分布" subtitle="直方图，虚线为 IC 均值">
-            <div class="chart-area">
-              <el-empty v-if="!hasIcDist" description="暂无数据" :image-size="80" />
-              <v-chart v-else class="chart" :option="icDistOption" autoresize />
-            </div>
-          </SectionCard>
+          <ChartCard
+            title="IC 分布"
+            subtitle="直方图，虚线为 IC 均值"
+            :loading="loading"
+            :has-data="hasIcDist"
+            :height="360"
+          >
+            <v-chart class="chart" :option="icDistOption" autoresize />
+          </ChartCard>
         </el-col>
       </el-row>
 
       <!-- 分层累计收益 -->
-      <SectionCard title="分层累计收益" subtitle="Q1（红）→ Q5（绿）分组净值与多空曲线（黑色粗线）">
-        <div class="chart-area chart-area--tall">
-          <el-empty v-if="!hasQuantile" description="暂无数据" :image-size="80" />
-          <v-chart v-else class="chart" :option="quantileOption" autoresize />
-        </div>
-      </SectionCard>
+      <ChartCard
+        title="分层累计收益"
+        subtitle="Q1（红）→ Q5（绿）分组净值与多空曲线（黑色粗线）"
+        :loading="loading"
+        :has-data="hasQuantile"
+        :height="440"
+      >
+        <v-chart class="chart" :option="quantileOption" autoresize />
+      </ChartCard>
 
       <!-- 换手率 & IC 衰减 -->
       <el-row :gutter="20">
         <el-col :span="12">
-          <SectionCard title="换手率曲线" subtitle="虚线为平均换手率">
-            <div class="chart-area">
-              <el-empty v-if="!hasTurnover" description="暂无数据" :image-size="80" />
-              <v-chart v-else class="chart" :option="turnoverOption" autoresize />
-            </div>
-          </SectionCard>
+          <ChartCard
+            title="换手率曲线"
+            subtitle="虚线为平均换手率"
+            :loading="loading"
+            :has-data="hasTurnover"
+            :height="360"
+          >
+            <v-chart class="chart" :option="turnoverOption" autoresize />
+          </ChartCard>
         </el-col>
         <el-col :span="12">
-          <SectionCard title="IC 衰减曲线" subtitle="阴影区为 IC > 0.03 的有效区间">
-            <div class="chart-area">
-              <el-empty v-if="!hasDecay" description="暂无数据" :image-size="80" />
-              <v-chart v-else class="chart" :option="decayOption" autoresize />
-            </div>
-          </SectionCard>
+          <ChartCard
+            title="IC 衰减曲线"
+            subtitle="阴影区为 IC > 0.03 的有效区间"
+            :loading="loading"
+            :has-data="hasDecay"
+            :height="360"
+          >
+            <v-chart class="chart" :option="decayOption" autoresize />
+          </ChartCard>
         </el-col>
       </el-row>
     </template>
@@ -107,6 +125,9 @@ import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import StatCard from '@/components/common/StatCard.vue'
+import ChartCard from '@/components/common/ChartCard.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { deepAnalysis, getQuantDataStatus } from '@/api/quant'
 import { fmt as fmtNum, numClass } from '@/utils/format'
 import { chartTheme, quantileGradient } from '@/utils/chartTheme'
@@ -233,6 +254,9 @@ function binCenter(b) {
 }
 
 // === 数值卡片 ===
+// A股口径：正=红（--chart-up）、负=绿（--chart-down）；映射到 StatCard tone 保持同色
+const toneOf = (cls) => (cls === 'num-up' ? 'danger' : cls === 'num-down' ? 'success' : 'default')
+
 const statCards = computed(() => {
   const s = summary.value
   const hasT = s.t_stat != null && s.t_stat !== '' && !Number.isNaN(Number(s.t_stat))
@@ -243,34 +267,34 @@ const statCards = computed(() => {
   const hasPermP = s.perm_pvalue != null && s.perm_pvalue !== '' && !Number.isNaN(Number(s.perm_pvalue))
   const permP = hasPermP ? Number(s.perm_pvalue) : null
   return [
-    { key: 'rank_ic_mean', label: 'RankIC 均值', value: fmtNum(s.rank_ic_mean ?? s.ic_mean, 4), cls: numClass(s.rank_ic_mean ?? s.ic_mean) },
-    { key: 'rank_icir', label: 'RankICIR', value: fmtNum(s.rank_icir ?? s.icir, 3), cls: numClass(s.rank_icir ?? s.icir) },
+    { key: 'rank_ic_mean', label: 'RankIC 均值', value: fmtNum(s.rank_ic_mean ?? s.ic_mean, 4), tone: toneOf(numClass(s.rank_ic_mean ?? s.ic_mean)) },
+    { key: 'rank_icir', label: 'RankICIR', value: fmtNum(s.rank_icir ?? s.icir, 3), tone: toneOf(numClass(s.rank_icir ?? s.icir)) },
     {
       key: 't_stat',
       label: 't-stat',
       value: fmtNum(s.t_stat, 3),
-      cls: tSig === null ? '' : tSig ? 'is-positive' : 'is-negative',
+      tone: tSig === null ? 'default' : tSig ? 'success' : 'danger',
       note: tSig === null ? '' : tSig ? '显著' : '不显著',
     },
     {
       key: 'p_value',
       label: 'p-value',
       value: fmtNum(s.p_value, 4) + (hasP && pValue < 0.05 ? ' ★' : ''),
-      cls: hasP && pValue < 0.05 ? 'is-positive' : '',
+      tone: hasP && pValue < 0.05 ? 'success' : 'default',
     },
     {
       key: 'perm_pvalue',
       label: '置换 p-value',
       value: hasPermP ? fmtNum(s.perm_pvalue, 4) + (permP < 0.05 ? ' ★' : '') : '--',
-      cls: hasPermP && permP < 0.05 ? 'is-positive' : '',
+      tone: hasPermP && permP < 0.05 ? 'success' : 'default',
       note: s.perm_n ? `${s.perm_n} 次截面置换` : '',
     },
-    { key: 'annual_turnover', label: '年化换手', value: fmtNum(s.annual_turnover, 2, '%'), cls: '' },
+    { key: 'annual_turnover', label: '年化换手', value: fmtNum(s.annual_turnover, 2), tone: 'default' },
     {
       key: 'long_short_annual',
       label: '多空年化',
-      value: fmtNum(s.long_short_annual_return ?? s.long_short_annual, 2, '%'),
-      cls: numClass(s.long_short_annual_return ?? s.long_short_annual),
+      value: fmtNum(s.long_short_annual_return ?? s.long_short_annual, 2),
+      tone: toneOf(numClass(s.long_short_annual_return ?? s.long_short_annual)),
     },
   ]
 })
@@ -578,47 +602,6 @@ onMounted(() => {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-md);
   margin-bottom: var(--space-md);
-}
-
-.stat-card {
-  :deep(.el-card__body) {
-    padding: var(--space-md) var(--space-lg);
-  }
-
-  &__label {
-    font-size: var(--font-size-sm);
-    color: var(--text-tertiary);
-    margin-bottom: 6px;
-  }
-
-  &__value {
-    font-size: var(--font-size-xl);
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: var(--text-primary);
-    line-height: 1.2;
-  }
-
-  &__suffix {
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    margin-left: 4px;
-  }
-
-  &__note {
-    font-size: var(--font-size-xs);
-    margin-top: 4px;
-    color: var(--text-tertiary);
-  }
-}
-
-.chart-area {
-  height: 360px;
-  width: 100%;
-
-  &--tall {
-    height: 440px;
-  }
 }
 
 .chart {

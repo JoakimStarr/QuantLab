@@ -1,33 +1,28 @@
 <template>
   <PageContainer>
-    <!-- 页头：因子名 + 状态 + 操作（沿用回测详情样式） -->
-    <div class="jq-head">
-      <div class="jq-head__top">
-        <span class="jq-head__back" @click="goList">← 返回因子库</span>
-        <span class="jq-head__name">{{ factor?.name || factorName || '因子详情' }}</span>
-        <span v-if="factor" class="jq-head__id">#{{ factor.id }}</span>
-        <div class="jq-head__tags" v-if="factor">
-          <span class="badge" :class="`badge--${categoryBadge(factor.category)}`">{{ categoryLabel(factor.category) }}</span>
-          <span class="badge" :class="factor.status === 'active' ? 'badge--success' : 'badge--muted'">
-            {{ factor.status === 'active' ? '启用' : '禁用' }}
-          </span>
-        </div>
-        <div class="jq-head__actions">
-          <el-button size="small" @click="scrollTo('sec-ai')">AI 解读</el-button>
-          <el-button size="small" :loading="quantileLoading" @click="runQuantile">分层评价</el-button>
-          <el-button size="small" :loading="evaluating" @click="onEvaluate">补算指标</el-button>
-          <el-button size="small" type="danger" plain :disabled="!factor || factor.status !== 'active'" @click="onDisable">
-            禁用
-          </el-button>
-        </div>
-      </div>
-      <div class="jq-head__meta" v-if="factor">
-        <span class="mono jq-head__expr" :title="factor.expression">{{ factor.expression }}</span>
-        <span v-if="factor.description" class="jq-head__desc">{{ factor.description }}</span>
-        <span>评价区间：<b>{{ factor.eval_start || '--' }} ~ {{ factor.eval_end || '--' }}</b></span>
-        <span v-if="factor.evaluated_at">评价时间：<b>{{ formatTime(factor.evaluated_at) }}</b></span>
-        <span v-if="factor.source_task_id">来源任务：<b>#{{ factor.source_task_id }}</b></span>
-      </div>
+    <!-- 页头：因子名 + 状态 + 操作 -->
+    <PageHeader :title="factor?.name || factorName || '因子详情'">
+      <template #actions>
+        <el-button size="small" text @click="goList">← 返回因子库</el-button>
+        <el-button size="small" @click="scrollTo('sec-ai')">AI 解读</el-button>
+        <el-button size="small" :loading="quantileLoading" @click="runQuantile">分层评价</el-button>
+        <el-button size="small" :loading="evaluating" @click="onEvaluate">补算指标</el-button>
+        <el-button size="small" type="danger" plain :disabled="!factor || factor.status !== 'active'" @click="onDisable">
+          禁用
+        </el-button>
+      </template>
+    </PageHeader>
+    <div v-if="factor" class="detail-meta">
+      <span class="badge" :class="`badge--${categoryBadge(factor.category)}`">{{ categoryLabel(factor.category) }}</span>
+      <span class="badge" :class="factor.status === 'active' ? 'badge--success' : 'badge--muted'">
+        {{ factor.status === 'active' ? '启用' : '禁用' }}
+      </span>
+      <span class="detail-meta__id">#{{ factor.id }}</span>
+      <span class="mono detail-meta__expr" :title="factor.expression">{{ factor.expression }}</span>
+      <span v-if="factor.description" class="detail-meta__desc">{{ factor.description }}</span>
+      <span>评价区间：<b>{{ factor.eval_start || '--' }} ~ {{ factor.eval_end || '--' }}</b></span>
+      <span v-if="factor.evaluated_at">评价时间：<b>{{ formatTime(factor.evaluated_at) }}</b></span>
+      <span v-if="factor.source_task_id">来源任务：<b>#{{ factor.source_task_id }}</b></span>
     </div>
 
     <div v-loading="loading" class="jq-body">
@@ -46,8 +41,7 @@
         <!-- 主区 -->
         <div class="jq-main">
           <!-- 指标总览 -->
-          <section id="sec-overview" class="jq-card">
-            <h4 class="jq-card__title">指标总览</h4>
+          <SectionCard id="sec-overview" class="detail-card" title="指标总览">
             <p v-if="!isEvaluated" class="jq-note">该因子尚未评价，点击页头「补算指标」或用列表页补算后查看。</p>
             <div class="jq-grid">
               <div v-for="m in metricCells" :key="m.label" class="jq-grid__item">
@@ -55,12 +49,11 @@
                 <b class="jq-grid__value" :class="m.cls">{{ m.value }}</b>
               </div>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 分层收益 -->
-          <section id="sec-quantile" class="jq-card">
-            <div class="jq-card__bar">
-              <h4 class="jq-card__title">分层收益</h4>
+          <SectionCard id="sec-quantile" class="detail-card" title="分层收益">
+            <template #extra>
               <div class="jq-zoom">
                 <span>分组：</span>
                 <span
@@ -71,7 +64,7 @@
                   @click="changeQuantileGroups(n)"
                   >{{ n }}</span>
               </div>
-            </div>
+            </template>
             <p v-if="!quantileResult && !quantileLoading" class="jq-note">点击页头「分层评价」运行分层收益计算。</p>
             <div v-loading="quantileLoading" class="jq-chart-box">
               <template v-if="quantileResult">
@@ -89,14 +82,13 @@
                 </div>
                 <VChart :option="quantileOption" autoresize class="jq-chart" />
               </template>
-              <el-empty v-else-if="!quantileLoading" description="暂无分层收益数据" :image-size="72" />
+              <EmptyState v-else-if="!quantileLoading" description="暂无分层收益数据" size="sm" />
             </div>
-          </section>
+          </SectionCard>
 
           <!-- IC 分析 -->
-          <section id="sec-ic" class="jq-card">
-            <div class="jq-card__bar">
-              <h4 class="jq-card__title">IC 分析</h4>
+          <SectionCard id="sec-ic" class="detail-card" title="IC 分析">
+            <template #extra>
               <div class="jq-zoom">
                 <span>horizon：</span>
                 <span
@@ -107,55 +99,50 @@
                   @click="changeHorizon(h)"
                   >{{ h }}</span>
               </div>
-              <span class="jq-switch">
-                <el-button size="small" :loading="deepLoading" @click="runDeepAnalysis">刷新分析</el-button>
-              </span>
-            </div>
+              <el-button size="small" :loading="deepLoading" @click="runDeepAnalysis">刷新分析</el-button>
+            </template>
             <div v-loading="deepLoading" class="jq-chart-pair">
               <div class="jq-chart-box">
                 <p class="jq-note">IC 时序：日 IC（浅色）与 60 日均线（深色），虚线为 0 轴</p>
-                <el-empty v-if="!hasIcTs && !deepLoading" description="暂无 IC 时序" :image-size="64" />
+                <EmptyState v-if="!hasIcTs && !deepLoading" description="暂无 IC 时序" size="sm" />
                 <VChart v-else :option="icTimeseriesOption" autoresize class="jq-chart jq-chart--sub" />
               </div>
               <div class="jq-chart-box">
                 <p class="jq-note">IC 分布：直方图，虚线为 IC 均值</p>
-                <el-empty v-if="!hasIcDist && !deepLoading" description="暂无 IC 分布" :image-size="64" />
+                <EmptyState v-if="!hasIcDist && !deepLoading" description="暂无 IC 分布" size="sm" />
                 <VChart v-else :option="icDistOption" autoresize class="jq-chart jq-chart--sub" />
               </div>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 分层净值 -->
-          <section id="sec-hold" class="jq-card">
-            <h4 class="jq-card__title">分层净值</h4>
+          <SectionCard id="sec-hold" class="detail-card" title="分层净值">
             <p class="jq-note">Q1（红）→ Q{{ quantileGroups }}（绿）分组净值与多空曲线（深色粗线）</p>
             <div v-loading="deepLoading" class="jq-chart-box">
-              <el-empty v-if="!hasQuantileNav && !deepLoading" description="暂无分层净值数据" :image-size="72" />
+              <EmptyState v-if="!hasQuantileNav && !deepLoading" description="暂无分层净值数据" size="sm" />
               <VChart v-else :option="quantileNavOption" autoresize class="jq-chart" />
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 换手率与 IC 衰减 -->
-          <section id="sec-turnover" class="jq-card">
-            <h4 class="jq-card__title">换手率与 IC 衰减</h4>
+          <SectionCard id="sec-turnover" class="detail-card" title="换手率与 IC 衰减">
             <div v-loading="deepLoading" class="jq-chart-pair">
               <div class="jq-chart-box">
                 <p class="jq-note">换手率曲线，虚线为平均换手率</p>
-                <el-empty v-if="!hasTurnover && !deepLoading" description="暂无换手率数据" :image-size="64" />
+                <EmptyState v-if="!hasTurnover && !deepLoading" description="暂无换手率数据" size="sm" />
                 <VChart v-else :option="turnoverOption" autoresize class="jq-chart jq-chart--sub" />
               </div>
               <div class="jq-chart-box">
                 <p class="jq-note">IC 衰减曲线，阴影区为 IC &gt; 0.03 的有效区间</p>
-                <el-empty v-if="!hasDecay && !deepLoading" description="暂无 IC 衰减数据" :image-size="64" />
+                <EmptyState v-if="!hasDecay && !deepLoading" description="暂无 IC 衰减数据" size="sm" />
                 <VChart v-else :option="decayOption" autoresize class="jq-chart jq-chart--sub" />
               </div>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 中性化 -->
-          <section id="sec-neutralize" class="jq-card">
-            <div class="jq-card__bar">
-              <h4 class="jq-card__title">中性化</h4>
+          <SectionCard id="sec-neutralize" class="detail-card" title="中性化">
+            <template #extra>
               <div class="jq-zoom">
                 <span>方法：</span>
                 <el-radio-group v-model="neutralizeMethod" size="small">
@@ -164,10 +151,8 @@
                   <el-radio-button value="both">两者</el-radio-button>
                 </el-radio-group>
               </div>
-              <span class="jq-switch">
-                <el-button size="small" :loading="neutralizeLoading" @click="fetchNeutralize">运行对比</el-button>
-              </span>
-            </div>
+              <el-button size="small" :loading="neutralizeLoading" @click="fetchNeutralize">运行对比</el-button>
+            </template>
             <p class="jq-note">对比中性化前后的 IC / RankIC / ICIR / IR。</p>
             <div v-loading="neutralizeLoading" style="min-height: 120px">
               <el-table v-if="neutralizeResult" :data="neutralizeTableData" border size="small" style="width: 100%">
@@ -176,32 +161,29 @@
                 <el-table-column prop="after" label="中性化后" align="right" />
                 <el-table-column prop="delta" label="变化" align="right" />
               </el-table>
-              <el-empty v-else-if="!neutralizeLoading" description="点击「运行对比」查看中性化效果" :image-size="64" />
+              <EmptyState v-else-if="!neutralizeLoading" description="点击「运行对比」查看中性化效果" size="sm" />
             </div>
-          </section>
+          </SectionCard>
 
           <!-- AI 解读 -->
-          <section id="sec-ai" class="jq-card">
-            <div class="jq-card__bar">
-              <h4 class="jq-card__title">AI 解读</h4>
-              <span class="jq-switch">
-                <el-button
-                  v-if="aiDetail?.explanation?.generated_at"
-                  link
-                  type="primary"
-                  size="small"
-                  :loading="aiGenLoading"
-                  @click="onRegenerateAiExplain"
-                  >重新生成</el-button>
-                <el-button
-                  v-else
-                  size="small"
-                  type="primary"
-                  :loading="aiGenLoading"
-                  @click="onGenerateAiExplain"
-                  >生成解读</el-button>
-              </span>
-            </div>
+          <SectionCard id="sec-ai" class="detail-card" title="AI 解读">
+            <template #extra>
+              <el-button
+                v-if="aiDetail?.explanation?.generated_at"
+                link
+                type="primary"
+                size="small"
+                :loading="aiGenLoading"
+                @click="onRegenerateAiExplain"
+                >重新生成</el-button>
+              <el-button
+                v-else
+                size="small"
+                type="primary"
+                :loading="aiGenLoading"
+                @click="onGenerateAiExplain"
+                >生成解读</el-button>
+            </template>
             <div v-loading="aiDetailLoading" class="ai-explain" style="min-height: 80px">
               <template v-if="!aiDetailLoading && aiDetail?.explanation">
                 <div class="ai-explain__summary" v-html="renderMarkdown(aiDetail.explanation.summary)"></div>
@@ -230,11 +212,15 @@
                   <span v-if="aiDetail.explanation.generated_at">生成于 {{ timeAgo(aiDetail.explanation.generated_at) }}</span>
                 </div>
               </template>
-              <el-empty
+              <EmptyState
                 v-else-if="!aiDetailLoading"
                 description="这个因子还没有 AI 解读，点击「生成解读」创建一份"
-                :image-size="80"
-              />
+                size="md"
+              >
+                <template #action>
+                  <el-button size="small" type="primary" :loading="aiGenLoading" @click="onGenerateAiExplain">生成解读</el-button>
+                </template>
+              </EmptyState>
             </div>
 
             <!-- 追问对话区 -->
@@ -265,11 +251,10 @@
                 <el-button type="primary" :loading="aiChatting" :disabled="!aiQuestion.trim()" @click="onSendChat">发送</el-button>
               </div>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 因子信息 -->
-          <section id="sec-params" class="jq-card">
-            <h4 class="jq-card__title">因子信息</h4>
+          <SectionCard id="sec-params" class="detail-card" title="因子信息">
             <div class="jq-params">
               <div v-for="p in paramCells" :key="p.label" class="jq-params__item">
                 <span>{{ p.label }}</span>
@@ -278,7 +263,7 @@
             </div>
             <p class="jq-note" v-if="factor.decay">衰减曲线（lag → IC）：{{ JSON.stringify(factor.decay) }}</p>
             <p class="jq-note" v-if="factor.ic_by_horizon">IC by horizon：{{ JSON.stringify(factor.ic_by_horizon) }}</p>
-          </section>
+          </SectionCard>
         </div>
       </template>
     </div>
@@ -302,6 +287,9 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import SectionCard from '@/components/common/SectionCard.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { getFactor, getQuantileAnalysis, neutralizeFactor, aiExplainFactor, getFactorAiDetail, chatFactorAi } from '@/api/factor'
 import { deepAnalysis } from '@/api/quant'
 import { fmt, numClass, formatTime } from '@/utils/format'
@@ -1055,151 +1043,100 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.jq-head {
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 14px 18px;
-  margin-bottom: 14px;
-}
-.jq-head__top {
+.detail-meta {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-12) var(--space-md);
   flex-wrap: wrap;
+  margin: calc(-1 * var(--space-sm)) 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
 }
-.jq-head__name {
-  font-size: 17px;
-  font-weight: 600;
+.detail-meta b {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-medium);
 }
-.jq-head__id {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
-  font-family: var(--font-mono, monospace);
+.detail-meta__id {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
 }
-.jq-head__back {
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  cursor: pointer;
-}
-.jq-head__back:hover {
-  color: var(--el-color-primary);
-}
-.jq-head__tags {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.jq-head__actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.jq-head__meta {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-}
-.jq-head__meta b {
-  color: var(--el-text-primary, #303133);
-  font-weight: 500;
-}
-.jq-head__expr {
+.detail-meta__expr {
   max-width: 46%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.jq-head__desc {
+.detail-meta__desc {
   max-width: 30%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.detail-card {
+  scroll-margin-top: var(--space-12);
+}
 .jq-body {
   display: grid;
   grid-template-columns: 150px 1fr;
-  gap: 14px;
+  gap: var(--space-12);
   min-height: 400px;
 }
 .jq-side {
   position: sticky;
-  top: 12px;
+  top: var(--space-12);
   align-self: start;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 8px;
+  gap: var(--space-2xs);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
 }
 .jq-side__item {
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  padding: 7px 12px;
-  border-radius: 6px;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  padding: var(--space-sm) var(--space-12);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .jq-side__item:hover {
-  background: var(--el-fill-color-light, #f5f7fa);
+  background: var(--bg-hover);
 }
 .jq-side__item--on {
-  background: var(--el-color-primary);
+  background: var(--primary);
   color: var(--text-inverse);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 .jq-main {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
   min-width: 0;
-}
-.jq-card {
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 14px 18px;
-  scroll-margin-top: 12px;
-}
-.jq-card__title {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 12px;
-}
-.jq-card__bar {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.jq-card__bar .jq-card__title {
-  margin: 0;
 }
 .jq-zoom {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 .jq-zoom__btn {
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-full);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .jq-zoom__btn:hover {
-  color: var(--el-color-primary);
+  color: var(--primary);
 }
 .jq-zoom__btn--on {
-  background: var(--el-color-primary);
+  background: var(--primary);
   color: var(--text-inverse);
 }
 .jq-switch {
@@ -1208,7 +1145,7 @@ onMounted(() => {
 .jq-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: var(--space-sm) var(--space-md);
 }
 .jq-grid__item {
   display: flex;
@@ -1216,11 +1153,11 @@ onMounted(() => {
   gap: 3px;
 }
 .jq-grid__label {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 .jq-grid__value {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1234,44 +1171,44 @@ onMounted(() => {
 .jq-chart-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: var(--space-md);
 }
 .jq-chart-box {
   min-width: 0;
 }
 .jq-inline-metrics {
   display: flex;
-  gap: 24px;
+  gap: var(--space-lg);
   flex-wrap: wrap;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  margin-bottom: 10px;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-12);
 }
 .jq-inline-metrics b {
-  color: var(--el-text-primary, #303133);
+  color: var(--text-primary);
   font-weight: 500;
 }
 .jq-note {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
-  margin: 0 0 10px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-sm);
 }
 .jq-params {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: var(--space-sm) var(--space-md);
 }
 .jq-params__item {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  border-bottom: 1px dashed var(--el-border-color-lighter, #e4e7ed);
+  gap: var(--space-12);
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  border-bottom: 1px dashed var(--border);
   padding: 6px 0;
 }
 .jq-params__item b {
-  color: var(--el-text-primary, #303133);
+  color: var(--text-primary);
   font-weight: 500;
   text-align: right;
   word-break: break-all;
@@ -1281,50 +1218,50 @@ onMounted(() => {
 }
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius-sm, 4px);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   line-height: 1.4;
 }
 .badge--primary {
-  background: var(--primary-soft, #e8f0fe);
-  color: var(--primary, #1f4ba0);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 .badge--success {
-  background: var(--success-soft, #e6f6ee);
-  color: var(--success, #1f9d6b);
+  background: var(--success-soft);
+  color: var(--success);
 }
 .badge--warning {
-  background: var(--warning-soft, #fdf3e0);
-  color: var(--warning, #c8801c);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 .badge--info {
-  background: var(--info-soft, #e8f1fa);
-  color: var(--info, #2f7dc2);
+  background: var(--info-soft);
+  color: var(--info);
 }
 .badge--danger {
-  background: var(--danger-soft, #fdeaea);
-  color: var(--danger, #d24545);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 .badge--muted {
-  background: var(--bg-hover, #f2f4f7);
-  color: var(--text-tertiary, #8493ab);
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
 }
 
 /* AI 解读 */
 .ai-explain {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-12);
 }
 .ai-explain__summary {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--el-text-primary, #303133);
-  padding: 10px 12px;
-  background: rgba(var(--primary-rgb, 31, 75, 160), 0.08);
-  border-radius: 8px;
+  color: var(--text-primary);
+  padding: var(--space-sm) var(--space-12);
+  background: rgba(var(--primary-rgb), 0.08);
+  border-radius: var(--radius-md);
 }
 .ai-explain__collapse {
   border-top: none;
@@ -1333,62 +1270,62 @@ onMounted(() => {
 .ai-explain__collapse :deep(.el-collapse-item__header) {
   height: 32px;
   background: transparent;
-  border-bottom: 1px dashed var(--border, #e3e9f1);
-  font-size: 13px;
+  border-bottom: 1px dashed var(--border);
+  font-size: var(--font-size-base);
   font-weight: 600;
-  color: var(--el-color-primary);
+  color: var(--primary);
 }
 .ai-explain__collapse :deep(.el-collapse-item__wrap) {
   background: transparent;
   border-bottom: none;
 }
 .ai-explain__collapse :deep(.el-collapse-item__content) {
-  padding-bottom: 12px;
+  padding-bottom: var(--space-12);
 }
 .ai-explain__label {
-  font-size: 13px;
+  font-size: var(--font-size-base);
   font-weight: 600;
-  color: var(--el-color-primary);
+  color: var(--primary);
 }
 .ai-explain__text {
-  font-size: 13px;
-  color: var(--el-text-primary, #303133);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ai-explain__caveats {
   margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  color: var(--el-text-primary, #303133);
+  padding-left: var(--space-md);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
   line-height: 1.7;
 }
 .ai-explain__meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
-  border-top: 1px dashed var(--border, #e3e9f1);
-  padding-top: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-sm);
 }
 .ai-explain__markdown {
   line-height: 1.7;
 }
 .ai-explain__markdown p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-sm);
 }
 .ai-explain__markdown p:last-child {
   margin-bottom: 0;
 }
 .ai-explain__markdown ul,
 .ai-explain__markdown ol {
-  padding-left: 20px;
-  margin: 0 0 8px;
+  padding-left: var(--space-lg);
+  margin: 0 0 var(--space-sm);
 }
 .ai-explain__markdown li {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-xs);
 }
 .ai-explain__markdown h1,
 .ai-explain__markdown h2,
@@ -1396,61 +1333,61 @@ onMounted(() => {
 .ai-explain__markdown h4,
 .ai-explain__markdown h5,
 .ai-explain__markdown h6 {
-  margin: 12px 0 8px;
+  margin: var(--space-12) 0 var(--space-sm);
   font-weight: 600;
   line-height: 1.4;
 }
 .ai-explain__markdown h1 {
-  font-size: 18px;
+  font-size: var(--font-size-xl);
 }
 .ai-explain__markdown h2 {
-  font-size: 16px;
+  font-size: var(--font-size-lg);
 }
 .ai-explain__markdown h3 {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
 }
 .ai-explain__markdown h4,
 .ai-explain__markdown h5,
 .ai-explain__markdown h6 {
-  font-size: 14px;
+  font-size: var(--font-size-lg);
 }
 .ai-explain__markdown code {
   font-family: var(--font-mono, monospace);
   font-size: 0.92em;
-  background: rgba(var(--primary-rgb, 31, 75, 160), 0.12);
-  padding: 1px 5px;
-  border-radius: 4px;
+  background: rgba(var(--primary-rgb), 0.12);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
 }
 .ai-explain__markdown blockquote {
-  margin: 0 0 8px;
-  padding: 4px 12px;
-  border-left: 3px solid rgba(var(--primary-rgb, 31, 75, 160), 0.4);
-  background: var(--bg-tertiary, #eef2f6);
-  border-radius: 0 8px 8px 0;
-  color: var(--el-text-secondary, #909399);
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-xs) var(--space-12);
+  border-left: 3px solid rgba(var(--primary-rgb), 0.4);
+  background: var(--bg-tertiary);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--text-secondary);
 }
 .ai-explain__markdown table {
   border-collapse: collapse;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-sm);
   width: 100%;
-  font-size: 13px;
+  font-size: var(--font-size-base);
 }
 .ai-explain__markdown th,
 .ai-explain__markdown td {
-  border: 1px solid var(--border, #e3e9f1);
-  padding: 5px 10px;
+  border: 1px solid var(--border);
+  padding: var(--space-xs) var(--space-sm);
   text-align: left;
 }
 .ai-explain__markdown th {
-  background: var(--bg-tertiary, #eef2f6);
+  background: var(--bg-tertiary);
   font-weight: 600;
 }
 .ai-explain__markdown pre.hljs {
-  margin: 0 0 8px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-sm) var(--space-12);
+  border-radius: var(--radius-md);
   overflow-x: auto;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   line-height: 1.5;
 }
 .ai-explain__markdown pre.hljs code {
@@ -1458,27 +1395,27 @@ onMounted(() => {
   padding: 0;
 }
 .ai-chat {
-  margin-top: 12px;
+  margin-top: var(--space-12);
   max-height: 320px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  border-top: 1px dashed var(--border, #e3e9f1);
-  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-12);
 }
 .ai-chat__scroll {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 4px 0;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
 }
 .ai-chat__empty {
-  padding: 18px 12px;
+  padding: var(--space-lg) var(--space-12);
   text-align: center;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  border: 1px dashed var(--border, #e3e9f1);
-  border-radius: 8px;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
   line-height: 1.7;
 }
 .ai-chat__msg {
@@ -1492,21 +1429,21 @@ onMounted(() => {
 }
 .ai-chat__bubble {
   max-width: 82%;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
+  padding: var(--space-sm) var(--space-12);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ai-chat__msg--user .ai-chat__bubble {
-  background: var(--el-color-primary);
-  color: #fff;
+  background: var(--primary);
+  color: var(--text-inverse);
   border-top-right-radius: 2px;
 }
 .ai-chat__msg--assistant .ai-chat__bubble {
-  background: var(--bg-tertiary, #eef2f6);
-  color: var(--el-text-primary, #303133);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
   border-top-left-radius: 2px;
 }
 .ai-chat__bubble--md {
@@ -1515,17 +1452,17 @@ onMounted(() => {
   white-space: normal;
 }
 .ai-chat__bubble--typing {
-  color: var(--el-text-secondary, #909399);
+  color: var(--text-secondary);
   font-style: italic;
 }
 .ai-chat__input {
   display: flex;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
   position: sticky;
   bottom: 0;
-  background: var(--el-bg-color, #fff);
-  padding-top: 8px;
+  background: var(--bg-card);
+  padding-top: var(--space-sm);
 }
 
 @media (max-width: 1100px) {

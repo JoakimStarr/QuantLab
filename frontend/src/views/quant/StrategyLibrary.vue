@@ -6,10 +6,7 @@
     <div class="library-hero">
       <el-segmented v-model="kindFilter" :options="segmentedOptions" class="lib-segmented" />
       <div class="lib-stats">
-        <div class="stat-item" v-for="s in statItems" :key="s.label">
-          <span class="stat-value">{{ s.value }}</span>
-          <span class="stat-label">{{ s.label }}</span>
-        </div>
+        <StatCard v-for="s in statItems" :key="s.label" :label="s.label" :value="s.value" />
       </div>
     </div>
 
@@ -95,10 +92,10 @@
         </div>
       </el-card>
     </transition-group>
-    <el-empty
+    <EmptyState
       v-if="!loading && !filteredCards.length"
       description="当前分类下暂无策略"
-      :image-size="72"
+      size="sm"
     />
 
     <!-- 配置弹窗 -->
@@ -279,10 +276,10 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty
+      <EmptyState
         v-if="!historyLoading && !historyList.length"
         description="暂无回测历史，配置上方模板运行一次即可生成"
-        :image-size="56"
+        size="sm"
       />
     </div>
 
@@ -291,7 +288,7 @@
       <template v-if="compareDialog.data">
         <SectionCard title="净值对比">
           <v-chart v-if="compareNavOption" :option="compareNavOption" autoresize class="cmp-chart" />
-          <el-empty v-else description="所选历史无净值曲线" :image-size="64" />
+          <EmptyState v-else description="所选历史无净值曲线" size="sm" />
         </SectionCard>
         <SectionCard title="指标对比" class="mt-6">
           <el-table :data="compareDialog.data.comparison || []" size="small" max-height="300">
@@ -355,7 +352,7 @@
             标的池 {{ faDialog.data.universe || '--' }}
           </p>
         </template>
-        <el-empty v-else-if="!faDialog.loading" description="暂无分析数据" :image-size="64" />
+        <EmptyState v-else-if="!faDialog.loading" description="暂无分析数据" size="sm" />
       </div>
     </el-dialog>
 
@@ -373,6 +370,8 @@ import {
 } from '@element-plus/icons-vue'
 import PageContainer from '@/components/common/PageContainer.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import StatCard from '@/components/common/StatCard.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import SymbolSearchSelect from '@/components/common/SymbolSearchSelect.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
@@ -846,36 +845,13 @@ onMounted(async () => {
 
 .lib-stats {
   display: flex;
-  gap: 8px;
-}
+  gap: var(--space-sm);
+  flex: 1;
+  min-width: 260px;
 
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-card);
-  min-width: 76px;
-  transition: all 0.2s ease;
-
-  &:hover {
-    border-color: rgba(var(--primary-rgb), 0.4);
-    transform: translateY(-1px);
-  }
-
-  .stat-value {
-    font-size: 17px;
-    font-weight: 700;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-  }
-  .stat-label {
-    font-size: 11px;
-    color: var(--text-tertiary);
+  & > * {
+    flex: 1;
+    min-width: 0;
   }
 }
 

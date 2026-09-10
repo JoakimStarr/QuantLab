@@ -1,28 +1,23 @@
 <template>
   <PageContainer>
     <!-- 页头：策略名 + 状态行 + 操作 -->
-    <div class="jq-head">
-      <div class="jq-head__top">
-        <span class="jq-head__name">{{ result?.name || '回测详情' }}</span>
-        <span class="jq-head__back" @click="goList">← {{ detailSource ? '返回策略库' : '返回策略列表' }}</span>
-        <div class="jq-head__tabs">
-          <span class="jq-tab">编辑策略</span>
-          <span class="jq-tab jq-tab--on">回测详情</span>
-        </div>
-      </div>
-      <div class="jq-head__meta" v-if="result">
-        <span>设置：<b>{{ result.start_date }} 到 {{ result.end_date }}</b>，<b>¥{{ fmtCapital }}</b>，<b>{{ modeLabel }}</b></span>
-        <span>状态：<i class="ok">✓</i> <b>回测完成</b></span>
-        <span class="pill" v-if="result.backend">{{ result.backend }}</span>
-        <span class="jq-head__actions">
-          <el-button v-if="!detailSource" size="small" @click="openRerunPrefill">调整参数重跑</el-button>
-          <el-button v-if="!detailSource" size="small" :loading="mcLoading" @click="runMonteCarlo">蒙特卡罗模拟</el-button>
-          <el-button v-if="canUseStrategyApi" size="small" :loading="reportLoading" @click="runPortfolioReport">组合报告</el-button>
-          <el-button v-if="canUseStrategyApi" size="small" :loading="reviewLoading" @click="runAiReview">AI 评审</el-button>
-          <el-button size="small" @click="exportJson">导出</el-button>
-          <el-button size="small" type="danger" plain @click="onDelete">删除回测</el-button>
-        </span>
-      </div>
+    <PageHeader :title="result?.name || '回测详情'">
+      <template #actions>
+        <el-button size="small" text @click="goList">← {{ detailSource ? '返回策略库' : '返回策略列表' }}</el-button>
+        <span class="jq-tab">编辑策略</span>
+        <span class="jq-tab jq-tab--on">回测详情</span>
+      </template>
+    </PageHeader>
+    <div v-if="result" class="detail-meta">
+      <span>设置：<b>{{ result.start_date }} 到 {{ result.end_date }}</b>，<b>¥{{ fmtCapital }}</b>，<b>{{ modeLabel }}</b></span>
+      <span>状态：<i class="ok">✓</i> <b>回测完成</b></span>
+      <span class="pill" v-if="result.backend">{{ result.backend }}</span>
+      <el-button v-if="!detailSource" size="small" @click="openRerunPrefill">调整参数重跑</el-button>
+      <el-button v-if="!detailSource" size="small" :loading="mcLoading" @click="runMonteCarlo">蒙特卡罗模拟</el-button>
+      <el-button v-if="canUseStrategyApi" size="small" :loading="reportLoading" @click="runPortfolioReport">组合报告</el-button>
+      <el-button v-if="canUseStrategyApi" size="small" :loading="reviewLoading" @click="runAiReview">AI 评审</el-button>
+      <el-button size="small" @click="exportJson">导出</el-button>
+      <el-button size="small" type="danger" plain @click="onDelete">删除回测</el-button>
     </div>
 
     <div v-loading="loading" class="jq-body">
@@ -42,20 +37,18 @@
         <!-- 主区 -->
         <div class="jq-main">
           <!-- 收益概述：22 指标 6×2 -->
-          <section id="sec-overview" class="jq-card">
-            <h4 class="jq-card__title">收益概述</h4>
+          <SectionCard id="sec-overview" class="detail-card" title="收益概述">
             <div class="jq-grid">
               <div v-for="m in metricCells" :key="m.label" class="jq-grid__item">
                 <span class="jq-grid__label">{{ m.label }}</span>
                 <b class="jq-grid__value" :class="m.cls">{{ m.value }}</b>
               </div>
             </div>
-          </section>
+          </SectionCard>
 
           <!-- 主图：净值（策略/超额/基准） -->
-          <section id="sec-nav" class="jq-card">
-            <div class="jq-card__bar">
-              <h4 class="jq-card__title">净值走势</h4>
+          <SectionCard id="sec-nav" class="detail-card" title="净值走势">
+            <template #extra>
               <div class="jq-zoom">
                 <span>缩放：</span>
                 <span
@@ -67,39 +60,33 @@
                   >{{ z.label }}</span
                 >
               </div>
-              <div class="jq-switch">
-                <span
-                  class="jq-zoom__btn"
-                  :class="{ 'jq-zoom__btn--on': logAxis }"
-                  @click="logAxis = !logAxis"
-                  >对数轴</span
-                >
-              </div>
-            </div>
+              <span
+                class="jq-zoom__btn"
+                :class="{ 'jq-zoom__btn--on': logAxis }"
+                @click="logAxis = !logAxis"
+                >对数轴</span
+              >
+            </template>
             <VChart :option="navOption" autoresize class="jq-chart" />
-          </section>
+          </SectionCard>
 
           <!-- 副图：每日盈亏 -->
-          <section id="sec-daily" class="jq-card">
-            <h4 class="jq-card__title">每日盈亏</h4>
+          <SectionCard id="sec-daily" class="detail-card" title="每日盈亏">
             <VChart :option="pnlOption" autoresize class="jq-chart jq-chart--sub" />
-          </section>
+          </SectionCard>
 
           <!-- 策略 K 线（仅规则策略回测结果带 indicator 时渲染） -->
-          <section v-if="hasIndicator" id="sec-kline" class="jq-card">
-            <h4 class="jq-card__title">策略 K 线</h4>
+          <SectionCard v-if="hasIndicator" id="sec-kline" class="detail-card" title="策略 K 线">
             <BacktestKLinePanel :result="result" />
-          </section>
+          </SectionCard>
 
           <!-- 副图：持仓量 -->
-          <section id="sec-hold" class="jq-card">
-            <h4 class="jq-card__title">持仓量（由成交明细还原）</h4>
+          <SectionCard id="sec-hold" class="detail-card" title="持仓量（由成交明细还原）">
             <VChart :option="holdingsOption" autoresize class="jq-chart jq-chart--sub" />
-          </section>
+          </SectionCard>
 
           <!-- 归因分析 -->
-          <section id="sec-attribution" class="jq-card">
-            <h4 class="jq-card__title">归因分析 · 个股盈亏贡献</h4>
+          <SectionCard id="sec-attribution" class="detail-card" title="归因分析 · 个股盈亏贡献">
             <p class="jq-note" v-if="!attributionRows.length">暂无成交明细，无法归因（本回测 trades 为空）。</p>
             <template v-else>
               <p class="jq-note">FIFO 配对完整买卖回合，含交易成本；按个股净盈亏降序。</p>
@@ -133,11 +120,10 @@
                 </el-table-column>
               </el-table>
             </template>
-          </section>
+          </SectionCard>
 
           <!-- 交易详情 -->
-          <section id="sec-trades" class="jq-card">
-            <h4 class="jq-card__title">交易详情（共 {{ trades.length }} 笔）</h4>
+          <SectionCard id="sec-trades" class="detail-card" title="交易详情（共 {{ trades.length }} 笔）">
             <el-alert
               v-if="isReconstructed && trades.length"
               type="warning"
@@ -170,11 +156,10 @@
               layout="prev, pager, next, total"
               class="jq-pager"
             />
-          </section>
+          </SectionCard>
 
           <!-- 蒙特卡罗 -->
-          <section v-if="!detailSource" id="sec-mc" class="jq-card">
-            <h4 class="jq-card__title">蒙特卡罗模拟</h4>
+          <SectionCard v-if="!detailSource" id="sec-mc" class="detail-card" title="蒙特卡罗模拟">
             <p class="jq-note" v-if="!mcData">点击页头「蒙特卡罗模拟」运行 Stationary Bootstrap 置信区间估计。</p>
             <template v-else>
               <p class="jq-note">
@@ -189,11 +174,10 @@
                 </div>
               </div>
             </template>
-          </section>
+          </SectionCard>
 
           <!-- 组合绩效报告（quantstats） -->
-          <section v-if="canUseStrategyApi" id="sec-report" class="jq-card">
-            <h4 class="jq-card__title">组合报告</h4>
+          <SectionCard v-if="canUseStrategyApi" id="sec-report" class="detail-card" title="组合报告">
             <p class="jq-note" v-if="!reportData">
               点击页头「组合报告」生成 quantstats 绩效指标（不做 HTML tear-sheet）。
             </p>
@@ -208,11 +192,10 @@
                 </div>
               </div>
             </template>
-          </section>
+          </SectionCard>
 
           <!-- AI 评审 -->
-          <section v-if="canUseStrategyApi" id="sec-review" class="jq-card">
-            <h4 class="jq-card__title">AI 评审</h4>
+          <SectionCard v-if="canUseStrategyApi" id="sec-review" class="detail-card" title="AI 评审">
             <p class="jq-note" v-if="!reviewData">点击页头「AI 评审」让 AI 解读本次回测结果。</p>
             <template v-else>
               <div v-if="reviewKeyEvents.length" class="jq-review-events">
@@ -222,18 +205,17 @@
               </div>
               <pre class="jq-review-pre">{{ reviewText }}</pre>
             </template>
-          </section>
+          </SectionCard>
 
           <!-- 回测参数 -->
-          <section id="sec-params" class="jq-card">
-            <h4 class="jq-card__title">回测参数与执行口径</h4>
+          <SectionCard id="sec-params" class="detail-card" title="回测参数与执行口径">
             <div class="jq-params">
               <div v-for="p in paramCells" :key="p.label" class="jq-params__item">
                 <span>{{ p.label }}</span>
                 <b>{{ p.value }}</b>
               </div>
             </div>
-          </section>
+          </SectionCard>
         </div>
       </template>
     </div>
@@ -277,6 +259,8 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import PageContainer from '@/components/common/PageContainer.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import SectionCard from '@/components/common/SectionCard.vue'
 import BacktestKLinePanel from '@/components/quant/BacktestKLinePanel.vue'
 import {
   getBacktestResult,
@@ -926,155 +910,106 @@ function scrollTo(id) {
 </script>
 
 <style scoped>
-.jq-head {
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 14px 18px;
-  margin-bottom: 14px;
-}
-.jq-head__top {
+.detail-meta {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-12) var(--space-md);
+  flex-wrap: wrap;
+  margin: calc(-1 * var(--space-sm)) 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
 }
-.jq-head__name {
-  font-size: 17px;
-  font-weight: 600;
+.detail-meta b {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-medium);
 }
-.jq-head__back {
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  cursor: pointer;
+.detail-meta .ok {
+  color: var(--success);
+  font-style: normal;
 }
-.jq-head__back:hover {
-  color: var(--el-color-primary);
+.detail-meta .pill {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: var(--radius-full);
+  padding: var(--space-2xs) var(--space-sm);
+  font-size: var(--font-size-sm);
 }
-.jq-head__tabs {
-  margin-left: auto;
-  display: flex;
-  gap: 20px;
+.detail-card {
+  scroll-margin-top: var(--space-12);
 }
 .jq-tab {
-  font-size: 14px;
-  color: var(--el-text-secondary, #909399);
-  padding-bottom: 4px;
+  font-size: var(--font-size-lg);
+  color: var(--text-secondary);
+  padding-bottom: var(--space-xs);
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
 .jq-tab--on {
-  color: var(--el-color-primary);
-  border-bottom-color: var(--el-color-primary);
-  font-weight: 500;
-}
-.jq-head__meta {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-}
-.jq-head__meta b {
-  color: var(--el-text-primary, #303133);
-  font-weight: 500;
-}
-.jq-head__meta .ok {
-  color: var(--success);
-  font-style: normal;
-}
-.pill {
-  background: var(--el-color-primary-light-9, #ecf5ff);
-  color: var(--el-color-primary);
-  border-radius: 999px;
-  padding: 1px 10px;
-  font-size: 12px;
-}
-.jq-head__actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: var(--font-weight-medium);
 }
 .jq-body {
   display: grid;
   grid-template-columns: 150px 1fr;
-  gap: 14px;
+  gap: var(--space-12);
   min-height: 400px;
 }
 .jq-side {
   position: sticky;
-  top: 12px;
+  top: var(--space-12);
   align-self: start;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 8px;
+  gap: var(--space-2xs);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
 }
 .jq-side__item {
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  padding: 7px 12px;
-  border-radius: 6px;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  padding: var(--space-sm) var(--space-12);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .jq-side__item:hover {
-  background: var(--el-fill-color-light, #f5f7fa);
+  background: var(--bg-hover);
 }
 .jq-side__item--on {
-  background: var(--el-color-primary);
+  background: var(--primary);
   color: var(--text-inverse);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 .jq-main {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
   min-width: 0;
-}
-.jq-card {
-  background: var(--el-bg-color, #fff);
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
-  border-radius: 8px;
-  padding: 14px 18px;
-  scroll-margin-top: 12px;
-}
-.jq-card__title {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 12px;
-}
-.jq-card__bar {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.jq-card__bar .jq-card__title {
-  margin: 0;
 }
 .jq-zoom {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 .jq-zoom__btn {
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-full);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .jq-zoom__btn:hover {
-  color: var(--el-color-primary);
+  color: var(--primary);
 }
 .jq-zoom__btn--on {
-  background: var(--el-color-primary);
+  background: var(--primary);
   color: var(--text-inverse);
 }
 .jq-switch {
@@ -1083,7 +1018,7 @@ function scrollTo(id) {
 .jq-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: var(--space-sm) var(--space-md);
 }
 .jq-grid__item {
   display: flex;
@@ -1091,17 +1026,17 @@ function scrollTo(id) {
   gap: 3px;
 }
 .jq-grid__label {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 .jq-grid__value {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .jq-grid__ci {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 .jq-chart {
   width: 100%;
@@ -1111,41 +1046,41 @@ function scrollTo(id) {
   height: 180px;
 }
 .jq-note {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
-  margin: 0 0 10px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-sm);
 }
 .jq-mc-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-12);
 }
 .jq-params {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: var(--space-sm) var(--space-md);
 }
 .jq-params__item {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
-  color: var(--el-text-secondary, #909399);
-  border-bottom: 1px dashed var(--el-border-color-lighter, #e4e7ed);
-  padding: 6px 0;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
+  border-bottom: 1px dashed var(--border);
+  padding: var(--space-sm) 0;
 }
 .jq-params__item b {
-  color: var(--el-text-primary, #303133);
+  color: var(--text-primary);
   font-weight: 500;
 }
 .jq-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 .jq-bar__fill {
   display: inline-block;
   height: 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   min-width: 2px;
 }
 .jq-bar__fill--up {
@@ -1155,22 +1090,22 @@ function scrollTo(id) {
   background: var(--chart-down);
 }
 .jq-bar__pct {
-  font-size: 12px;
-  color: var(--el-text-secondary, #909399);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 .jq-pager {
-  margin-top: 10px;
+  margin-top: var(--space-sm);
   justify-content: flex-end;
 }
 .jq-reconstruct-alert {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-sm);
 }
 .jq-review-events {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
 }
 .jq-review-event {
   white-space: normal;
@@ -1178,15 +1113,15 @@ function scrollTo(id) {
 }
 .jq-review-pre {
   margin: 0;
-  padding: 10px 12px;
-  background: var(--el-fill-color-light, #f5f7fa);
-  border-radius: 6px;
+  padding: var(--space-sm) var(--space-12);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--text-primary);
   max-height: 480px;
   overflow: auto;
 }

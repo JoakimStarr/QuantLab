@@ -2,14 +2,14 @@
   <section class="kpi-section">
     <section class="kpi-grid">
       <template v-if="loading">
-        <div class="kpi-card" v-for="i in 4" :key="i">
-          <el-skeleton :rows="2" animated />
+        <div class="kpi-item" v-for="i in 4" :key="i">
+          <StatCard :label="'加载中'" loading />
         </div>
       </template>
       <template v-else>
         <div
-          class="kpi-card"
-          :class="{ 'kpi-card--clickable': card.to }"
+          class="kpi-item"
+          :class="{ 'kpi-item--clickable': card.to }"
           v-for="card in kpiCards"
           :key="card.key"
           :role="card.to ? 'link' : undefined"
@@ -17,10 +17,9 @@
           @click="card.to && go(card.to)"
           @keydown.enter="card.to && go(card.to)"
         >
-          <div class="kpi-card__label">{{ card.label }}</div>
-          <div class="kpi-card__value">{{ card.value }}</div>
-          <div class="kpi-card__sub">{{ card.sub }}</div>
-          <el-icon class="kpi-card__icon" :style="{ color: card.iconColor }"><component :is="card.icon" /></el-icon>
+          <StatCard :label="card.label" :value="card.value" :tone="card.tone" :icon="card.icon">
+            {{ card.sub }}
+          </StatCard>
         </div>
       </template>
     </section>
@@ -37,6 +36,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Coin, TrendCharts, MagicStick, DataAnalysis } from '@element-plus/icons-vue'
 import { isToday, isWithinDays } from './utils'
+import StatCard from '@/components/common/StatCard.vue'
 
 const router = useRouter()
 function go(name) {
@@ -95,7 +95,7 @@ const kpiCards = computed(() => {
       value: animatedValues.value.factor,
       sub: `内置 ${factorBySource.builtin} / LLM ${factorBySource.llm} / 符号 ${factorBySource.symbolic}`,
       icon: Coin,
-      iconColor: 'var(--primary)',
+      tone: 'default',
       to: 'FactorLibraryV2',
     },
     {
@@ -104,7 +104,7 @@ const kpiCards = computed(() => {
       value: animatedValues.value.strategy,
       sub: `活跃 ${activeStrategies} / 归档 ${archivedStrategies}`,
       icon: TrendCharts,
-      iconColor: 'var(--success)',
+      tone: 'success',
       to: 'QuantStrategy',
     },
     {
@@ -113,7 +113,7 @@ const kpiCards = computed(() => {
       value: animatedValues.value.mining,
       sub: `今日 ${todayMining} / 运行中 ${runningMining}`,
       icon: MagicStick,
-      iconColor: 'var(--warning)',
+      tone: 'warning',
       to: 'Mining',
     },
     {
@@ -122,7 +122,7 @@ const kpiCards = computed(() => {
       value: animatedValues.value.backtest,
       sub: `近7日 ${last7dBacktests}`,
       icon: DataAnalysis,
-      iconColor: 'var(--danger)',
+      tone: 'danger',
       to: 'QuantStrategy',
     },
   ]
@@ -156,71 +156,48 @@ const freshnessText = computed(() => {
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  gap: var(--space-md);
   @media (max-width: 768px) {
     grid-template-columns: repeat(2, 1fr);
   }
 }
-.kpi-card {
-  position: relative;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 20px;
+.kpi-item {
+  min-width: 0;
 }
-.kpi-card--clickable {
+.kpi-item--clickable {
   cursor: pointer;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s,
-    transform 0.2s;
-}
-.kpi-card--clickable:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
-}
-.kpi-card--clickable:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.kpi-card__label {
-  font-size: 14px;
-  color: var(--text-tertiary);
-}
-.kpi-card__value {
-  font-size: 32px;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  margin-top: 8px;
-}
-.kpi-card__sub {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 6px;
-}
-.kpi-card__icon {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  font-size: 22px;
+  border-radius: var(--radius-lg);
+
+  & > :deep(.stat-card) {
+    transition:
+      border-color var(--duration-fast) var(--ease-in-out),
+      box-shadow var(--duration-fast) var(--ease-in-out),
+      transform var(--duration-fast) var(--ease-in-out);
+  }
+  &:hover > :deep(.stat-card) {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
 }
 .kpi-freshness {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  padding: 8px 4px;
+  gap: var(--space-12);
+  margin-top: var(--space-12);
+  padding: var(--space-sm) var(--space-xs);
 }
 .kpi-freshness__label {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   white-space: nowrap;
 }
 .kpi-freshness__text {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   white-space: nowrap;
 }
