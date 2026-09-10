@@ -478,6 +478,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
+import '@/utils/echarts-extras' // heatmap + visualMap
 import { useThemeRev } from '@/composables/useChartTheme'
 import { chartTheme } from '@/utils/chartTheme'
 import { buildTopicHeatMatrix, buildTopicCumulative } from '@/utils/policyTopics'
@@ -989,6 +990,13 @@ onBeforeUnmount(stopAiPoll)
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* 响应式：窄屏下工具栏换行 */
+@media (max-width: 1024px) {
+  .tone-toolbar {
+    flex-wrap: wrap;
+  }
 }
 
 .tone-row {

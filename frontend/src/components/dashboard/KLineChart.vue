@@ -104,6 +104,7 @@
 import { computed, ref } from 'vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
+import '@/utils/echarts-extras' // candlestick
 import { ElMessage } from 'element-plus/es/components/message/index'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { klineChartOption } from '@/utils/klineChart'

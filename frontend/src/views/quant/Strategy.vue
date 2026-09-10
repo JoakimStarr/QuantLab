@@ -1451,4 +1451,14 @@ onBeforeUnmount(() => {
     word-break: break-all;
   }
 }
+
+/* 响应式：窄屏下表头/操作区换行、因子列放宽 */
+@media (max-width: 1024px) {
+  .wf-header {
+    gap: var(--space-sm);
+  }
+  .cell-factors {
+    max-width: 140px;
+  }
+}
 </style>

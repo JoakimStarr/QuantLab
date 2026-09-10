@@ -323,6 +323,7 @@ import SparkLine from '@/components/common/SparkLine.vue'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
 import { usePolling } from '@/composables/usePolling'
+import { useAsyncAction } from '@/composables/useAsyncAction'
 import { mineLlm, mineSymbolic, mineText, mineAutoml, listMiningTasks, getMiningTask, getMiningCandidates, listMiningTemplates, runMiningTemplate } from '@/api/mining'
 import { autoImportFactors, getQuantDataStatus } from '@/api/quant'
 import { getAiStatus } from '@/api/auth'
@@ -455,7 +456,6 @@ const selectedMode = ref('llm')
 const form = reactive(defaultForm())
 const tasks = ref([])
 const loading = ref(false)
-const submitting = ref(false)
 const factorStore = useFactorStore()
 const themeRev = useThemeRev()
 
@@ -712,10 +712,9 @@ watch(
 )
 
 // 开始挖掘
-async function startMining() {
-  if (submitting.value) return
-  submitting.value = true
-  try {
+// 挖掘启动（含模板运行）：loading/try-finally 样板交给 useAsyncAction
+const { run: runMiningAction, loading: submitting } = useAsyncAction(
+  async () => {
     let data
     if (selectedMode.value === 'llm') {
       if (form.template) {
@@ -742,11 +741,13 @@ async function startMining() {
       await loadTasks()
       startPolling()
     }
-  } catch (e) {
-    ElMessage.error('挖掘启动失败')
-  } finally {
-    submitting.value = false
-  }
+  },
+  { onError: () => ElMessage.error('挖掘启动失败') }
+)
+
+async function startMining() {
+  if (submitting.value) return
+  await runMiningAction()
 }
 
 // 重置表单

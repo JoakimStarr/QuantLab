@@ -246,6 +246,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QlibExprEditor from '@/components/quant/QlibExprEditor.vue'
 import { fmt, numClass } from '@/utils/format'
 import { useFactorStore } from '@/stores/factor'
+import { useAsyncAction } from '@/composables/useAsyncAction'
 import { listUniverses, exportFactors } from '@/api/quant'
 import { useSyncStore } from '@/stores/sync'
 import { listFactors, listFactorSummary, addFactor, disableFactor, seedAlpha158, seedEtfFactors, decayCheck, aiExplainFactorsBatch } from '@/api/factor'
@@ -823,35 +824,27 @@ async function onEvaluate(row) {
 }
 
 // === 导出因子（StreamingResponse → blob 下载） ===
-const exporting = ref(false)
+// loading/try-finally 样板交给 useAsyncAction（错误由 axios 拦截器统一提示，默认静默）
+const { run: downloadFactors, loading: exporting } = useAsyncAction(async (format) => {
+  // 与当前筛选联动：decaying 视图后端不支持，退回全部状态
+  const status = filterStatus.value === 'active' || filterStatus.value === 'disabled' ? filterStatus.value : undefined
+  const res = await exportFactors({
+    category: filterCategory.value || undefined,
+    status,
+    format,
+  })
+  const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data || ''])
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `factors.${format}`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已导出 ${format.toUpperCase()} 文件`)
+})
 
 function onExportCommand(format) {
   downloadFactors(format)
-}
-
-async function downloadFactors(format) {
-  exporting.value = true
-  try {
-    // 与当前筛选联动：decaying 视图后端不支持，退回全部状态
-    const status = filterStatus.value === 'active' || filterStatus.value === 'disabled' ? filterStatus.value : undefined
-    const res = await exportFactors({
-      category: filterCategory.value || undefined,
-      status,
-      format,
-    })
-    const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data || ''])
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `factors.${format}`
-    a.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success(`已导出 ${format.toUpperCase()} 文件`)
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    exporting.value = false
-  }
 }
 
 // === 新增因子 ===

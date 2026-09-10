@@ -50,6 +50,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import { CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { decayCheck } from '@/api/factor'
+import { fmt } from '@/utils/format'
 
 const checking = ref(false)
 const hasChecked = ref(false)
@@ -58,12 +59,6 @@ const total = ref(0)
 const factors = ref([])
 let unsub = null
 const wsClient = inject('wsClient')
-
-function fmt(val, digits = 3) {
-  if (val === null || val === undefined || val === '') return '—'
-  const n = Number(val)
-  return Number.isNaN(n) ? '—' : n.toFixed(digits)
-}
 
 function applyResult(data) {
   if (!data) return

@@ -168,6 +168,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import VChart from 'vue-echarts'
 import '@/utils/echarts'
+import '@/utils/echarts-extras' // radar
 import PageContainer from '@/components/common/PageContainer.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'

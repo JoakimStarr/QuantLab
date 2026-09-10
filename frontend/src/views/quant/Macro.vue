@@ -1207,4 +1207,11 @@ onBeforeUnmount(() => {
     transform: translateY(0);
   }
 }
+
+/* 响应式：窄屏下指标卡片放宽最小宽度，避免横向溢出 */
+@media (max-width: 1024px) {
+  .macro-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}
 </style>
