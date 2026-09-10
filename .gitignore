@@ -35,9 +35,10 @@ lerna-debug.log*
 *.sw?
 *.env
 # Database
-data/*.db
+/data/*.db
 # 运行时数据目录（同步进度/pid/缓存等，可重新生成；整体不入库，避免误提交 7G+ 行情数据）
-data/
+# 注意必须锚定根目录，否则会误伤源码包 backend/app/services/data/
+/data/
 # SQLite 运行时数据库（根目录/任意位置，含 WAL/SHM；含用户凭证哈希，禁止提交）
 quantlab.db
 quantlab.db-shm
