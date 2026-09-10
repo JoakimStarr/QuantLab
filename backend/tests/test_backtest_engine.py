@@ -306,6 +306,41 @@ class TestRunBacktest:
 
     @patch("qlib.data.D")
     @patch("app.services.quant.backtest_engine.init_qlib", return_value=True)
+    def test_run_backtest_trade_reconstruction_disclosure(self, mock_init, mock_D):
+        """B2: qlib 后端成交披露字段（重构方式 + 成本模型取实际配置）。"""
+        score_df, raw, bench_raw, dates, stocks = self._make_mock_data()
+        mock_D.features.side_effect = [raw, bench_raw]
+
+        result = run_backtest(
+            score_df, start="2024-01-01", end="2024-01-14",
+            topk=3, n_drop=1, rebalance_freq="day",
+            slippage_bps=5,
+        )
+        assert result["reconstructed"] is True
+        tr = result["trade_reconstruction"]
+        assert tr["method"] == "position_snapshot_diff"
+        assert "持仓快照差分" in tr["note"]
+        assert "T+1" in tr["deal_price"]
+        cm = tr["cost_model"]
+        assert set(cm) == {"cost_buy", "cost_sell", "min_cost", "impact_cost"}
+        assert cm["cost_buy"] > 0 and cm["cost_sell"] > 0
+        assert cm["impact_cost"] == pytest.approx(5 / 10000.0)
+
+    @patch("qlib.data.D")
+    @patch("app.services.quant.backtest_engine.init_qlib", return_value=True)
+    def test_run_backtest_qlib_optimize_falls_back_honestly(self, mock_init, mock_D):
+        """C1: qlib 后端不支持 optimize → 保持 TopkDropout 并如实报告。"""
+        score_df, raw, bench_raw, dates, stocks = self._make_mock_data()
+        mock_D.features.side_effect = [raw, bench_raw]
+
+        result = run_backtest(
+            score_df, start="2024-01-01", end="2024-01-14",
+            topk=3, n_drop=1, portfolio_method="optimize",
+        )
+        assert result["portfolio_method"] == "topk_dropout"
+
+    @patch("qlib.data.D")
+    @patch("app.services.quant.backtest_engine.init_qlib", return_value=True)
     def test_run_backtest_limit_up_filtered(self, mock_init, mock_D):
         """涨停股票不可买入：构造一个涨停场景验证过滤逻辑。"""
         np.random.seed(99)

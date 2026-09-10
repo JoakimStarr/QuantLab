@@ -12,7 +12,8 @@ class Strategy(Base):
     description = Column(Text, nullable=True)
     # 关联因子 id 列表，JSON 字符串 [1,2,3]
     factor_ids = Column(Text, nullable=False, default="[]")
-    # 因子组合方式：equal_weight / ic_weight / lightgbm / stacking
+    # 因子组合方式：equal_weight / ic_weight / ir_weight
+    # （lightgbm/stacking 已移除：ML 因子组合由 Mining 的 AutoML 覆盖，策略层不宣传未实现项）
     combination_method = Column(String, default="equal_weight")
     # 选股参数
     topk = Column(Integer, default=50)

@@ -106,6 +106,17 @@ def run_vbt_backtest(
                          index=price_df.index, columns=price_df.columns)
     size = pd.DataFrame(np.nan, index=price_df.index, columns=price_df.columns)
 
+    # 组合优化（portfolio_method="optimize"）：由因子分数产出目标权重后按权重
+    # sizing；优化器内部回退链 skfolio → scipy → 等权（optimizer 内记 WARNING）
+    optimize_weights = portfolio_method == "optimize"
+    used_optimize = False
+    if optimize_weights:
+        try:
+            from app.services.quant.portfolio_optimizer import optimize_portfolio
+        except Exception as e:  # noqa: BLE001
+            logger.warning("组合优化器不可用，回退 TopkDropout 等权: %s", e)
+            optimize_weights = False
+
     holdings = set()
     for date in sorted(rebalance_dates):
         if date not in price_df.index:
@@ -143,14 +154,33 @@ def run_vbt_backtest(
         drop_insts = [c for c in holdings if c not in set(selected)]
         if drop_insts:
             exits.loc[date, drop_insts] = True
-        # 新入选持仓：发买入信号（等权）
+        # 组合优化权重：对入选截面跑 optimize_portfolio（单股上限需 >= 1/n
+        # 才可行，放宽到 2 倍等权以允许适度超配高分股）
+        weights = None
+        if optimize_weights:
+            try:
+                sel_scores = rank.reindex(selected).dropna()
+                weights = optimize_portfolio(
+                    sel_scores, max_weight=max(0.05, 2.0 / len(selected))
+                )
+                used_optimize = True
+            except Exception as e:  # noqa: BLE001
+                logger.warning("组合优化失败，本调仓日回退等权: %s", e)
+        # 新入选持仓：发买入信号（优化权重 / 等权）
         buy_insts = [c for c in selected if c not in holdings]
+        if weights is not None:
+            buy_insts = [c for c in buy_insts if float(weights.get(c, 0.0)) > 0]
         if buy_insts:
             entries.loc[date, buy_insts] = True
             # size_type="Value" 是绝对金额（现金单位），不是权重。
-            # 传入 capital/topk 使每个入选股买入等额（初始资金等权），
+            # 等权：传入 capital/topk 使每个入选股买入等额（初始资金等权），
             # 否则把 1/topk 权重当金额会导致组合几乎空仓、收益趋近 0。
-            size.loc[date, buy_insts] = init_cash / topk
+            # 优化：按目标权重 × 初始资金定金额（与等权同口径的近似）。
+            if weights is not None:
+                for c in buy_insts:
+                    size.loc[date, c] = float(weights.get(c, 0.0)) * init_cash
+            else:
+                size.loc[date, buy_insts] = init_cash / topk
         holdings = set(selected)
 
     if not entries.any().any():
@@ -269,7 +299,10 @@ def run_vbt_backtest(
         "n_drop": n_drop,
         "rebalance_freq": rebalance_freq,
         "benchmark_code": benchmark,
-        "portfolio_method": portfolio_method or "topk_dropout",
+        # 报告实际生效的组合方式：请求 optimize 但优化器全程不可用时不假装成功
+        "portfolio_method": (
+            "optimize" if (portfolio_method == "optimize" and used_optimize) else "topk_dropout"
+        ),
     }
 
 

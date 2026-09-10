@@ -224,7 +224,9 @@ def run_backtest(
     Args:
         score_df: MultiIndex (datetime, instrument) 含 'score' 列
         rebalance_freq: day（每日）/ week（每5交易日）/ month（月初）
-        portfolio_method: equal_weight（默认）/ cvxpy_optimize
+        portfolio_method: topk_dropout（默认，等权）/ optimize（组合优化权重，
+            仅 vbt 后端生效：optimize_portfolio 由因子分数产出目标权重后按权重
+            sizing；qlib 后端保持 TopkDropout 并在结果里报告实际生效值）
     Returns:
         {returns, benchmark, turnover, portfolios, start_date, end_date, ...}
     """
@@ -245,6 +247,8 @@ def run_backtest(
             asset_class=asset_class,
         )
 
+    # qlib 后端：portfolio_method="optimize" 不便接权重（TopkDropout 等权），
+    # 由 run_qlib_backtest 回退为 topk_dropout 并在结果里报告实际生效值。
     init_qlib()
     from app.services.quant.qlib_backtest import run_qlib_backtest
     return run_qlib_backtest(

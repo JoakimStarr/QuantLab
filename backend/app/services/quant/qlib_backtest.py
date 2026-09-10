@@ -260,6 +260,13 @@ def run_qlib_backtest(
             logger.debug("解析持仓失败 date=%s: %s", date_key, e)
         portfolios.append({"date": str(date_key), "holdings": holdings})
 
+    if portfolio_method == "optimize":
+        # qlib 后端 TopkDropout 不支持外部权重：明确回退，不让 optimize 静默假装生效
+        logger.warning("qlib 后端不支持 portfolio_method='optimize'，保持 TopkDropout 等权")
+        effective_portfolio_method = "topk_dropout"
+    else:
+        effective_portfolio_method = portfolio_method or "topk_dropout"
+
     return {
         "returns": returns,
         "benchmark": bench,
@@ -272,5 +279,18 @@ def run_qlib_backtest(
         "n_drop": n_drop,
         "rebalance_freq": rebalance_freq,
         "benchmark_code": benchmark,
-        "portfolio_method": portfolio_method or "topk_dropout",
+        "portfolio_method": effective_portfolio_method,
+        # 成交披露：trades 由持仓快照差分重构，非交易所级订单
+        "reconstructed": True,
+        "trade_reconstruction": {
+            "method": "position_snapshot_diff",
+            "note": "成交明细由每日持仓快照差分重构，非交易所级订单；成本按固定费率估算",
+            "deal_price": "每日收盘价（T+1）",
+            "cost_model": {
+                "cost_buy": cost_buy,
+                "cost_sell": cost_sell,
+                "min_cost": min_cost,
+                "impact_cost": slippage_bps / 10000.0 if slippage_bps > 0 else 0.0,
+            },
+        },
     }
