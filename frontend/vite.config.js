@@ -115,7 +115,16 @@ export default defineConfig(({ mode }) => {
           // 导致 barrel 被强制纳入图、破坏 tree-shaking。
           manualChunks(id) {
             if (!id.includes('node_modules/')) return
-            if (id.includes('element-plus') || id.includes('@element-plus/icons-vue')) return 'vendor-element'
+            // Element Plus 不再整包打进单一 vendor-element：那样会把全部组件 + 全量 CSS
+            // 提为入口静态依赖，导致 /login 等任意路由都预载 ~600KB JS + ~257KB CSS。
+            // 仅把 main.js 入口直接引用的 message/loading/notification（服务式组件）
+            // 聚合为一个很小的 eager chunk；其余 EP 组件不强制分组，交由 Rollup 依
+            // 各视图的动态 import 自动代码分割（按需加载）。
+            if (id.includes('element-plus') || id.includes('@element-plus/icons-vue')) {
+              const eagerService = ['/components/message/', '/components/loading/', '/components/notification/']
+              if (eagerService.some((p) => id.includes(p))) return 'vendor-element-eager'
+              return
+            }
             if (id.includes('/echarts/') || id.includes('vue-echarts') || id.includes('/zrender/')) return 'vendor-echarts'
             if (id.includes('/vue/') || id.includes('vue-router') || id.includes('/pinia/') || id.includes('@vue/')) return 'vendor-vue'
             if (id.includes('/axios/') || id.includes('/dayjs/')) return 'vendor-utils'

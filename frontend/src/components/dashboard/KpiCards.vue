@@ -96,7 +96,7 @@ const kpiCards = computed(() => {
       sub: `内置 ${factorBySource.builtin} / LLM ${factorBySource.llm} / 符号 ${factorBySource.symbolic}`,
       icon: Coin,
       iconColor: 'var(--primary)',
-      to: 'FactorLibrary',
+      to: 'FactorLibraryV2',
     },
     {
       key: 'strategy',

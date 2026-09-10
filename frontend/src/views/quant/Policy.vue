@@ -469,7 +469,7 @@
 </template>
 
 <script setup>
-defineOptions({ name: 'QuantPolicy' })
+defineOptions({ name: 'Policy' })
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom } from '@element-plus/icons-vue'

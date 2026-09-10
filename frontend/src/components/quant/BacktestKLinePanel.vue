@@ -46,6 +46,7 @@ import { ElMessage } from 'element-plus/es/components/message/index'
 import SymbolSearchSelect from '@/components/common/SymbolSearchSelect.vue'
 import { getIndexKline } from '@/api/market'
 import { klineChartOption, buildTradeMarks } from '@/utils/klineChart'
+import { chartTheme } from '@/utils/chartTheme'
 
 const props = defineProps({
   result: { type: Object, default: null },

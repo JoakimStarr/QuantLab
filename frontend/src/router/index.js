@@ -30,17 +30,6 @@ const routes = [
         },
       },
       {
-        path: 'quant/factors',
-        name: 'FactorLibrary',
-        component: () => import('@/views/quant/FactorLibrary.vue'),
-        meta: {
-          title: '因子库（旧版）',
-          icon: 'Coin',
-          transition: 'fade-in-up',
-          keepAlive: true,
-        },
-      },
-      {
         path: 'quant/factor-library',
         name: 'FactorLibraryV2',
         component: () => import('@/views/quant/FactorLibraryV2.vue'),

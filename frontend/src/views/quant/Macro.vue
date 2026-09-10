@@ -116,7 +116,7 @@
 </template>
 
 <script setup>
-defineOptions({ name: 'QuantMacro' })
+defineOptions({ name: 'Macro' })
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { CaretTop, CaretBottom, CaretRight } from '@element-plus/icons-vue'
