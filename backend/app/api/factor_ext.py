@@ -1,5 +1,4 @@
 """因子扩展 API：对比、衰减分析、导出、自动入库"""
-import asyncio
 import csv
 import io
 import json
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.cache import TTLCache
 from app.core.errors import AppError
+from app.core.executor import run_io_cpu
 from app.schemas.common import ApiResponse
 from app.services.factor.factor_compare import compare_factors, get_factor_decay
 from app.services.factor.library import get_factor, list_factors
@@ -188,11 +188,20 @@ async def auto_import_factors_api(
     if not result_ids:
         return ApiResponse(ok=False, error={"code": "NO_FACTORS", "message": "任务无结果因子", "status": 400})
 
-    # 检查哪些因子已入库，哪些需要导入
+    # 检查哪些因子已入库，哪些需要导入（单次 IN 查询，避免逐 ID N+1）
+    from sqlalchemy import select
+    from app.models.factor import Factor
+
+    async with async_session() as session:
+        rows = await session.execute(
+            select(Factor.id, Factor.name, Factor.ic).where(Factor.id.in_(result_ids))
+        )
+        existing_map = {r.id: {"id": r.id, "name": r.name, "ic": r.ic} for r in rows.all()}
+
     imported = []
     skipped = []
     for fid in result_ids:
-        existing = await get_factor(fid)
+        existing = existing_map.get(fid)
         if existing:
             # 已入库，检查 IC 是否达标
             if existing.get("ic") and abs(existing["ic"]) >= ic_threshold:
@@ -313,6 +322,7 @@ async def quantile_analysis_api(
     from app.services.factor.library import get_factor
     from app.services.quant.factor_eval import (
         compute_quantile_returns,
+        load_close_prices,
         load_factor_values,
         load_label,
     )
@@ -336,10 +346,13 @@ async def quantile_analysis_api(
     def _compute_quantile():
         factor_df = load_factor_values(factor["expression"], start, end)
         return_df = load_label(start, end)
-        return compute_quantile_returns(factor_df, return_df, n_groups=n_groups)
+        prices_df = load_close_prices(start, end)
+        return compute_quantile_returns(
+            factor_df, return_df, n_groups=n_groups, prices_df=prices_df
+        )
 
     try:
-        result = await asyncio.get_running_loop().run_in_executor(None, _compute_quantile)
+        result = await run_io_cpu(_compute_quantile)
     except Exception as e:
         logger.warning("分组收益数据加载失败 factor_id=%s: %s", factor_id, e)
         return ApiResponse(ok=False, error={"code": "DATA_LOAD_ERROR", "message": str(e), "status": 500})
@@ -392,14 +405,25 @@ async def neutralize_factor_api(
         factor_df_before = load_factor_values(factor["expression"], start, end)
         label_df = load_label(start, end)
         ic_before = compute_ic(factor_df_before, label_df)
-        factor_df_after = load_factor_values(
-            factor["expression"], start, end, neutralize=neutralize_method
-        )
+        # 复用已加载的因子值，在内存内套用中性化，避免同一表达式重复全量 qlib 读取
+        market = settings.quant.get("universe", "csi300")
+        if market.startswith("etf"):
+            # 与 load_factor_values 一致：ETF 无市值/行业数据，跳过中性化
+            factor_df_after = factor_df_before
+        else:
+            from app.services.factor.neutralize import industry_neutralize, market_cap_neutralize
+            if neutralize_method == "market_cap":
+                factor_df_after = market_cap_neutralize(factor_df_before, factor_col="factor")
+            else:
+                factor_df_after = industry_neutralize(factor_df_before, factor_col="factor")
+            factor_df_after = factor_df_after.copy()
+            factor_df_after["factor"] = factor_df_after["factor_neutralized"]
+            factor_df_after = factor_df_after.drop(columns=["factor_neutralized"])
         ic_after = compute_ic(factor_df_after, label_df)
         return ic_before, ic_after
 
     try:
-        ic_before, ic_after = await asyncio.get_running_loop().run_in_executor(None, _compute_neutralize)
+        ic_before, ic_after = await run_io_cpu(_compute_neutralize)
     except Exception as e:
         logger.warning("因子中性化失败 factor_id=%s: %s", factor_id, e)
         return ApiResponse(ok=False, error={"code": "NEUTRALIZE_ERROR", "message": str(e), "status": 500})
@@ -418,9 +442,8 @@ async def neutralize_factor_api(
 
 
 # ==================== 因子深度分析 ====================
-# 深度分析结果缓存：key=factor_id|start|end|horizon|n_groups|ic_window，TTL 1 小时
-_deep_analysis_cache: dict = {}
-_DEEP_CACHE_TTL = 3600
+# 深度分析结果缓存：key=factor_id|start|end|horizon|n_groups|ic_window，TTL 1 小时、上限 64 条
+_deep_analysis_cache = TTLCache(ttl=3600, maxsize=64)
 
 
 @router.get("/{factor_id}/deep-analysis")
@@ -434,10 +457,7 @@ async def deep_analysis_api(
     universe: str = Query(None, description="标的池 csi300/csi500/all/etf_all"),
 ):
     """因子深度分析：IC 分布/时序/显著性 + horizon 调仓分层净值 + 换手率曲线 + 衰减。"""
-    import time
-
     from app.core.config import settings
-    from app.core.executor import run_io_cpu
     from app.services.quant.factor_eval import deep_analyze_factor
     from app.services.quant.qlib_init import is_qlib_available
 
@@ -454,10 +474,9 @@ async def deep_analysis_api(
 
     # 缓存命中直接返回（含 factor_id/factor_name）
     cache_key = f"{factor_id}|{start}|{end}|{horizon}|{n_groups}|{ic_window}|{universe}"
-    now = time.time()
     cached = _deep_analysis_cache.get(cache_key)
-    if cached and (now - cached["ts"]) < _DEEP_CACHE_TTL:
-        return ApiResponse(ok=True, data=cached["data"])
+    if cached is not None:
+        return ApiResponse(ok=True, data=cached)
 
     # 线程池执行：qlib C 扩展释放 GIL；不用 run_cpu（进程池）避免 reload 关停时
     # atexit join 进程池导致服务卡死（与因子评价同源事故）
@@ -475,7 +494,7 @@ async def deep_analysis_api(
 
     result["factor_id"] = factor_id
     result["factor_name"] = factor.get("name")
-    _deep_analysis_cache[cache_key] = {"ts": now, "data": result}
+    _deep_analysis_cache.set(cache_key, result)
     return ApiResponse(ok=True, data=result)
 
 

@@ -238,8 +238,8 @@ const statCards = computed(() => {
   const hasPermP = s.perm_pvalue != null && s.perm_pvalue !== '' && !Number.isNaN(Number(s.perm_pvalue))
   const permP = hasPermP ? Number(s.perm_pvalue) : null
   return [
-    { key: 'ic_mean', label: 'IC 均值', value: fmtNum(s.ic_mean, 4), cls: numClass(s.ic_mean) },
-    { key: 'icir', label: 'ICIR', value: fmtNum(s.icir, 3), cls: numClass(s.icir) },
+    { key: 'rank_ic_mean', label: 'RankIC 均值', value: fmtNum(s.rank_ic_mean ?? s.ic_mean, 4), cls: numClass(s.rank_ic_mean ?? s.ic_mean) },
+    { key: 'rank_icir', label: 'RankICIR', value: fmtNum(s.rank_icir ?? s.icir, 3), cls: numClass(s.rank_icir ?? s.icir) },
     {
       key: 't_stat',
       label: 't-stat',
@@ -328,7 +328,7 @@ const icDistOption = computed(() => {
   const { bins, counts } = icDistribution.value
   const centers = bins.map(binCenter)
   const allNumeric = centers.length > 0 && centers.every((c) => !Number.isNaN(c))
-  const icMean = Number(summary.value.ic_mean)
+  const icMean = Number(summary.value.rank_ic_mean ?? summary.value.ic_mean)
   const base = { type: 'bar', barCategoryGap: '0%', itemStyle: { color: colors[4] } }
   if (allNumeric) {
     const data = centers.map((c, i) => [c, counts[i]])

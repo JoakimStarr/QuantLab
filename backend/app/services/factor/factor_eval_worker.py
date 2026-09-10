@@ -109,16 +109,33 @@ def spawn_factor_eval_worker(job_id: int) -> subprocess.Popen:
 
 # ----------------------------- 任务执行 -----------------------------
 
-def _evaluate_one(expr: str, start: str, end: str, universe: str = None) -> dict:
-    """同步执行单因子评价（worker 内以 to_thread 运行，不嵌套进程池）。"""
-    from app.core.config import settings
+def _preload_shared(start: str, end: str, universe: str, horizon: int):
+    """任务级预加载：主 horizon 标签 + $close，供该 job 所有因子复用。
+
+    避免每个因子在 evaluate_factor 内重复 load_label / compute_decay 的
+    $close 全量 qlib 读取（原本每因子约 6 次全量加载）。
+    """
     from app.services.quant import factor_eval as fe
 
-    horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
+    label_expr = fe.forward_return_label(horizon)
+    label_df = fe.load_label(start, end, label_expr=label_expr, universe=universe)
+    close_df = fe.load_close_df(start, end, universe)
+    return label_df, close_df
+
+
+def _evaluate_one(
+    expr: str, start: str, end: str, universe: str,
+    horizon: int, preloaded_label_df=None, preloaded_close_df=None,
+) -> dict:
+    """同步执行单因子评价（worker 内以 to_thread 运行，不嵌套进程池）。"""
+    from app.services.quant import factor_eval as fe
+
     # 与 api 手动评价一致：额外计算 1/10/20 天周期 IC
     return fe.evaluate_factor(
         expr, start, end, universe=universe,
         horizon=horizon, horizons=[1, 5, 10, 20],
+        preloaded_label_df=preloaded_label_df,
+        preloaded_close_df=preloaded_close_df,
     )
 
 
@@ -176,6 +193,21 @@ async def _run_inner(job_id: int) -> None:
         job.error = None
         await session.commit()
 
+    # 任务级预加载 label + $close：所有因子共用，避免逐因子重复全量 qlib IO。
+    # 预加载失败（如数据缺失）时降级为 None，由 evaluate_factor 自行加载，行为不变。
+    from app.core.config import settings
+
+    horizon = settings.mining.get("llm", {}).get("eval_horizon", 5)
+    preloaded_label_df = None
+    preloaded_close_df = None
+    try:
+        preloaded_label_df, preloaded_close_df = await asyncio.to_thread(
+            _preload_shared, payload["start_date"], payload["end_date"],
+            payload["universe"], horizon,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("预加载 label/$close 失败，回退逐因子加载", exc_info=True)
+
     result_map = {}
     ok = 0
     failed = 0
@@ -196,7 +228,7 @@ async def _run_inner(job_id: int) -> None:
             try:
                 metrics = await asyncio.to_thread(
                     _evaluate_one, expr, payload["start_date"], payload["end_date"],
-                    payload["universe"],
+                    payload["universe"], horizon, preloaded_label_df, preloaded_close_df,
                 )
                 await _update_factor_metrics(fid, metrics)
                 result_map[str(fid)] = {

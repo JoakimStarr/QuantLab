@@ -1,9 +1,8 @@
 """经典策略库 API：教学卡片列表 + 一键回测。
 
 前缀 /classic-strategies，与 /strategy-library（规则模板）和 /strategies/{id}（持久化策略）区分。
-回测是阻塞计算，经 run_in_executor 放入线程池执行，不阻塞事件循环。
+回测是阻塞计算，经受管 IO 线程池执行，不阻塞事件循环。
 """
-import asyncio
 import logging
 from datetime import datetime
 
@@ -11,6 +10,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from app.core.errors import AppError
+from app.core.executor import run_io_cpu
 from app.schemas.common import ApiResponse
 
 logger = logging.getLogger(__name__)
@@ -63,8 +63,8 @@ async def run_classic_strategy_api(req: ClassicBacktestRequest):
         params["initial_capital"] = req.initial_capital
 
     try:
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, run_classic_strategy, req.key, params, req.start, req.end,
+        result = await run_io_cpu(
+            run_classic_strategy, req.key, params, req.start, req.end,
         )
     except ValueError as e:
         raise AppError("BACKTEST_FAILED", str(e), 422) from e
@@ -215,18 +215,21 @@ async def factor_analysis_api(
     universe = universe or spec["defaults"].get("universe") or settings.quant.get("universe", "csi300")
 
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, compute_ic, compute_quantile_returns,
+        load_factor_values, load_label, load_close_prices, compute_ic, compute_quantile_returns,
     )
 
     def _compute():
         factor_df = load_factor_values(spec["expression"], start, end, universe=universe)
         return_df = load_label(start, end, universe=universe)
+        prices_df = load_close_prices(start, end, universe=universe)
         ic = compute_ic(factor_df, return_df)
-        quantile = compute_quantile_returns(factor_df, return_df, n_groups=5)
+        quantile = compute_quantile_returns(
+            factor_df, return_df, n_groups=5, prices_df=prices_df
+        )
         return ic, quantile
 
     try:
-        ic, quantile = await asyncio.get_running_loop().run_in_executor(None, _compute)
+        ic, quantile = await run_io_cpu(_compute)
     except Exception as e:  # noqa: BLE001
         logger.warning("经典策略因子分析失败 key=%s: %s", key, e)
         raise AppError("FACTOR_ANALYSIS_FAILED", f"因子分析失败: {e}", 500) from e

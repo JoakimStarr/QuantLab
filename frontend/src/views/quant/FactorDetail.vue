@@ -818,7 +818,7 @@ const icDistOption = computed(() => {
   const { bins, counts } = icDistribution.value
   const centers = bins.map(binCenter)
   const allNumeric = centers.length > 0 && centers.every((c) => !Number.isNaN(c))
-  const icMean = Number(deepResult.value?.summary?.ic_mean)
+  const icMean = Number(deepResult.value?.summary?.rank_ic_mean ?? deepResult.value?.summary?.ic_mean)
   const base = { type: 'bar', barCategoryGap: '0%', itemStyle: { color: colors[4] } }
   if (allNumeric) {
     const data = centers.map((c, i) => [c, counts[i]])

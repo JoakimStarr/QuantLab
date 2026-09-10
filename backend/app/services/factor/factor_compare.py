@@ -1,6 +1,5 @@
 """因子对比与衰减分析服务"""
 import json
-import asyncio
 import logging
 import time
 import numpy as np
@@ -8,9 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from sqlalchemy import select
 from app.core.database import async_session
+from app.core.executor import run_io_cpu
 from app.models.factor import Factor
 from app.services.quant.factor_eval import (
-    load_factor_values, load_label, compute_ic, compute_decay, compute_daily_ic_series
+    load_factor_values, load_label, load_close_df, compute_ic, compute_decay, compute_daily_ic_series
 )
 
 logger = logging.getLogger(__name__)
@@ -53,15 +53,14 @@ async def compare_factors(factor_ids: list[int], start: str, end: str) -> dict:
     if not factors:
         return {"error": "未找到指定因子"}
 
-    # 在线程池中执行 qlib 计算（CPU 密集）
-    loop = asyncio.get_running_loop()
-    factor_data = await loop.run_in_executor(
-        None, _compute_comparison_sync, factors, start, end
+    # 受管 IO 线程池执行 qlib 计算（CPU/IO 密集，避免占满事件循环）
+    factor_data = await run_io_cpu(
+        _compute_comparison_sync, factors, start, end
     )
     return factor_data
 
 
-def _compute_one(f, label_df, start: str, end: str) -> dict:
+def _compute_one(f, label_df, close_df, start: str, end: str) -> dict:
     """计算单个因子的 IC 指标 + 衰减 + IC 时序（供线程池并行调用）。"""
     try:
         try:
@@ -83,7 +82,8 @@ def _compute_one(f, label_df, start: str, end: str) -> dict:
         decay = json.loads(f.decay) if f.decay else None
         if not decay:
             try:
-                decay = compute_decay(factor_df, label_df, max_lag=10)
+                decay = compute_decay(factor_df, label_df, max_lag=10,
+                                      preloaded_close_df=close_df)
             except Exception:
                 decay = {}
 
@@ -139,12 +139,17 @@ def _compute_comparison_sync(factors, start: str, end: str) -> dict:
     decay_data = []
     ic_timeseries = []
 
-    # 标签对所有因子相同，只加载一次（旧实现每因子循环内重复加载 N 次）
+    # 标签与价格对所有因子相同，各只加载一次（旧实现每因子循环内重复加载 N 次）
     label_df = load_label(start, end)
+    # $close 供 decay 复用；缺失时置 None，compute_decay 回退自行加载
+    try:
+        close_df = load_close_df(start, end)
+    except ValueError:
+        close_df = None
 
     # 因子间并行计算（qlib C 扩展释放 GIL，4 并发参照 alpha158 已验证的并发上限）
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_compute_one, f, label_df, start, end) for f in factors]
+        futures = [pool.submit(_compute_one, f, label_df, close_df, start, end) for f in factors]
         for fut in futures:
             out = fut.result()
             results.append(out["result"])
@@ -188,10 +193,9 @@ async def get_factor_decay(factor_id: int, max_lag: int = 20) -> dict:
         start = period.get("start", "2020-01-01")
         end = period.get("end", "2024-12-31")
 
-        loop = asyncio.get_running_loop()
         try:
-            decay = await loop.run_in_executor(
-                None, _compute_decay_sync, f.expression, start, end, max_lag
+            decay = await run_io_cpu(
+                _compute_decay_sync, f.expression, start, end, max_lag
             )
         except FileNotFoundError as e:
             # AutoML bundle 丢失等不可恢复错误：返回友好错误而非 500

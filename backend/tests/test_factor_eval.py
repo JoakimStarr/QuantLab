@@ -234,12 +234,65 @@ class TestQuantileReturnsIndexOrder:
     def test_quantile_returns_works_with_qlib_index(self):
         from app.services.quant.factor_eval import compute_quantile_returns
 
-        fdf, ldf, _cdf = _make_qlib_style_data()
-        result = compute_quantile_returns(fdf, ldf, n_groups=5)
+        fdf, ldf, cdf = _make_qlib_style_data()
+        prices = cdf["$close"].unstack(level="instrument")
+        result = compute_quantile_returns(fdf, ldf, n_groups=5, prices_df=prices)
         assert result.get("error") is None, f"不应报错: {result.get('error')}"
         assert "group_returns" in result
         assert result.get("n_groups") == 5
         assert len(result.get("group_returns", {})) == 5
+
+    def test_quantile_returns_requires_real_prices(self):
+        """缺失真实 prices_df 时明确报错，不再退回前向收益反推的假价格（A3）。"""
+        from app.services.quant.factor_eval import compute_quantile_returns
+
+        fdf, ldf, _cdf = _make_qlib_style_data()
+        with pytest.raises(ValueError):
+            compute_quantile_returns(fdf, ldf, n_groups=5)
+
+
+class TestDeepAnalyzeRankICNaming:
+    """A5：deep_analyze_factor summary 的均值/ICIR 实为 RankIC 口径，须正名并保留兼容别名。"""
+
+    def test_summary_rank_ic_fields_with_aliases(self, monkeypatch):
+        import app.services.quant.factor_eval as fe
+        import app.services.quant.monte_carlo as mc
+
+        fdf, ldf, cdf = _make_qlib_style_data()
+        monkeypatch.setattr(fe, "load_factor_values", lambda *a, **k: fdf)
+        monkeypatch.setattr(fe, "load_label", lambda *a, **k: ldf)
+        monkeypatch.setattr(fe, "load_close_df", lambda *a, **k: cdf)
+        monkeypatch.setattr(mc, "permutation_ic_test", lambda *a, **k: {
+            "p_value": 0.1, "significant": False, "n_permutations": 0, "note": "test",
+        })
+
+        result = fe.deep_analyze_factor("$close", "2024-01-01", "2024-12-31")
+        s = result["summary"]
+        assert "rank_ic_mean" in s and "rank_ic_std" in s and "rank_icir" in s
+        # 旧字段保留为同值兼容别名
+        assert s["ic_mean"] == s["rank_ic_mean"]
+        assert s["ic_std"] == s["rank_ic_std"]
+        assert s["icir"] == s["rank_icir"]
+
+
+class TestComputeICPearsonVsRankIC:
+    """A5 口径澄清：compute_ic 的 ic/icir 是 Pearson，rank_ic/ir 是 Spearman，不得混淆。"""
+
+    def test_pearson_and_rank_differ_on_monotonic_nonlinear(self):
+        from app.services.quant.factor_eval import compute_ic
+
+        dates = pd.date_range("2024-01-01", periods=3, freq="B")
+        stocks = [f"s{i}" for i in range(6)]
+        idx = pd.MultiIndex.from_product([dates, stocks], names=["datetime", "instrument"])
+        # 单调非线性：factor 递增，label = factor**3 → Spearman=1，Pearson<1
+        vals = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        factor_flat = vals * len(dates)
+        label_flat = [v ** 3 for v in vals] * len(dates)
+        fdf = pd.DataFrame({"factor": factor_flat}, index=idx)
+        ldf = pd.DataFrame({"label": label_flat}, index=idx)
+        result = compute_ic(fdf, ldf)
+        assert result["rank_ic"] == pytest.approx(1.0, abs=1e-6)
+        assert result["ic"] < 1.0
 
 
 class TestLoadFactorValuesEtfNeutralizeSkip:

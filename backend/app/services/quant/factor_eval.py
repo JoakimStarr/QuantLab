@@ -314,6 +314,27 @@ def load_label(start: str, end: str, label_expr: str = None, universe: str = Non
     return df.rename(columns={df.columns[0]: "label"})
 
 
+def load_close_df(start: str, end: str, universe: str = None) -> pd.DataFrame:
+    """加载 $close 原始 MultiIndex(instrument, datetime) DataFrame（列 $close）。
+
+    供 compute_decay 的 preloaded_close_df、分层回测等复用，避免重复全量 qlib IO。
+    """
+    init_qlib()
+    from qlib.data import D
+    market = universe or settings.quant.get("universe", "csi300")
+    instruments = _load_instrument_spans(market)
+    close_df = D.features(instruments, ["$close"], start_time=start, end_time=end, freq="day")
+    if close_df is None or close_df.empty:
+        raise ValueError("$close 价格数据为空")
+    return close_df
+
+
+def load_close_prices(start: str, end: str, universe: str = None) -> pd.DataFrame:
+    """加载 $close 宽表（datetime × instrument），供分层收益等价格输入使用。"""
+    close_df = load_close_df(start, end, universe)
+    return close_df["$close"].unstack(level="instrument")
+
+
 def _to_alphalens_factor_data(factor_df: pd.DataFrame, label_df: pd.DataFrame,
                               period_name: str = "1D") -> pd.DataFrame | None:
     """将 (factor_df, label_df) 转换为 alphalens 兼容格式。
@@ -558,11 +579,12 @@ def compute_quantile_returns(
     n_groups: int = 5,
     factor_col: str = "factor",
     return_col: str = "label",
+    prices_df: pd.DataFrame = None,
 ) -> dict:
     """计算因子分组收益（分层回测）。
 
     使用 alphalens 进行分层收益计算：
-    1. 从前向收益重构 mock prices（收益尺度不变，仅用作 alphalens 输入）
+    1. 使用调用方传入的真实价格（$close 宽表 datetime × instrument）
     2. 用 alphalens 计算各分位组日均收益
     3. 输出各组净值曲线、多空收益及组间收益单调性
 
@@ -573,6 +595,8 @@ def compute_quantile_returns(
         n_groups: 分组数
         factor_col: 因子值列名
         return_col: 收益列名（默认 label，与 load_label 一致）
+        prices_df: 真实价格宽表（datetime × instrument）。必传；不再用前向
+            收益反推假价格。
 
     Returns:
         {group_returns, group_nav, group_stats, long_short_returns,
@@ -583,13 +607,13 @@ def compute_quantile_returns(
     if merged.empty:
         return {"error": "无有效数据"}
 
-    # 从前向收益重构 mock prices（alphalens 需要 prices 而非直接的前向收益）
-    # 构造方法：每个 instrument 独立，price_t = 100 * cumprod(1 + return_{<t})
-    ret_wide = merged[return_col].unstack(level="instrument")
-    # 极端值裁剪，避免 mock prices 爆炸
-    ret_clipped = ret_wide.clip(-0.5, 1.0)
-    price_wide = 100.0 * (1 + ret_clipped).cumprod()
-    price_wide = price_wide.ffill().bfill()
+    # 分层回测必须使用真实价格：缺失则明确报错，禁止退回前向收益反推的假价格
+    if prices_df is None or prices_df.empty:
+        raise ValueError(
+            "compute_quantile_returns 需要真实 prices_df（$close 宽表 datetime × instrument），"
+            "不再用前向收益反推假价格"
+        )
+    price_wide = prices_df
 
     # 因子 Series
     factor_s = merged[factor_col].copy()
@@ -969,14 +993,8 @@ def deep_analyze_factor(
     label_expr = forward_return_label(horizon)
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
 
-    # $close 转 wide（datetime × instrument）用于 horizon 调仓分层净值
-    init_qlib()
-    from qlib.data import D
-    market = universe or settings.quant.get("universe", "csi300")
-    instruments = _load_instrument_spans(market)
-    close_df = D.features(instruments, ["$close"], start_time=start, end_time=end, freq="day")
-    if close_df is None or close_df.empty:
-        raise ValueError("$close 价格数据为空，无法计算分层净值")
+    # $close 只加载一次：原始 MultiIndex 供 compute_decay 复用，wide 供分层净值使用
+    close_df = load_close_df(start, end, universe)
     prices_df = close_df["$close"].unstack(level="instrument")
 
     ic_distribution = compute_ic_distribution(factor_df, label_df)
@@ -1004,11 +1022,14 @@ def deep_analyze_factor(
         factor_df, prices_df, n_groups=n_groups, horizon=horizon
     )
     turnover_curve = compute_turnover_curve(factor_df, n_groups=n_groups, horizon=horizon)
-    decay = compute_decay(factor_df, label_df)
+    # 复用上面已加载的 $close（raw），避免 compute_decay 重复全量 qlib IO
+    decay = compute_decay(factor_df, label_df, preloaded_close_df=close_df)
 
-    ic_mean = ic_distribution["stats"]["mean"]
-    ic_std = ic_distribution["stats"]["std"]
-    icir = float(ic_mean / ic_std) if ic_mean is not None and ic_std else None
+    # 注意：ic_distribution 来自 _daily_rank_ic_series（Spearman RankIC），
+    # 因此这里的均值/标准差/ICIR 均为 RankIC 口径，正名为 rank_ic_*，旧字段保留兼容。
+    rank_ic_mean = ic_distribution["stats"]["mean"]
+    rank_ic_std = ic_distribution["stats"]["std"]
+    rank_icir = float(rank_ic_mean / rank_ic_std) if rank_ic_mean is not None and rank_ic_std else None
 
     decay_lags = sorted(decay.keys())
     return {
@@ -1020,9 +1041,13 @@ def deep_analyze_factor(
             "ic_window": ic_window,
         },
         "summary": {
-            "ic_mean": ic_mean,
-            "ic_std": ic_std,
-            "icir": icir,
+            "rank_ic_mean": rank_ic_mean,
+            "rank_ic_std": rank_ic_std,
+            "rank_icir": rank_icir,
+            # 兼容旧字段（同值，实际均为 RankIC 口径）
+            "ic_mean": rank_ic_mean,
+            "ic_std": rank_ic_std,
+            "icir": rank_icir,
             "t_stat": ic_significance["t_stat"],
             "p_value": ic_significance["p_value"],
             "significant": ic_significance["significant"],
