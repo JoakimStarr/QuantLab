@@ -13,7 +13,6 @@ summary: 一句话说明
 """
 import re
 from pathlib import Path
-from typing import Optional
 
 # backend/app/services/docs/loader.py -> backend/app/services/docs/ -> backend/app/services/
 # -> backend/app/ -> backend/ -> 4 上一层到 backend, 再上一层到 QuantLab
@@ -246,7 +245,7 @@ def list_docs() -> list:
     return docs
 
 
-def get_doc(slug: str) -> Optional[dict]:
+def get_doc(slug: str) -> dict | None:
     """按 slug 获取文档内容。
 
     Returns:

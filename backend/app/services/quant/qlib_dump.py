@@ -12,8 +12,8 @@ qlib 的 DumpDataAll 功能：
 DumpDataAll 的 bin 格式与本项目自研格式一致：
 [start_index:float32] + [data:float32...]
 """
-import sys
 import os
+import sys
 
 # qlib 已以 editable 模式安装，scripts 目录在 qlib 包同级
 import qlib as _qlib

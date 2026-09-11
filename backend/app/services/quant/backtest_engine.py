@@ -6,8 +6,10 @@
 滑点：可选 slippage_bps（基点），默认 0。买入按 (1+slippage) 成交，卖出按 (1-slippage)。
 """
 import logging
+
 import numpy as np
 import pandas as pd
+
 from app.core.config import settings
 from app.services.quant.qlib_init import init_qlib
 
@@ -107,7 +109,10 @@ def compute_combine_weights(
         {factor_name: weight}，权重按绝对值归一化（和为 1，保留符号）
     """
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, _daily_rank_ic_series, forward_return_label,
+        _daily_rank_ic_series,
+        forward_return_label,
+        load_factor_values,
+        load_label,
     )
 
     label_expr = forward_return_label(horizon)

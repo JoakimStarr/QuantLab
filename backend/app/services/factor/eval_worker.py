@@ -62,7 +62,7 @@ def is_factor_eval_running(factor_id: int) -> bool:
     """该因子是否正在评价（有存活的评价 worker 子进程）。"""
     p = _pid_path(factor_id)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)  # 进程存在则返回，否则抛 ProcessLookupError
         return True

@@ -25,7 +25,7 @@ def broadcast_up_to_date(provider_uri: str, kind: str, fingerprint: dict) -> boo
     """指纹与上次广播一致 → True（可跳过广播）；无状态/不一致 → False。"""
     p = _state_path(provider_uri, kind)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             fcntl.flock(f, fcntl.LOCK_SH)
             state = json.load(f)
     except (FileNotFoundError, ValueError, OSError):

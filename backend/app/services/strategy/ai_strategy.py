@@ -23,7 +23,8 @@ async def _load_qualified_factors(limit: int = 30) -> list[dict]:
     与挖掘的 ic_threshold（0.02）口径一致——A 股截面 IC 0.02-0.03 已属可用，
     挖掘产出的因子可直接进入策略选因池。
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from app.core.config import settings
     from app.core.database import async_session
     from app.models.factor import Factor
@@ -68,7 +69,7 @@ async def _load_correlation_hint(factor_ids: list[int]) -> str:
                 a, b = factor_ids[i], factor_ids[j]
                 ica = [panel[d].get(a) for d in dates]
                 icb = [panel[d].get(b) for d in dates]
-                valid = [(x, y) for x, y in zip(ica, icb) if x is not None and y is not None]
+                valid = [(x, y) for x, y in zip(ica, icb, strict=False) if x is not None and y is not None]
                 if len(valid) >= 10:
                     xs = [x for x, _ in valid]
                     ys = [y for _, y in valid]
@@ -87,6 +88,7 @@ async def _existing_strategy_suffix(factor_ids: list[int], method: str) -> int:
     返回已存在的同组合策略数，0 表示无重复。
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.strategy import Strategy
 

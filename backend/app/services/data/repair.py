@@ -17,14 +17,13 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import async_session
 from app.models.baostock import StockDaily
-
 from app.services.data.data_clean import format_date_series
 from app.services.data.validation import run_validation
 
 logger = logging.getLogger(__name__)
 
 # stock_daily 列 -> _build_out_df 需要的 baostock 风格列名（收敛到 data_fields.py）
-from app.services.data.data_fields import STOCK_DB_TO_SRC_COL as _DB_TO_SRC_COL
+from app.services.data.data_fields import STOCK_DB_TO_SRC_COL as _DB_TO_SRC_COL  # noqa: E402
 
 
 def _db_rows_to_df(rows: list) -> "object":

@@ -1,12 +1,14 @@
-import json
-from json_repair import repair_json
 import asyncio
+import json
 import logging
+
 import httpx
-from openai import AsyncOpenAI
 import openai
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
-from app.core.errors import AIProviderUnavailableError, AINotConfiguredError
+from json_repair import repair_json
+from openai import AsyncOpenAI
+from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from app.core.errors import AINotConfiguredError, AIProviderUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +67,14 @@ class LLMClient:
 
         last_error = None
         # 外层最多 2 次：第一次带 response_format，不支持则降级重试
-        for attempt in range(2):
+        for _attempt in range(2):
             try:
                 return await self._call_with_retry(kwargs, force_json)
             except (openai.BadRequestError, ValueError) as e:
                 # JSONDecodeError 是 ValueError 的子类，优先判断
                 if isinstance(e, json.JSONDecodeError):
                     content_preview = str(e)[:200]
-                    raise AIProviderUnavailableError(f"返回结果非合法JSON: {content_preview}")
+                    raise AIProviderUnavailableError(f"返回结果非合法JSON: {content_preview}") from e
                 # 400：可能是 response_format 不支持，降级重试
                 if "response_format" in kwargs:
                     kwargs.pop("response_format", None)
@@ -83,14 +85,14 @@ class LLMClient:
                     continue
                 # 推理模型 reasoning 耗尽不可重试
                 if isinstance(e, ValueError) and "推理模型 reasoning 耗尽" in str(e):
-                    raise AIProviderUnavailableError(f"模型返回内容无效: {str(e)}")
+                    raise AIProviderUnavailableError(f"模型返回内容无效: {str(e)}") from e
                 raise AIProviderUnavailableError(
                     f"请求参数错误: {str(e)[:200]}"
                     if isinstance(e, openai.BadRequestError)
                     else f"模型返回内容无效: {str(e)}"
-                )
+                ) from e
             except Exception as e:
-                raise AIProviderUnavailableError(f"调用失败: {str(e)[:200]}")
+                raise AIProviderUnavailableError(f"调用失败: {str(e)[:200]}") from e
 
         raise AIProviderUnavailableError(f"所有重试均失败: {last_error}")
 

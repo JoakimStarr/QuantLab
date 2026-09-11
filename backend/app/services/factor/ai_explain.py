@@ -140,6 +140,7 @@ async def explain_and_update_factor(factor_id: int, force: bool = False) -> dict
         {"factor_id", "cached", "description", "explanation"}
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.factor import Factor
 
@@ -213,6 +214,7 @@ async def get_factor_ai_detail(factor_id: int) -> dict:
         {"factor_id", "description", "explanation", "chat_history"}
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.factor import Factor
 
@@ -240,6 +242,7 @@ async def chat_followup(factor_id: int, question: str) -> dict:
         {"factor_id", "answer", "chat_history"}
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.factor import Factor
 

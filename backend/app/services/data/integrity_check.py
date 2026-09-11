@@ -1,6 +1,7 @@
 """数据完整性校验：通过 qlib 直接加载验证 bin 数据可读性。"""
-import logging
 import datetime
+import logging
+
 from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)

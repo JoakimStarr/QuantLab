@@ -13,6 +13,7 @@
 """
 import asyncio
 import sys
+
 from app.core.database import init_db
 
 
@@ -23,7 +24,7 @@ async def main():
 
     # 1. qlib 初始化
     print("\n[1/6] qlib 初始化...")
-    from app.services.quant.qlib_init import init_qlib, QlibNotAvailableError
+    from app.services.quant.qlib_init import QlibNotAvailableError, init_qlib
     try:
         init_qlib()
         print("  ✓ qlib 已初始化")
@@ -59,8 +60,8 @@ async def main():
 
     # 4. 因子组合 + 回测
     print("\n[4/6] 因子组合 + 回测...")
-    from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors, run_backtest
+    from app.services.quant.factor_eval import load_factor_values
     try:
         f1 = load_factor_values("Ref($close, 20) / $close - 1", "2024-01-01", "2024-06-01")
         f2 = load_factor_values("Std($close / Ref($close, 1) - 1, 20)", "2024-01-01", "2024-06-01")

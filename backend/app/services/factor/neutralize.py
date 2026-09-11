@@ -5,18 +5,18 @@ A4 修复：市值中性化改为**逐日**使用 PIT 市值（pe_ttm × 按公�
 PIT 市值不可用时**明确告警并跳过**中性化，绝不静默回退实时快照。
 """
 import logging
+
 import numpy as np
 import pandas as pd
-from typing import Optional, Dict
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 logger = logging.getLogger(__name__)
 
 
-def _load_log_mcap(factor_df: pd.DataFrame) -> Optional[pd.Series]:
+def _load_log_mcap(factor_df: pd.DataFrame) -> pd.Series | None:
     """加载 PIT log 市值；失败返回 None（调用方告警后跳过）。"""
     try:
         from app.services.factor.market_cap_pit import load_pit_log_market_cap
@@ -26,8 +26,8 @@ def _load_log_mcap(factor_df: pd.DataFrame) -> Optional[pd.Series]:
         return None
 
 
-def _align_log_mcap(log_mcap: Optional[pd.Series],
-                    index: pd.MultiIndex) -> Optional[pd.Series]:
+def _align_log_mcap(log_mcap: pd.Series | None,
+                    index: pd.MultiIndex) -> pd.Series | None:
     """把 (datetime, instrument) 的 log 市值对齐到因子索引的层级顺序。"""
     if log_mcap is None or log_mcap.empty:
         return None
@@ -43,7 +43,7 @@ def _align_log_mcap(log_mcap: Optional[pd.Series],
 
 
 def _log_mcap_or_skip(factor_df: pd.DataFrame,
-                      market_cap: Optional[pd.Series]) -> Optional[pd.Series]:
+                      market_cap: pd.Series | None) -> pd.Series | None:
     """解析出对齐后的 log 市值 Series；不可用返回 None。"""
     log_mcap = market_cap if market_cap is not None else _load_log_mcap(factor_df)
     if log_mcap is None or getattr(log_mcap, "empty", True):
@@ -54,7 +54,7 @@ def _log_mcap_or_skip(factor_df: pd.DataFrame,
 def market_cap_neutralize(
     factor_df: pd.DataFrame,
     factor_col: str = "factor",
-    market_cap: Optional[pd.Series] = None,
+    market_cap: pd.Series | None = None,
 ) -> pd.DataFrame:
     """市值中性化：逐日截面回归 factor ~ ln(market_cap(t))，取残差
 
@@ -100,9 +100,9 @@ def market_cap_neutralize(
 
 def industry_neutralize(
     factor_df: pd.DataFrame,
-    industry_map: Optional[Dict[str, str]] = None,
+    industry_map: dict[str, str] | None = None,
     factor_col: str = "factor",
-    market_cap: Optional[pd.Series] = None,
+    market_cap: pd.Series | None = None,
 ) -> pd.DataFrame:
     """行业+市值中性化：逐日截面回归 factor ~ industry_dummies + ln(market_cap(t))
 

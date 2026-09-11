@@ -9,7 +9,6 @@
 """
 import logging
 import os
-from typing import Optional, Union
 
 import zxcvbn
 from fastapi import Depends, HTTPException, Request
@@ -86,8 +85,8 @@ fastapi_users = FastAPIUsers[User, int](
 
 async def require_user(
     request: Request,
-    user: Optional[User] = Depends(fastapi_users.current_user(optional=True)),
-) -> Union[User, dict]:
+    user: User | None = Depends(fastapi_users.current_user(optional=True)),
+) -> User | dict:
     """业务接口鉴权依赖。
 
     AUTH_ENABLED=False（本地开发）时直接放行，返回模拟用户信息；
@@ -148,7 +147,7 @@ async def seed_admin_user() -> None:
 # 兼容接口：Token 校验（WebSocket 无状态场景）
 # ============================================================
 
-def verify_token(token: str) -> Optional[dict]:
+def verify_token(token: str) -> dict | None:
     """校验 JWT token 并返回 payload（WebSocket 等无状态场景使用）。
 
     使用 fastapi-users 内部的 JWT 解码逻辑（pyjwt），

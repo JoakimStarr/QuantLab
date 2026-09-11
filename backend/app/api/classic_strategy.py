@@ -215,7 +215,11 @@ async def factor_analysis_api(
     universe = universe or spec["defaults"].get("universe") or settings.quant.get("universe", "csi300")
 
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, load_close_prices, compute_ic, compute_quantile_returns,
+        compute_ic,
+        compute_quantile_returns,
+        load_close_prices,
+        load_factor_values,
+        load_label,
     )
 
     def _compute():

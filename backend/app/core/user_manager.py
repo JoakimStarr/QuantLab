@@ -1,10 +1,10 @@
 """UserManager：fastapi-users 用户管理，集成 zxcvbn 密码强度校验。"""
 import logging
-from typing import Optional
 
 import zxcvbn
 from fastapi import Request
 from fastapi_users import BaseUserManager, IntegerIDMixin, InvalidPasswordException
+
 from app.core.config import settings
 from app.models.user import User
 
@@ -27,18 +27,18 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 reason += "：" + "；".join(suggestions)
             raise InvalidPasswordException(reason=reason)
 
-    async def on_after_register(self, user: User, request: Optional[Request] = None):
+    async def on_after_register(self, user: User, request: Request | None = None):
         """注册后回调。"""
         logger.info("新用户注册成功: id=%d email=%s", user.id, user.email)
 
     async def on_after_forgot_password(
-        self, user: User, token: str, request: Optional[Request] = None
+        self, user: User, token: str, request: Request | None = None
     ):
         """忘记密码后回调。"""
         logger.info("密码重置请求: id=%d email=%s", user.id, user.email)
 
     async def on_after_update(
-        self, user: User, update_dict: dict, request: Optional[Request] = None
+        self, user: User, update_dict: dict, request: Request | None = None
     ):
         """用户信息更新回调。"""
         logger.info("用户信息更新: id=%d email=%s", user.id, user.email)

@@ -3,8 +3,8 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Optional
-from fastapi import APIRouter, Query, Depends, Request
+
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 
 from app.core.audit_log import audit
@@ -38,7 +38,7 @@ def _read_eod_result() -> dict | None:
     path = os.path.join(str(settings.PROJECT_ROOT / "data"), "eod_last_result.json")
     try:
         import json
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             obj = json.load(f)
         return obj if isinstance(obj, dict) else None
     except Exception:
@@ -79,8 +79,8 @@ async def _get_index_catalog() -> list[dict]:
 
 # 搜索清单进程级缓存：拼音计算（pypinyin）对每只股票较慢，若每个搜索请求都重建
 # （~5000 只 A 股 + 指数重算首字母/全拼）就会让每次键入都卡顿。缓存 TTL 与股票列表一致。
-_search_catalog_cache: Optional[list[dict]] = None
-_search_catalog_updated_at: Optional[datetime] = None
+_search_catalog_cache: list[dict] | None = None
+_search_catalog_updated_at: datetime | None = None
 _SEARCH_CATALOG_TTL_SECONDS = 3600
 
 
@@ -166,7 +166,7 @@ async def data_preview_api(
         if os.path.exists(pool_file):
             # 解析股票池文件，取最新成分股（end_date 最大的一批）
             entries = []
-            with open(pool_file, "r", encoding="utf-8") as pf:
+            with open(pool_file, encoding="utf-8") as pf:
                 for line in pf:
                     parts = line.strip().split("\t")
                     if len(parts) >= 3:
@@ -632,6 +632,7 @@ async def list_universes_api():
     供前端动态渲染标的池下拉（股票池 csi300/csi500/all、ETF 池 etf_all）。
     """
     import os
+
     from app.core.config import settings
 
     instruments_dir = os.path.join(settings.qlib_provider_path, "instruments")

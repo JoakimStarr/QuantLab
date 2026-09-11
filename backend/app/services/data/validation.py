@@ -12,17 +12,19 @@
 """
 import logging
 import os
+from datetime import datetime  # noqa: F401  # 类型注解引用（_exclude_pending_today）
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.baostock import StockDaily, TradeCalendar
 from app.models.stock_data_status import StockDataStatus
+from app.services.data.baostock_backfill import BIN_FIELDS
+
 # bin 格式常量（4 字节 float32 start_index 头）单一来源，避免多份定义漂移
 from app.services.data.eod_incremental import QLIB_BIN_HEADER_SIZE
-from app.services.data.baostock_backfill import BIN_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -270,12 +272,12 @@ def _check_adjustment_sync(provider_uri: str, calendar: list, index_codes: set,
       - ``|close/preclose - 1 - change| < 1e-4``（close/preclose/factor 同乘 A_t，比值不变）
       - 与 PG 比对：``raw = bin_close / factor`` 应等于 stock_daily.close（bin=hfq, PG=raw）
     """
+    import numpy as np
+
     from app.services.data.data_adjusted import (
         _read_bin_array,
         validate_change_consistency,
     )
-
-    import numpy as np
 
     codes = _sample_stock_dirs(provider_uri, index_codes, max_stocks)
     feat_root = os.path.join(provider_uri, "features")
@@ -610,7 +612,7 @@ def check_macro(provider_uri: str, calendar: list,
     """
     from app.services.data.fundamental_sync import FIN_FIELD_NAMES
     from app.services.data.global_macro_sync import GLOBAL_MACRO_INDICATORS
-    from app.services.data.macro_sync import MACRO_INDICATORS, AKSHARE_INDICATORS
+    from app.services.data.macro_sync import AKSHARE_INDICATORS, MACRO_INDICATORS
 
     macro_fields = [
         fname

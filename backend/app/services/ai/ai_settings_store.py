@@ -209,7 +209,6 @@ def _legacy_entry(name: str, base_url: str, model: str, api_key: str) -> tuple[d
 def _builtin_with_key(b: dict) -> dict:
     """内置条目附带 .env key（未落盘时也能使旧三家开箱即用）。"""
     item = dict(b)
-    logical = _BUILTIN_ID_BY_NAME.get(b["id"])  # no-op
     name_of_id = {
         "builtin_opencodezen": "opencodezen",
         "builtin_glm": "glm",

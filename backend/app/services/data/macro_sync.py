@@ -32,7 +32,10 @@ from app.services.data.data_clean import to_float as _to_float
 from app.services.data.db_utils import bulk_upsert
 from app.services.data.eod_incremental import _get_calendar, _write_bin
 from app.services.data.sync_progress import (
-    init_progress, update_progress, finish_progress, clear_progress,
+    clear_progress,
+    finish_progress,
+    init_progress,
+    update_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -765,7 +768,7 @@ async def broadcast_macro_to_bins(provider_uri: str, progress_cb=None, force: bo
     series_map = await _load_all_macro_series()  # 一次批量加载全部字段，避免逐字段 N+1
     active_fields = {fname for _, fname, _ in all_field_specs}
     await run_io_cpu(_prune_stale_macro_bins, qlib_dir, active_fields)
-    for j, (indicator_key, field_name, fcfg) in enumerate(all_field_specs):
+    for j, (indicator_key, field_name, _fcfg) in enumerate(all_field_specs):
         if progress_cb:
             progress_cb(
                 45 + int(55 * (j + 1) / total_fields),

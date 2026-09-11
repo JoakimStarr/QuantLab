@@ -9,10 +9,11 @@
 替代原 akshare 版本，避免 akshare 反爬问题；baostock 一次登录可批量拉取且不限频。
 指数同步不扩展日历（chenditc 日历已完整），仅按现有日历对齐写入。
 """
-import os
 import logging
-import pandas as pd
+import os
 from datetime import datetime
+
+import pandas as pd
 
 from app.core.config import settings
 from app.services.data.eod_incremental import (
@@ -47,7 +48,7 @@ INDEX_NAMES: dict[str, str] = {
 }
 
 # qlib 指数字段（收敛到 data_fields.py）
-from app.services.data.data_fields import INDEX_FIELDS
+from app.services.data.data_fields import INDEX_FIELDS  # noqa: E402
 
 
 def _get_index_list(indices: list = None) -> list:
@@ -74,10 +75,11 @@ def _fetch_index_via_baostock(qlib_code: str, start_date: str, end_date: str) ->
         RuntimeError: baostock 调用失败
     """
     import baostock as bs
+
     from app.services.data.baostock_client import (
-        to_baostock_code,
-        _ensure_login,
         _consume_request_slot,
+        _ensure_login,
+        to_baostock_code,
     )
 
     bs_code = to_baostock_code(qlib_code)  # sh000001 -> sh.000001
@@ -192,7 +194,9 @@ def sync_indices_to_qlib(provider_uri: str, indices: list = None, days: int = 36
     end_date = datetime.now().strftime("%Y-%m-%d")
 
     from app.services.data.baostock_client import (
-        BaostockQuotaError, _ensure_login, ensure_logout,
+        BaostockQuotaError,
+        _ensure_login,
+        ensure_logout,
     )
 
     # 连续失败熔断：baostock 连接衰减（10002007）时逐只重试只是浪费——

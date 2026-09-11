@@ -41,6 +41,7 @@ def _get_sync_engine():
     global _SYNC_ENGINE
     if _SYNC_ENGINE is None:
         from sqlalchemy import create_engine
+
         from app.core.database import DATABASE_URL
         url = DATABASE_URL
         if url.startswith("postgresql+asyncpg://"):
@@ -81,6 +82,7 @@ def build_pit_log_market_cap(pe_ttm: pd.DataFrame,
 def _query_pe(engine, codes: list[str], start, end) -> pd.DataFrame:
     from sqlalchemy import select
     from sqlalchemy.orm import Session
+
     from app.models.baostock import StockDaily
 
     frames = []
@@ -112,6 +114,7 @@ def _query_pe(engine, codes: list[str], start, end) -> pd.DataFrame:
 def _query_netprofit(engine, codes: list[str], end) -> pd.DataFrame:
     from sqlalchemy import select
     from sqlalchemy.orm import Session
+
     from app.models.fundamental import FinancialIndicator
 
     frames = []

@@ -4,7 +4,7 @@
 与 RuleBacktestHistory 并列：前者是单标的模板历史，本表是"学术经典"回测历史。
 前端策略库页面将两类历史合并展示、勾选对比、性能聚合。
 """
-from sqlalchemy import TIMESTAMP, Column, Float, Index, Integer, String, Text, Boolean
+from sqlalchemy import TIMESTAMP, Boolean, Column, Float, Index, Integer, String, Text
 from sqlalchemy.sql import func
 
 from app.core.database import Base

@@ -12,17 +12,19 @@ AutoML 学习因子间的非线性映射，预测前向收益作为综合打分�
 import json
 import logging
 import os
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from app.core.database import async_session
+
 from app.core.config import settings
+from app.core.database import async_session
 from app.core.executor import run_io_cpu
-from app.core.gpu_utils import is_gpu_available, get_device
-from app.models.mining_task import MiningTask
+from app.core.gpu_utils import get_device, is_gpu_available
 from app.models.factor import Factor
-from app.services.factor.library import update_factor_metrics, add_factor
+from app.models.mining_task import MiningTask
+from app.services.factor.library import add_factor, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
 
 logger = logging.getLogger(__name__)
@@ -95,7 +97,7 @@ async def _run_walk_forward(task_id: int, merged: pd.DataFrame, names: list,
     label_df = merged[["label"]].rename(columns={"label": "label"})
     ic_metrics = compute_ic(score_df.rename(columns={"factor": "factor"}), label_df)
     ic_metrics["sample"] = "out-of-sample (walk-forward)"
-    ic_metrics["wf_steps"] = int(0)
+    ic_metrics["wf_steps"] = 0
 
     expr_repr = f"AutoML(walk_forward,{task_id})"
     factor = await add_factor(name=f"automl_wf_{task_id}", expression=expr_repr,
@@ -128,8 +130,8 @@ async def mine_with_automl(task_id: int, factor_ids: list[int], method: str = No
 
     universe: 标的池（None=config 默认）。
     """
-    from app.services.quant.qlib_init import init_qlib
     from app.services.quant.factor_eval import load_factor_values, load_label
+    from app.services.quant.qlib_init import init_qlib
 
     automl_cfg = settings.mining.get("automl", {})
     method = method or automl_cfg.get("combo_method", "lightgbm")
@@ -325,7 +327,7 @@ def _compute_shap(model, method: str, X_train: np.ndarray, X_valid: np.ndarray,
             shap_values = shap_values[0]
         shap_values = np.asarray(shap_values)
         feature_importance = np.abs(shap_values).mean(axis=0)
-        importance_dict = dict(zip(feature_names, feature_importance.tolist()))
+        importance_dict = dict(zip(feature_names, feature_importance.tolist(), strict=False))
         importance_sorted = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
         return importance_sorted
     except Exception as e:

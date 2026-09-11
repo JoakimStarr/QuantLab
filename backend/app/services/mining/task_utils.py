@@ -1,6 +1,7 @@
 """挖掘任务共享工具函数。"""
 import json
 from datetime import datetime
+
 from app.core.database import async_session
 from app.models.mining_task import MiningTask
 

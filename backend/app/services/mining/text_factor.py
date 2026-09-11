@@ -3,13 +3,15 @@
 复用 data/news_service（或 akshare stock_news_em）拉取新闻，
 LLM 批量情绪分类，聚合为每日截面情绪因子，评价 IC 后入库。
 """
+import asyncio
 import json
 import logging
-import asyncio
 from datetime import datetime, timedelta
+
 import pandas as pd
-from app.core.database import async_session
+
 from app.core.config import settings
+from app.core.database import async_session
 from app.models.mining_task import MiningTask
 from app.services.factor.library import add_factor, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
@@ -174,7 +176,7 @@ async def mine_with_text(task_id: int, codes: list[str] = None) -> dict:
         daily.index.names = ["datetime", "instrument"]
 
         # 加载标签并计算 IC
-        from app.services.quant.factor_eval import load_label, compute_ic
+        from app.services.quant.factor_eval import compute_ic, load_label
         label_df = await asyncio.get_running_loop().run_in_executor(
             None, load_label, start, end, None
         )

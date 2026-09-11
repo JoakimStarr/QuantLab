@@ -5,8 +5,10 @@
 被哪一关拒绝。本表按 (task_id, expression) 幂等 upsert，
 同一表达式的状态随挖掘进度持续更新（沙箱拒绝 → 评价失败 → 通过）。
 """
-from sqlalchemy import Column, Integer, String, Float, Text, TIMESTAMP, Index, UniqueConstraint
 from datetime import datetime
+
+from sqlalchemy import TIMESTAMP, Column, Float, Index, Integer, String, Text, UniqueConstraint
+
 from app.core.database import Base
 
 

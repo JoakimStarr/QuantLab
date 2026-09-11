@@ -1,10 +1,11 @@
 """挖掘扩展 API：模板管理"""
 import logging
-from fastapi import APIRouter, Query, BackgroundTasks
+
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
-from app.services.mining.mining_templates import list_templates, get_template
+from app.services.mining.mining_templates import get_template, list_templates
 
 logger = logging.getLogger(__name__)
 

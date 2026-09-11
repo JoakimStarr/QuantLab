@@ -52,6 +52,7 @@ async def seed_etf_factors() -> dict:
     只导入不评价——评价需在 ETF 池（etf_all）上通过"补算指标"触发。
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.factor import Factor
     from app.services.factor.library import add_factors_batch

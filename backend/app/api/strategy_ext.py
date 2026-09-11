@@ -472,10 +472,10 @@ async def ai_generate_strategy_api(
         )
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400) from e
     except Exception as e:
         logger.exception("AI 生成策略失败")
-        raise AppError("AI_STRATEGY_ERROR", f"AI 生成策略失败: {e}", 500)
+        raise AppError("AI_STRATEGY_ERROR", f"AI 生成策略失败: {e}", 500) from e
 
 
 @router.post("/{strategy_id}/ai/params")
@@ -486,10 +486,10 @@ async def ai_suggest_params_api(strategy_id: int):
         result = await suggest_params_with_ai(strategy_id)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400) from e
     except Exception as e:
         logger.exception("AI 参数建议失败")
-        raise AppError("AI_STRATEGY_ERROR", f"AI 参数建议失败: {e}", 500)
+        raise AppError("AI_STRATEGY_ERROR", f"AI 参数建议失败: {e}", 500) from e
 
 
 @router.post("/{strategy_id}/ai/review")
@@ -503,7 +503,7 @@ async def ai_review_backtest_api(
         result = await review_backtest_with_ai(strategy_id, result_id=result_id)
         return ApiResponse(ok=True, data=result)
     except ValueError as e:
-        raise AppError("AI_STRATEGY_ERROR", str(e), 400)
+        raise AppError("AI_STRATEGY_ERROR", str(e), 400) from e
     except Exception as e:
         logger.exception("AI 策略复盘失败")
-        raise AppError("AI_STRATEGY_ERROR", f"AI 策略复盘失败: {e}", 500)
+        raise AppError("AI_STRATEGY_ERROR", f"AI 策略复盘失败: {e}", 500) from e

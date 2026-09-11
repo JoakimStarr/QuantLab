@@ -2,16 +2,23 @@
 import json
 import logging
 import time
-import numpy as np
-import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+
+import numpy as np
+import pandas as pd
 from sqlalchemy import select
+
 from app.core.database import async_session
 from app.core.executor import run_io_cpu
 from app.models.factor import Factor
 from app.services.quant.factor_eval import (
-    load_factor_values, load_label, load_close_df, compute_ic, compute_decay, compute_daily_ic_series
+    compute_daily_ic_series,
+    compute_decay,
+    compute_ic,
+    load_close_df,
+    load_factor_values,
+    load_label,
 )
 
 logger = logging.getLogger(__name__)

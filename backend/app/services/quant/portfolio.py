@@ -6,10 +6,20 @@ import numpy as np
 import pandas as pd
 from empyrical import (
     annual_return as _emp_annual_return,
+)
+from empyrical import (
     annual_volatility as _emp_annual_volatility,
+)
+from empyrical import (
     calmar_ratio as _emp_calmar,
+)
+from empyrical import (
     max_drawdown as _emp_max_drawdown,
+)
+from empyrical import (
     sharpe_ratio as _emp_sharpe,
+)
+from empyrical import (
     sortino_ratio as _emp_sortino,
 )
 
@@ -188,7 +198,7 @@ def max_drawdown_period(returns) -> str:
     def _fmt(i):
         return str(i.date()) if hasattr(i, "date") else str(i)
 
-    return "{},{}".format(_fmt(peak_idx), _fmt(trough_idx))
+    return f"{_fmt(peak_idx)},{_fmt(trough_idx)}"
 
 
 def analyze_portfolio(returns, benchmark_returns=None) -> dict:

@@ -1,6 +1,6 @@
 """内置基础因子库：动量/反转/波动/换手/规模/估值等经典因子。"""
-from app.services.factor.library import add_factor
 from app.services.factor.expression import validate_expression
+from app.services.factor.library import add_factor
 
 # (name, expression, description)
 BUILTIN_FACTORS = [
@@ -24,6 +24,7 @@ BUILTIN_FACTORS = [
 async def seed_builtin_factors() -> dict:
     """初始化内置因子（已存在则跳过）。"""
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.factor import Factor
 

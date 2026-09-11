@@ -13,15 +13,16 @@ AKShare 返回 6 位代码，需按前缀映射交易所：
   3xxxxx -> sz（创业板）
   8xxxxx/9xxxxx/4xxxxx -> bj（北交所）
 """
+import asyncio
 import logging
 import tempfile
-import asyncio
+from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 from functools import partial
-from typing import Callable, Optional
+from pathlib import Path
 
 import pandas as pd
+
 from app.core.config import settings
 from app.core.errors import DataFetchError
 from app.services.data.code_utils import to_qlib_code
@@ -39,8 +40,8 @@ async def _run_async(func, *args, timeout: int = 30, **kwargs):
             timeout=timeout,
         )
         return result
-    except asyncio.TimeoutError:
-        raise DataFetchError(f"AKShare 请求超时 (timeout={timeout}s)")
+    except TimeoutError:
+        raise DataFetchError(f"AKShare 请求超时 (timeout={timeout}s)") from None
 
 
 def _get_stock_list_sync() -> pd.DataFrame:
@@ -51,8 +52,8 @@ def _get_stock_list_sync() -> pd.DataFrame:
 
 # A 股列表进程级缓存（1 小时），避免每次搜索/选股池打 akshare 网络请求。
 # 收拢 data_ext 与 get_universe 各自维护的重复缓存。
-_stock_list_cache: Optional[list[dict]] = None
-_stock_list_updated_at: Optional[datetime] = None
+_stock_list_cache: list[dict] | None = None
+_stock_list_updated_at: datetime | None = None
 _STOCK_LIST_TTL_SECONDS = 3600
 
 
@@ -192,9 +193,9 @@ def _dump_to_qlib_bin(csv_dir: str, qlib_dir: str, include_fields: list[str]) ->
 
 async def sync_to_qlib(
     start_date: str,
-    end_date: Optional[str] = None,
-    codes: Optional[list[str]] = None,
-    progress_cb: Optional[Callable[[dict], None]] = None,
+    end_date: str | None = None,
+    codes: list[str] | None = None,
+    progress_cb: Callable[[dict], None] | None = None,
 ) -> dict:
     """全量/增量同步 A 股日线到 qlib bin 目录。
 

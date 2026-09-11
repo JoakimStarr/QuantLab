@@ -7,6 +7,7 @@ qlib 未安装时 init_qlib() 抛出 QlibNotAvailableError，调用方应捕获�
 import asyncio
 import logging
 import threading
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

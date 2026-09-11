@@ -7,10 +7,11 @@
 
 worker 数从 config.task 读取，缺省 cpu=min(4, cpu_count), io=8。
 """
-import os
 import logging
+import os
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from app.core.config import settings
 

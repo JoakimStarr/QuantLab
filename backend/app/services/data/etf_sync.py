@@ -22,9 +22,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-from app.services.data.data_clean import format_date_series, to_float_strict as _f
-from app.services.data.data_fields import ETF_BIN_FIELDS
-from app.services.data.db_utils import bulk_upsert
+from app.services.data.data_clean import format_date_series  # noqa: E402
+from app.services.data.data_clean import to_float_strict as _f  # noqa: E402
+from app.services.data.data_fields import ETF_BIN_FIELDS  # noqa: E402
+from app.services.data.db_utils import bulk_upsert  # noqa: E402
 
 # 每批处理的交易日数：控制拉取/写 bin 的内存与单次落库量
 _CHUNK_DAYS = int(os.environ.get("QUANTLAB_ETF_CHUNK_DAYS", "20"))
@@ -64,8 +65,11 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict
     overwrite=True，baostock 路径这里同样必须强制。
     """
     from app.services.data.baostock_client import (
-        BaostockQuotaError, _ensure_login, ensure_logout,
-        fetch_etf_daily_sync, from_baostock_code,
+        BaostockQuotaError,
+        _ensure_login,
+        ensure_logout,
+        fetch_etf_daily_sync,
+        from_baostock_code,
     )
     from app.services.data.eod_incremental import _sync_stock_bin
 
@@ -171,6 +175,7 @@ def sync_etf_to_qlib(provider_uri: str, dates: list, old_calendar: list) -> dict
 async def _load_etf_existing_dates() -> set:
     """已落库 etf_daily 的交易日集合（YYYY-MM-DD）。"""
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.baostock import EtfDaily
 
@@ -188,6 +193,7 @@ async def _insert_etf_daily(rows: list, upsert: bool = False) -> None:
     if not rows:
         return
     from datetime import date as _date
+
     from app.models.baostock import EtfDaily
 
     for r in rows:
@@ -202,6 +208,7 @@ async def _insert_etf_daily(rows: list, upsert: bool = False) -> None:
 async def _register_synced_etfs(codes: list) -> int:
     """注册已同步 ETF 到 stock_index（type='etf'），名称尽量从 stock_basic 取。"""
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.baostock import StockBasic
     from app.services.data.index_registry import register_etfs_bulk
@@ -269,6 +276,7 @@ def fetch_etf_history_tencent(qlib_code: str, start: str, end: str) -> pd.DataFr
         DataFrame（兼容 _etf_out_df 输入），失败返回 None
     """
     import time as _time
+
     import requests
     last_err = None
     for attempt in range(_TENCENT_RETRIES):
@@ -316,6 +324,7 @@ def fetch_etf_history_tencent(qlib_code: str, start: str, end: str) -> pd.DataFr
 async def _load_etf_min_date() -> str | None:
     """etf_daily 最早交易日（YYYY-MM-DD），无数据返回 None。"""
     from sqlalchemy import func, select
+
     from app.core.database import async_session
     from app.models.baostock import EtfDaily
 
@@ -327,6 +336,7 @@ async def _load_etf_min_date() -> str | None:
 async def _load_etf_codes_from_db() -> list:
     """etf_daily 全部去重代码（大写）。"""
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.baostock import EtfDaily
 
@@ -441,6 +451,7 @@ async def rebuild_etf_pool(provider_uri: str = None) -> list:
         list: 全部 ETF 的 qlib 小写代码（写入 instruments/etf_all.txt）。
     """
     from sqlalchemy import select
+
     from app.core.config import settings
     from app.core.database import async_session
     from app.models.baostock import EtfDaily

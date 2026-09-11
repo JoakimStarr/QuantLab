@@ -85,11 +85,24 @@ def generate_portfolio_report(
 def _empyrical_metrics(ret: pd.Series, bench: pd.Series | None) -> dict:
     """empyrical：全量核心绩效指标（纯 numpy，快）。"""
     from empyrical import (
-        annual_return, annual_volatility, calmar_ratio, max_drawdown,
-        sharpe_ratio, sortino_ratio, tail_ratio, value_at_risk,
-        conditional_value_at_risk, alpha as emp_alpha, beta as emp_beta,
+        alpha as emp_alpha,
     )
-    from scipy.stats import skew as _skew, kurtosis as _kurtosis
+    from empyrical import (
+        annual_return,
+        annual_volatility,
+        calmar_ratio,
+        conditional_value_at_risk,
+        max_drawdown,
+        sharpe_ratio,
+        sortino_ratio,
+        tail_ratio,
+        value_at_risk,
+    )
+    from empyrical import (
+        beta as emp_beta,
+    )
+    from scipy.stats import kurtosis as _kurtosis
+    from scipy.stats import skew as _skew
 
     stats = {}
     try:
@@ -149,11 +162,11 @@ def _consecutive_streaks(ret: pd.Series) -> tuple:
     win = loss = cur = 0
     cur_type = None
     for b in mask:
-        if b and cur_type == True and cur > 0:
+        if b and cur_type is True and cur > 0:
             cur += 1
         elif b:
             cur, cur_type = 1, True
-        elif cur_type == False and cur > 0:
+        elif cur_type is False and cur > 0:
             cur += 1
         else:
             cur, cur_type = 1, False

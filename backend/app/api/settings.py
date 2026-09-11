@@ -187,7 +187,8 @@ async def test_ai_provider(payload: ProviderTestRequest):
     from app.services.ai.llm_client import LLMClient
 
     name = payload.provider.strip().lower()
-    mc = settings.ai_provider; ai_cfg = mc.model_dump() if hasattr(mc, "model_dump") else mc
+    mc = settings.ai_provider
+    ai_cfg = mc.model_dump() if hasattr(mc, "model_dump") else mc
     saved_cfg = {}
     for c in list(ai_cfg.get("providers") or []):
         c = c.model_dump() if hasattr(c, "model_dump") else c

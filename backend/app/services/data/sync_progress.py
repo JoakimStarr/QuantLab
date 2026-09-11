@@ -10,9 +10,9 @@ import json
 import logging
 import os
 import threading
-from dataclasses import dataclass, asdict
+from collections.abc import AsyncGenerator
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import AsyncGenerator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,11 @@ class SyncProgress:
     downloaded_mb: float = 0.0
     total_mb: float = 0.0
     speed_mbps: float = 0.0
-    started_at: Optional[str] = None
+    started_at: str | None = None
     message: str = ""
-    error: Optional[str] = None
+    error: str | None = None
     # 独立 worker 子进程的 PID：用于 web 进程检测同步是否真的在跑（避免残留 syncing 僵尸）
-    worker_pid: Optional[int] = None
+    worker_pid: int | None = None
     # 是否写 qlib bin：True=回填/补齐/指数/EOD/广播（读 bin 的操作应被阻塞）；
     # False=fetch-only 任务（如财报拉取只写 PG），不影响 bin 读取，可并行
     writes_bins: bool = False
@@ -56,17 +56,17 @@ def _progress_file() -> str:
     return os.path.join(str(base), "sync_progress.json")
 
 
-def _read_progress_file() -> Optional[dict]:
+def _read_progress_file() -> dict | None:
     path = _progress_file()
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             obj = json.load(f)
         return obj if isinstance(obj, dict) else None
     except Exception:
         return None
 
 
-def _write_progress_file(progress: Optional[dict]) -> None:
+def _write_progress_file(progress: dict | None) -> None:
     path = _progress_file()
     try:
         if progress is None:
@@ -102,7 +102,7 @@ def _pid_alive(pid) -> bool:
     # 僵尸已不执行任何代码，若 worker 异常退出且无人 waitpid 回收，残留的进度
     # 文件会让 sync_is_active 长期误判"正在同步"而阻塞后续同步/补齐（409）。
     try:
-        with open(f"/proc/{pid}/stat", "r", encoding="ascii") as f:
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
             state = f.read().split()[2]
         return state != "Z"
     except (OSError, IndexError, ValueError):
@@ -119,7 +119,7 @@ class SyncProgressManager:
     def __init__(self, **_kwargs):
         # 兼容旧调用签名 SyncProgressManager(redis_url=..., enabled=...)，参数忽略
         self._lock = threading.Lock()
-        self._progress: Optional[SyncProgress] = None
+        self._progress: SyncProgress | None = None
 
     def init_progress(self, universe: str, data_source: str, total_mb: float = 0,
                       writes_bins: bool = False, kind: str = None) -> None:
@@ -191,7 +191,7 @@ class SyncProgressManager:
             self._progress.error = error
             _write_progress_file(self._progress.to_dict())
 
-    def get_progress(self) -> Optional[dict]:
+    def get_progress(self) -> dict | None:
         """获取当前进度。
 
         优先取进程内存；内存为空时回退到共享进度文件（独立 worker 子进程的进度）。
@@ -240,7 +240,7 @@ class SyncProgressManager:
 
 # -- 全局单例 --
 
-_manager: Optional[SyncProgressManager] = None
+_manager: SyncProgressManager | None = None
 
 
 def _get_manager() -> SyncProgressManager:
@@ -284,7 +284,7 @@ def finish_progress(success: bool, error: str = None) -> None:
     _get_manager().finish_progress(success, error)
 
 
-def get_progress() -> Optional[dict]:
+def get_progress() -> dict | None:
     """获取当前进度"""
     return _get_manager().get_progress()
 

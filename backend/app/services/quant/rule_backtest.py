@@ -189,8 +189,8 @@ def _rsi_signals(close, p):
 def _ma_alignment_signals(close, p):
     s = close.rolling(int(p["short"])).mean()
     m = close.rolling(int(p["mid"])).mean()
-    l = close.rolling(int(p["long"])).mean()
-    pos = _fill_false((s > m) & (m > l))
+    ln = close.rolling(int(p["long"])).mean()
+    pos = _fill_false((s > m) & (m > ln))
     entries = pos & ~pos.shift(1, fill_value=False)
     exits = ~pos & pos.shift(1, fill_value=False)
     return entries, exits

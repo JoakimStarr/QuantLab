@@ -75,7 +75,7 @@ def is_task_running(kind: str, strategy_id: int) -> bool:
     """该策略的该类任务是否正在执行（有存活的 worker 子进程）。"""
     p = _pid_path(kind, strategy_id)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)
         return True

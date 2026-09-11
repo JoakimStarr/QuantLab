@@ -11,11 +11,13 @@ import json
 import logging
 import os
 from datetime import datetime
+
 import numpy as np
 import pandas as pd
+
 from app.core.config import settings
 from app.core.executor import run_io_cpu
-from app.core.gpu_utils import is_gpu_available, get_device
+from app.core.gpu_utils import get_device, is_gpu_available
 from app.services.factor.expression import validate_expression
 from app.services.factor.library import add_factor, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
@@ -147,11 +149,11 @@ def _translate_tree(node, feature_names: list) -> str:
             try:
                 idx = int(node[1:])
             except ValueError:
-                raise ValueError(f"无法解析 gplearn 终端: {node}")
+                raise ValueError(f"无法解析 gplearn 终端: {node}") from None
             if not 0 <= idx < len(feature_names):
                 raise ValueError(f"gplearn 终端 {node} 超出特征范围 {len(feature_names)}")
             return f"({_BASE_FEATURES[feature_names[idx]]})"
-        raise ValueError(f"无法解析 gplearn 终端: {node}")
+        raise ValueError(f"无法解析 gplearn 终端: {node}") from None
     if not isinstance(node, (tuple, list)) or not node:
         raise ValueError(f"无法解析 gplearn 节点: {node!r}")
 
@@ -168,7 +170,7 @@ def _translate_tree(node, feature_names: list) -> str:
     if all(_is_number(t) for t in targs):
         vals = [float(t) for t in targs]
         folded = None
-        if hasattr(func, "__call__"):
+        if callable(func):
             try:
                 folded = float(func(*vals))
             except (TypeError, ValueError):
@@ -411,8 +413,8 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
                 continue
             evaluated += 1
             # 多维验证：样本分割 + 滚动 IC + 统计显著性 + 多样性
-            from app.services.quant.factor_validator import evaluate_factor_with_validation
             from app.core.executor import run_cpu
+            from app.services.quant.factor_validator import evaluate_factor_with_validation
             try:
                 metrics = await run_cpu(
                     evaluate_factor_with_validation, expr, valid_start, valid_end,
@@ -428,14 +430,14 @@ async def mine_with_symbolic(task_id: int, universe: str = None) -> dict:
         bh_alpha = settings.mining.get("llm", {}).get("bh_alpha", 0.20)
         p_vals = [m.get("significance", {}).get("p_value") if m else None for _, m in candidates]
         p_adj = bh_corrected_pvalues(p_vals)
-        for (_, m), pa in zip(candidates, p_adj):
+        for (_, m), pa in zip(candidates, p_adj, strict=False):
             if m and pa is not None:
                 m = dict(m)
                 m["significance"] = {**(m.get("significance") or {}), "p_adj": pa}
                 m["p_adj"] = pa
 
         # 第二遍：BH 筛选 + 入库
-        for idx, (expr, metrics) in enumerate(candidates):
+        for _idx, (expr, metrics) in enumerate(candidates):
             if metrics is None:
                 continue
             sig = metrics.get("significance") or {}

@@ -6,7 +6,7 @@ policy_analysis 每天一条（news_date 唯一），AI 生成的结构化解读
 """
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, Index, String, Text, TIMESTAMP, UniqueConstraint
+from sqlalchemy import JSON, TIMESTAMP, Date, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base

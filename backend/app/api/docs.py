@@ -7,8 +7,8 @@ from fastapi.responses import FileResponse
 
 from app.schemas.common import ApiResponse
 from app.services.docs.loader import (
-    list_docs,
     get_doc,
+    list_docs,
 )
 
 router = APIRouter(prefix="/docs", tags=["docs"])

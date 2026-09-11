@@ -224,6 +224,7 @@ async def auto_import_factors_api(
 
     # 检查哪些因子已入库，哪些需要导入（单次 IN 查询，避免逐 ID N+1）
     from sqlalchemy import select
+
     from app.models.factor import Factor
 
     async with async_session() as session:

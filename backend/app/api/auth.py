@@ -81,9 +81,9 @@ async def register(request: Request, body: RegisterRequest, user_manager=Depends
             safe=True,
         )
     except UserAlreadyExists:
-        raise HTTPException(status_code=409, detail="该邮箱已注册")
+        raise HTTPException(status_code=409, detail="该邮箱已注册") from None
     except InvalidPasswordException as e:
-        raise HTTPException(status_code=400, detail=str(e.reason))
+        raise HTTPException(status_code=400, detail=str(e.reason)) from e
     token = await get_jwt_strategy().write_token(user)
     audit("register", user=body.email, resource="auth", detail="注册成功")
     return ApiResponse(ok=True, data={"token": token, "user": _user_payload(user)})

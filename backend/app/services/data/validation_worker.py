@@ -73,7 +73,7 @@ def is_validation_running() -> bool:
     """是否正在校验（有存活的 worker 子进程）。"""
     p = _pid_path()
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)
         return True
@@ -102,7 +102,7 @@ def read_status() -> dict:
     """读状态文件；无文件返回 idle。"""
     _, status_file, _ = _paths()
     try:
-        with open(status_file, "r", encoding="utf-8") as f:
+        with open(status_file, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         return {"status": "idle"}
@@ -113,7 +113,7 @@ def read_status() -> dict:
 def read_report() -> dict | None:
     _, _, report_file = _paths()
     try:
-        with open(report_file, "r", encoding="utf-8") as f:
+        with open(report_file, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None

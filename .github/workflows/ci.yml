@@ -21,10 +21,9 @@ jobs:
           cd backend
           pip install ruff
           # ruff 取代 flake8（同款 pyproject.toml 配置，line-length=120）。
-          # 注意：app/ 存在历史遗留风格基线（~248 条 I001/UP/B 等，均非本改动引入），
-          # 一次性清理超出本任务范围，先以 --exit-zero 通告模式运行（输出在 CI 日志可见），
-          # 基线清零后去掉 --exit-zero 即为硬门禁。
-          ruff check app/ --exit-zero --output-format=concise
+          # 2026-09-11 已清零全部历史基线（248→0，含 2 处 F821 潜在 NameError），
+          # 此处为硬门禁：新增 lint 错误会直接挂 CI。
+          ruff check app/ --output-format=concise
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

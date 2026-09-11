@@ -168,9 +168,9 @@ def _preload_score_df(factor_exprs: dict, weights: dict,
     替代 _compute_backtest_sync 内部每个组合重复加载因子的逻辑：
     扫描 N 个参数组合只加载 1 次因子数据。
     """
-    from app.services.quant.qlib_init import init_qlib
-    from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors
+    from app.services.quant.factor_eval import load_factor_values
+    from app.services.quant.qlib_init import init_qlib
 
     init_qlib()
     factor_values = {}
@@ -254,9 +254,9 @@ async def run_param_sweep(
     Returns:
         [{"topk":10,"rebalance":"day","sharpe":...}, ..., {"best": {...}}]
     """
-    from app.services.strategy.manager import _load_factor_expressions
-    from app.services.quant.qlib_init import is_qlib_available
     from app.core.executor import get_io_executor
+    from app.services.quant.qlib_init import is_qlib_available
+    from app.services.strategy.manager import _load_factor_expressions
 
     if not await is_qlib_available():
         return [{"error": "qlib 不可用"}]

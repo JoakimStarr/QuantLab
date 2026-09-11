@@ -57,7 +57,7 @@ def is_decay_check_running() -> bool:
     """是否正在做衰减检测（防止定时任务重复触发）。"""
     p = _paths()[0]
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)
         return True

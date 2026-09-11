@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -152,8 +153,8 @@ async def _auto_retry_sync(universes: list):
     同步通过独立 worker 子进程执行（app.services.data.sync_worker），
     与 web 进程解耦：进程重启不会中断正在进行的回填。
     """
-    import asyncio
     from datetime import datetime
+
     from app.core.database import async_session
     from app.models.stock_data_status import StockDataStatus
 
@@ -185,8 +186,9 @@ async def reap_stale_mining():
    弥补 _safe_run_task 超时对纯同步阻塞调用可能失效的场景，避免任务永久卡 running。
     """
     from datetime import timedelta
-    from app.core.database import async_session
+
     from app.core.config import settings
+    from app.core.database import async_session
     from app.models.mining_task import MiningTask
 
     task_cfg = settings.task or {}
@@ -221,7 +223,9 @@ async def rerun_pending_mining() -> None:
     跳过仍有存活 worker 的任务（web 重启但 worker 在跑，不重复 spawn）。
     """
     from datetime import datetime, timedelta
+
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.mining_task import MiningTask
     from app.services.mining.mining_worker import is_mining_worker_alive
@@ -261,6 +265,7 @@ async def _resubmit_mining(task_id: int, task_type: str, params_json: str) -> No
     复用 mining API 的入口：spawn_mining_worker 启动子进程执行。
     """
     import json
+
     from app.services.mining.mining_worker import spawn_mining_worker
     try:
         params = json.loads(params_json) if params_json else {}

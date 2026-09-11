@@ -1,5 +1,6 @@
 """因子库 schema。"""
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # 因子类别（与前端筛选/后端 category 一致）

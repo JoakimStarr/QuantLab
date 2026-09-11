@@ -8,11 +8,15 @@ from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.schemas.factor import FactorCreate
 from app.schemas.responses import FactorItem, FactorListData
-from app.services.factor.library import (
-    list_factors, get_factor, get_factor_summary, add_factor, disable_factor,
-)
-from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.builtin_factors import seed_builtin_factors
+from app.services.factor.expression import ExpressionValidationError, validate_expression
+from app.services.factor.library import (
+    add_factor,
+    disable_factor,
+    get_factor,
+    get_factor_summary,
+    list_factors,
+)
 
 logger = logging.getLogger(__name__)
 # 审计事件走统一 "audit" logger（与 app.core.audit_log 同一管道）；删除类事件用 WARNING 级
@@ -83,7 +87,7 @@ async def add_factor_api(body: FactorCreate):
     try:
         validate_expression(body.expression)
     except ExpressionValidationError as e:
-        raise AppError("EXPR_INVALID", str(e), 422)
+        raise AppError("EXPR_INVALID", str(e), 422) from e
     item = await add_factor(
         name=body.name, expression=body.expression, category=body.category,
         description=body.description or None,

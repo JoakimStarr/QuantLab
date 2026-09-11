@@ -5,18 +5,18 @@
 得到相互正交（且不相关）的因子序列。
 """
 import logging
+
 import pandas as pd
 from sklearn.decomposition import PCA
-from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
 
 def gram_schmidt_orthogonalize(
-    factor_values: Dict[str, pd.DataFrame],
-    ic_order: List[str],
+    factor_values: dict[str, pd.DataFrame],
+    ic_order: list[str],
     factor_col: str = "factor",
-) -> Dict[str, pd.DataFrame]:
+) -> dict[str, pd.DataFrame]:
     """按 IC 排序对因子做截面 PCA 正交化。
 
     Args:

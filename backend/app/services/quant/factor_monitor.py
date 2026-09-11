@@ -1,8 +1,7 @@
 """因子衰减监控：检测因子近期 IC 相对历史 IC 的衰减，定时检测并推送告警。"""
-import logging
 import asyncio
+import logging
 from datetime import datetime, timedelta
-from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +31,10 @@ async def detect_factor_decay(
             "status": "healthy" / "decaying" / "unknown",
         }
     """
-    from app.models.factor import Factor
-    from app.services.quant.factor_eval import load_factor_values, load_label, compute_ic
     from sqlalchemy import select
+
+    from app.models.factor import Factor
+    from app.services.quant.factor_eval import compute_ic, load_factor_values, load_label
 
     result = await db_session.execute(select(Factor).where(Factor.id == factor_id))
     factor = result.scalars().first()
@@ -124,14 +124,15 @@ async def detect_all_factors_decay(db_session=None) -> dict:
             "all_results": List[dict],
         }
     """
-    from app.models.factor import Factor
     from sqlalchemy import select
+
+    from app.models.factor import Factor
 
     result = await db_session.execute(select(Factor).where(Factor.status == "active"))
     factors = result.scalars().all()
 
-    decaying_factors: List[dict] = []
-    all_results: List[dict] = []
+    decaying_factors: list[dict] = []
+    all_results: list[dict] = []
 
     # 并发检测（限制并发数避免内存/IO 爆炸）
     sem = asyncio.Semaphore(4)
@@ -146,7 +147,7 @@ async def detect_all_factors_decay(db_session=None) -> dict:
     tasks = [_check_one(f) for f in factors]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for factor, decay_result in zip(factors, results):
+    for factor, decay_result in zip(factors, results, strict=False):
         if isinstance(decay_result, Exception):
             logger.error("因子 %s 衰减检测异常: %s", factor.name, decay_result)
             all_results.append({

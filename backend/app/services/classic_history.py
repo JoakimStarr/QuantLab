@@ -13,7 +13,8 @@ from sqlalchemy import func, select
 from app.core.database import async_session
 from app.models.classic_backtest_history import ClassicBacktestHistory
 from app.models.rule_backtest_history import RuleBacktestHistory
-from app.services.strategy_rule_history import _base as _rule_base, _detail as _rule_detail
+from app.services.strategy_rule_history import _base as _rule_base
+from app.services.strategy_rule_history import _detail as _rule_detail
 
 logger = logging.getLogger(__name__)
 

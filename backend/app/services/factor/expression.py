@@ -3,8 +3,9 @@
 只允许白名单内的 qlib 算子与字段，禁止任意 Python 代码。
 qlib 表达式示例：Ref($close, -20) / $close - 1
 """
-import re
 import ast
+import re
+
 from app.core.config import settings
 
 # AST 安全沙箱配置

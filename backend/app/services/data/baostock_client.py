@@ -22,11 +22,11 @@ import asyncio
 import atexit
 import json
 import logging
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)

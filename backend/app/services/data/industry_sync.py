@@ -1,6 +1,6 @@
 """申万行业分类数据同步"""
-import logging
 import json
+import logging
 import os
 
 from app.core.config import settings
@@ -78,7 +78,7 @@ def load_industry_map() -> dict:
     """加载行业映射"""
     if not os.path.exists(INDUSTRY_MAP_PATH):
         return {}
-    with open(INDUSTRY_MAP_PATH, "r", encoding="utf-8") as f:
+    with open(INDUSTRY_MAP_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -86,6 +86,7 @@ async def load_industry_map_async() -> dict:
     """从 PG stock_industry 加载行业映射（优先），JSON 文件兜底。"""
     try:
         from sqlalchemy import select
+
         from app.core.database import async_session
         from app.models.baostock import StockIndustry
         async with async_session() as session:

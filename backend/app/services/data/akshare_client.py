@@ -2,8 +2,10 @@
 import asyncio
 import json
 import logging
-import pandas as pd
 from functools import partial
+
+import pandas as pd
+
 from app.core.errors import DataFetchError
 
 logger = logging.getLogger(__name__)
@@ -12,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def fetch_data(func, *args, max_retries=2, timeout=20, **kwargs):
     """在线程池中运行同步 AKShare 函数，带重试与超时。"""
     last_error = None
-    for attempt in range(max_retries + 1):
+    for _attempt in range(max_retries + 1):
         try:
             loop = asyncio.get_running_loop()
             fn = partial(func, *args, **kwargs)
@@ -23,7 +25,7 @@ async def fetch_data(func, *args, max_retries=2, timeout=20, **kwargs):
             if result is None or (isinstance(result, pd.DataFrame) and result.empty):
                 raise ValueError("empty result")
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             last_error = TimeoutError(f"fetch timeout after {timeout}s")
         except Exception as e:
             last_error = e

@@ -68,7 +68,7 @@ def is_mining_worker_alive(task_id: int) -> bool:
     """该任务是否有真正存活的挖掘 worker 子进程。"""
     p = _pid_path(task_id)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)  # 进程存在则返回，否则抛 ProcessLookupError
         return True
@@ -197,7 +197,7 @@ async def _run_inner(args: argparse.Namespace, params: dict) -> None:
 
     try:
         await asyncio.wait_for(_inner(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("挖掘任务超时 task_id=%s type=%s (timeout=%ss)", args.task_id, args.type, timeout)
         await _mark_failed(args.task_id, f"任务超时 (timeout={timeout}s)")
         sys.exit(1)
