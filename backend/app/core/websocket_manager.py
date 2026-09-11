@@ -57,8 +57,8 @@ class WebSocketManager:
             from app.core.metrics import ws_active_connections
 
             ws_active_connections.set(len(self._connections))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("WebSocket 连接数指标更新失败: %s", e)
         return conn
 
     async def disconnect(self, ws: WebSocket) -> None:
@@ -74,8 +74,8 @@ class WebSocketManager:
             from app.core.metrics import ws_active_connections
 
             ws_active_connections.set(len(self._connections))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("WebSocket 连接数指标更新失败: %s", e)
 
     def update_heartbeat(self, ws: WebSocket) -> None:
         """更新心跳时间戳（轻量，无需加锁，monotonic 写入是原子的）。"""
@@ -157,8 +157,8 @@ class WebSocketManager:
         for conn in stale:
             try:
                 await conn.ws.close(code=4408, reason="heartbeat timeout")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("心跳超时连接关闭失败（已按断开处理）: %s", e)
             async with self._lock:
                 self._connections.discard(conn)
         logger.warning(

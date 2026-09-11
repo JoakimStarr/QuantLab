@@ -47,7 +47,7 @@ export function useWebSocket(url, options = {}) {
     try {
       ws.value = new WebSocket(wsUrl)
     } catch (e) {
-      console.error('[WS] 连接失败:', e)
+      console.debug('[WS] 连接失败:', e)
       attemptReconnect()
       return
     }
@@ -161,7 +161,7 @@ export function useWebSocket(url, options = {}) {
         try {
           cb(data)
         } catch (e) {
-          console.error('[WS] 监听器执行出错:', e)
+          console.debug('[WS] 监听器执行出错:', e)
         }
       })
     }

@@ -71,9 +71,10 @@ async def macro_indicators_api(
     field: str = Query(None, description="字段名 pmi/cpi/ppi/gdp 等，空则返回该指标全部字段"),
     start: str = Query(None, description="开始日期 YYYY-MM-DD（按 available_date）"),
     end: str = Query(None, description="结束日期 YYYY-MM-DD（按 available_date）"),
+    limit: int = Query(1000, ge=1, le=100000, description="返回条数上限（默认 1000，防全量拉取拖垮响应）"),
     db=Depends(get_db),
 ):
-    """查询宏观指标序列（按 available_date 升序）。"""
+    """查询宏观指标序列（按 available_date 升序，最多 limit 条）。"""
     query = select(MacroIndicator).order_by(
         MacroIndicator.indicator, MacroIndicator.field_name, MacroIndicator.available_date
     )
@@ -85,6 +86,7 @@ async def macro_indicators_api(
         query = query.where(MacroIndicator.available_date >= datetime.strptime(start, "%Y-%m-%d").date())
     if end:
         query = query.where(MacroIndicator.available_date <= datetime.strptime(end, "%Y-%m-%d").date())
+    query = query.limit(limit)
 
     result = await db.execute(query)
     rows = result.scalars().all()

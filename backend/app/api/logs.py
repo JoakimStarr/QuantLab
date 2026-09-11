@@ -21,7 +21,9 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 # - quantlab.log: web 进程全量日志（INFO+）
 # - error.log:    web 进程 WARNING+（备份保留更久，供回溯历史错误）
 # - sync.log:     全部 sync worker 子进程日志（JSON 行内 worker_kind 区分任务类型）
-_ALLOWED_STATIC = {"quantlab.log", "error.log", "sync.log"}
+# - mining.log:   挖掘 worker 子进程日志
+# - eval.log:     因子评价 worker 子进程日志
+_ALLOWED_STATIC = {"quantlab.log", "error.log", "sync.log", "mining.log", "eval.log"}
 
 # 文本日志行正则: "2026-07-28 15:34:23,123 [INFO] app.module: message [req=xxx]"
 # 或旧 sync_worker 格式 "2026-07-28 15:34:23,123 INFO app.module: message"（无方括号）
@@ -166,6 +168,58 @@ async def update_log_level(payload: LogLevelRequest):
             "code": "VALIDATION_ERROR", "message": str(e), "status": 400,
         })
     return ApiResponse(ok=True, data={"level": payload.level.upper()})
+
+
+# ---------------- 前端错误上报 ----------------
+
+# 允许上报的级别白名单（写入 error.log 需 WARNING+）
+_FRONTEND_LEVELS = {"warning", "error"}
+# 字段长度上限：防恶意超大 payload 撑爆日志
+_FRONTEND_MAX_LEN = {"message": 500, "stack": 4000, "route": 200}
+
+
+class FrontendLogRequest(BaseModel):
+    """前端错误上报体：Vue errorHandler / unhandledrejection 捕获的异常。"""
+    message: str = ""
+    stack: str = ""
+    route: str = ""
+    level: str = "error"
+
+
+def _truncate(value: str, limit: int) -> str:
+    value = (value or "").strip()
+    return value[:limit]
+
+
+# 独立 logger 名，前端日志页可按 logger=frontend 过滤；
+# error.log handler 阈值为 WARNING，warning/error 级别都会落盘
+frontend_error_logger = logging.getLogger("frontend")
+
+
+@router.post("/frontend")
+async def report_frontend_log(payload: FrontendLogRequest):
+    """前端错误上报：写入 error.log（structlog JSON），字段白名单 + 长度截断。
+
+    前端经 main.js 的全局 errorHandler / unhandledrejection 上报，本身已做节流；
+    后端再做长度截断与级别白名单，防止异常风暴撑爆 error.log。
+    """
+    level = payload.level.lower()
+    if level not in _FRONTEND_LEVELS:
+        level = "error"
+    fields = {
+        "action": "frontend_error",
+        "route": _truncate(payload.route, _FRONTEND_MAX_LEN["route"]),
+        "detail": _truncate(payload.message, _FRONTEND_MAX_LEN["message"]),
+    }
+    stack = _truncate(payload.stack, _FRONTEND_MAX_LEN["stack"])
+    message = _truncate(payload.message, _FRONTEND_MAX_LEN["message"]) or "前端未捕获异常"
+    log = frontend_error_logger.error if level == "error" else frontend_error_logger.warning
+    if stack:
+        # stack 作为 exception 字段写入（与后端 traceback 展示路径一致）
+        log("%s\n%s", message, stack, extra={"extra_fields": fields})
+    else:
+        log("%s", message, extra={"extra_fields": fields})
+    return ApiResponse(ok=True, data={"logged": True, "level": level})
 
 
 def _detect_json(fp: Path) -> bool:

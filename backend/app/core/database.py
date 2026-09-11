@@ -135,8 +135,8 @@ async def init_db() -> None:
             db_pool_size.set(pool.size())
             db_pool_available.set(pool.checkedin())
             db_pool_overflow.set(pool.overflow())
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库连接池指标上报失败: %s", e)
     try:
         await asyncio.to_thread(_run_alembic_upgrade)
     except Exception as e:

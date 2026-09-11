@@ -1,6 +1,9 @@
 """因子库 API：CRUD、评价、内置因子种子。"""
+import logging
+
 from fastapi import APIRouter, Query
 
+from app.core.audit_log import audit
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.schemas.factor import FactorCreate
@@ -9,6 +12,10 @@ from app.services.factor.library import (
 )
 from app.services.factor.expression import validate_expression, ExpressionValidationError
 from app.services.factor.builtin_factors import seed_builtin_factors
+
+logger = logging.getLogger(__name__)
+# 审计事件走统一 "audit" logger（与 app.core.audit_log 同一管道）；删除类事件用 WARNING 级
+audit_logger = logging.getLogger("audit")
 
 router = APIRouter(prefix="/factors", tags=["factor"])
 
@@ -80,6 +87,13 @@ async def add_factor_api(body: FactorCreate):
         name=body.name, expression=body.expression, category=body.category,
         description=body.description or None,
     )
+    audit(
+        "factor_create",
+        resource=f"factor:{item.get('id', '')}",
+        detail=f"创建因子 {body.name}",
+        name=body.name,
+        category=body.category,
+    )
     return ApiResponse(ok=True, data=item)
 
 
@@ -88,6 +102,14 @@ async def disable_factor_api(factor_id: int):
     ok = await disable_factor(factor_id)
     if not ok:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "因子不存在", "status": 404})
+    # 删除类审计事件用 WARNING 级（与 app.core.audit_log 同一 extra_fields 管道）
+    audit_logger.warning(
+        "删除因子 %s", factor_id,
+        extra={"extra_fields": {
+            "action": "factor_delete", "user": "anonymous",
+            "resource": f"factor:{factor_id}", "detail": f"删除因子 {factor_id}",
+        }},
+    )
     return ApiResponse(ok=True, data={"id": factor_id, "status": "disabled"})
 
 

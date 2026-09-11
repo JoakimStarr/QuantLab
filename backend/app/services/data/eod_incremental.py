@@ -121,17 +121,22 @@ def _read_bin_meta(file_path: str) -> tuple:
         with open(file_path, "rb") as f:
             hdr = f.read(QLIB_BIN_HEADER_SIZE)
     except OSError:
+        # 文件缺失是常态（标的无该字段/未上市），静默；其他 OSError 少见，一并跳过
         return None, 0
-    except Exception:
+    except Exception as e:
+        logger.warning("读取 bin 元信息失败（未知错误）path=%s: %s", file_path, e)
         return None, 0
     if len(hdr) < QLIB_BIN_HEADER_SIZE:
+        logger.warning("bin 头损坏（长度不足）path=%s size=%s", file_path, size)
         return None, 0
     n = (size - QLIB_BIN_HEADER_SIZE) // 4
     if n < 0:
+        logger.warning("bin 头损坏（数据区长为负）path=%s size=%s", file_path, size)
         return None, 0
     try:
         start_index = int(round(struct.unpack(QLIB_BIN_HEADER_FMT, hdr)[0]))
-    except Exception:
+    except Exception as e:
+        logger.warning("bin 头损坏（start_index 解析失败）path=%s: %s", file_path, e)
         return None, 0
     return start_index, n
 
@@ -252,7 +257,8 @@ def _pad_bins_to_calendar(qlib_dir: str, calendar: list) -> int:
     def _pad_one(path: str) -> int:
         try:
             size = os.path.getsize(path)
-        except OSError:
+        except OSError as e:
+            logger.warning("补齐 bin 跳过（stat 失败）path=%s: %s", path, e)
             return 0
         if size == target_size:
             return 0

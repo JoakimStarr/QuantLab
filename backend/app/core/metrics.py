@@ -15,6 +15,7 @@
 - cache_miss_total: 缓存未命中总数（cache_name）
 - data_sync_duration_seconds: 数据同步耗时（source）
 - data_sync_total: 数据同步次数（source, status）
+- sync_tasks_total: 同步 worker 任务计数（kind, result）
 - db_pool_size: 数据库连接池当前大小
 - factor_library_total: 因子库总数（gauge，定时更新）
 """
@@ -98,6 +99,11 @@ sync_total = Counter(
     "data_sync_total",
     "数据同步次数",
     ["source", "status"],
+)
+sync_tasks_total = Counter(
+    "sync_tasks_total",
+    "同步 worker 任务计数（kind=任务类型, result=success/failed）",
+    ["kind", "result"],
 )
 
 # --- 系统指标 ---

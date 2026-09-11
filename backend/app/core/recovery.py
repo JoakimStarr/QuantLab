@@ -14,8 +14,8 @@ def _auto_retry_enabled() -> bool:
     try:
         from app.core.config import settings
         enabled = bool(settings.quant.get("auto_retry_sync", False))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("读取 auto_retry_sync 配置失败（视为未开启）: %s", e)
     import os
     env_flag = os.environ.get("QUANTLAB_AUTO_RETRY_SYNC", "").lower() in ("1", "true", "yes")
     return enabled or env_flag

@@ -91,6 +91,14 @@ def spawn_sync_worker(
             code = process.wait()
             logger.info("sync_worker 退出 kind=%s universe=%s pid=%s code=%s",
                         kind, universe, process.pid, code)
+            # 同步任务收尾打点（本线程运行在 web 进程，指标随 /metrics 暴露）；
+            # 子进程自身打点不会进入 web 的 /metrics 注册表，因此在这里计数
+            try:
+                from app.core.metrics import sync_tasks_total
+                sync_tasks_total.labels(
+                    kind=kind, result="success" if code == 0 else "failed").inc()
+            except Exception as me:  # noqa: BLE001  # 打点失败不影响回收
+                logger.debug("sync_tasks_total 打点失败 kind=%s: %s", kind, me)
         except Exception:  # noqa: BLE001
             pass
 
@@ -246,8 +254,8 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
                         os.makedirs(os.path.dirname(result_path), exist_ok=True)
                         with open(result_path, "w", encoding="utf-8") as f:
                             json.dump(result, f, ensure_ascii=False, default=str)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("EOD 结果落盘失败 path=%s: %s", result_path, e)
             elif args.kind == "repair":
                 from app.services.data.repair import run_repair
 
@@ -290,13 +298,14 @@ async def _run_crawl(args, init_progress, set_worker_pid, finish_progress, clear
         # 这里把真实错误写进进度文件并标记 DB，前端即可直接看到原因而非靠猜。
         try:
             finish_progress(False, str(e))
-        except Exception:
-            pass
+        except Exception as fe:
+            logger.warning("失败进度标记写入失败 kind=%s universe=%s: %s",
+                           args.kind, args.universe, fe)
         try:
             from app.services.data.baostock_backfill import mark_sync_failed
             await mark_sync_failed(args.universe, str(e))
-        except Exception:
-            pass
+        except Exception as me:
+            logger.warning("失败状态标记 DB 写入失败 universe=%s: %s", args.universe, me)
         raise
 
 

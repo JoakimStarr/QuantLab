@@ -4,14 +4,16 @@ import os
 import re
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, Request
 from sqlalchemy import select
 
+from app.core.audit_log import audit
 from app.core.cache import TTLCache
 from app.core.config import settings
 from app.core.database import async_session, get_db
 from app.core.errors import AppError
 from app.core.executor import run_io_cpu
+from app.core.ratelimit import limiter
 from app.models.stock_index import StockIndex
 from app.models.sync_history import SyncHistory
 from app.schemas.common import ApiResponse
@@ -476,7 +478,9 @@ async def sync_stats_api(
 
 
 @router.post("/eod-sync")
+@limiter.limit("2/minute")
 async def eod_sync_api(
+    request: Request,
     universe: str = Query("csi300", description="股票池: csi300/csi500/all"),
     days: int = Query(5, ge=1, le=30, description="同步最近N天数据"),
     overwrite: bool = Query(False, description="是否覆盖已有日期数据"),
@@ -502,6 +506,14 @@ async def eod_sync_api(
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("eod", universe, days=days, overwrite=overwrite, source=source)
+    audit(
+        "eod_sync_submit",
+        detail=f"触发 EOD 增量同步（universe={universe}, days={days}, source={source}）",
+        universe=universe,
+        days=days,
+        overwrite=overwrite,
+        source=source,
+    )
     return ApiResponse(ok=True, data={
         "message": f"EOD增量同步已提交（universe={universe}, days={days}, source={source}），独立进程后台执行中",
         "universe": universe,
@@ -523,7 +535,9 @@ async def eod_result_api():
 
 
 @router.post("/sync-full")
+@limiter.limit("2/minute")
 async def sync_full_api(
+    request: Request,
     years: int = Query(5, ge=0, le=30, description="A股回填年数（0=仅增量补最新）"),
     universe: str = Query("all", description="股票池（仅状态标签，回填本质是全市场）"),
     refresh_misc: bool = Query(False, description="强制重拉 stock_basic/stock_industry（默认已入库则跳过）"),
@@ -541,6 +555,13 @@ async def sync_full_api(
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("full", universe, years=years, refresh_misc=refresh_misc)
+    audit(
+        "sync_full_submit",
+        detail=f"触发一键全同步（years={years}, universe={universe}）",
+        universe=universe,
+        years=years,
+        refresh_misc=refresh_misc,
+    )
     return ApiResponse(ok=True, data={
         "message": f"一键全同步已提交（A股回填 {years} 年 → 指数 → 宏观 → 财报 → 外盘），独立进程后台执行中",
         "universe": universe,
@@ -673,6 +694,11 @@ async def validate_trigger_api(universe: str = Query("all")):
             "message": "数据校验正在执行中，请稍候",
         })
     spawn_validation_worker(universe)
+    audit(
+        "validate_submit",
+        detail=f"触发数据校验（universe={universe}）",
+        universe=universe,
+    )
     return ApiResponse(ok=True, data={
         "status": "running",
         "message": "数据校验已提交（独立进程执行）",
@@ -697,7 +723,9 @@ async def validate_status_api():
 
 
 @router.post("/repair")
+@limiter.limit("2/minute")
 async def repair_api(
+    request: Request,
     req: RepairRequest,
     db=Depends(get_db),
 ):
@@ -730,6 +758,12 @@ async def repair_api(
 
     from app.services.data.sync_worker import spawn_sync_worker
     spawn_sync_worker("repair", universe, include_baostock=req.include_baostock)
+    audit(
+        "repair_submit",
+        detail=f"触发数据补齐（universe={universe}, include_baostock={req.include_baostock}）",
+        universe=universe,
+        include_baostock=req.include_baostock,
+    )
     return ApiResponse(ok=True, data={
         "message": f"已触发数据补齐（universe={universe}"
                    + ("，含 baostock 增量" if req.include_baostock else "，仅从 PG 重建") + "）",

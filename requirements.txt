@@ -14,7 +14,8 @@ pandas>=2.2.0
 numpy>=1.26.0
 scipy>=1.13.0
 scikit-learn>=1.5.0
-lightgbm>=4.4.0
+# 精确锁定：与当前 venv 实际版本一致，避免上游 breaking change 突袭
+lightgbm==4.7.0
 joblib>=1.4.0
 shap>=0.45.0
 apscheduler>=3.10.4
@@ -49,7 +50,7 @@ gplearn>=0.4.2
 # vectorbt: 矢量化快速回测（backend="vbt"，快速扫描/A-B 测试时用）
 vectorbt>=1.0.0
 # skfolio: 组合优化（portfolio_optimizer 首选后端；缺失时回退 scipy 均值-方差）
-skfolio>=0.4.0
+skfolio==1.0.6
 # exchange-calendars: 全球交易所交易日历（XSHG/XSHE 含 A 股法定节假日）
 exchange-calendars>=4.5.0
 # 绩效指标：empyrical 为核心（纯 numpy 快）；quantstats 已移除（仅 HTML tear-sheet，缺失时降级跳过）

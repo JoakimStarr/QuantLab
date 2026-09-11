@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -48,21 +49,40 @@ async def lifespan(app: FastAPI):
     from app.core.auth import seed_admin_user
 
     await seed_admin_user()
-    await recover_stale_sync()
-    await recover_stale_mining()
+
+    # 启动恢复扫描非关键路径（不改表结构）：放后台任务，让 /health 尽快可响应。
+    # init_db/seed_admin 保持在关键路径；恢复任务失败只记日志，不阻断服务。
+    recovery_tasks = []
+
+    async def _run_recovery(name: str, coro):
+        try:
+            await coro
+        except Exception:
+            logger.exception("启动恢复任务 %s 失败", name)
+
+    def _spawn_recovery(name: str, coro):
+        # 持有 task 引用防止被 GC（lifespan 生成器帧存活整个应用周期）
+        recovery_tasks.append(
+            asyncio.create_task(_run_recovery(name, coro), name=f"startup-{name}")
+        )
+
+    _spawn_recovery("recover_stale_sync", recover_stale_sync())
+    _spawn_recovery("recover_stale_mining", recover_stale_mining())
     from app.services.factor.eval_jobs import recover_stale_eval_jobs
 
-    await recover_stale_eval_jobs()
+    _spawn_recovery("recover_stale_eval_jobs", recover_stale_eval_jobs())
     from app.core.recovery import rerun_pending_mining
 
-    await rerun_pending_mining()
+    _spawn_recovery("rerun_pending_mining", rerun_pending_mining())
     await start_scheduler()
+    logger.info("startup complete: %s v%s", settings.app_name, settings.app_version)
 
     yield
     await stop_scheduler()
     from app.core.executor import shutdown_executors
 
     shutdown_executors()
+    logger.info("shutdown complete")
 
 
 _app_kwargs = {

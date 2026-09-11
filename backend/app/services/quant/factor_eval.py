@@ -8,14 +8,28 @@ import os
 import re
 from functools import lru_cache
 
-import alphalens
 import numpy as np
 import pandas as pd
+from cachetools import TTLCache
 
 from app.core.config import settings
 from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)
+
+# alphalens（连带 matplotlib）import 较重，顶层 import 曾拖慢模块冷启动；
+# 改为在实际用到的函数内懒加载（_get_alphalens），import 结果模块级缓存。
+alphalens = None
+
+
+def _get_alphalens():
+    """懒加载 alphalens 并缓存到模块级全局，替代顶层 import。"""
+    global alphalens
+    if alphalens is None:
+        import alphalens as _alphalens
+
+        alphalens = _alphalens
+    return alphalens
 
 # 前向收益标签：t 日收盘到 t+1 日收盘的收益（与回测引擎 shift(-1) 口径一致）
 # 注意：Ref 负数=未来，label 用未来收益是正确的（预测目标）
@@ -39,37 +53,6 @@ def forward_return_label(horizon: int = 1) -> str:
 _AUTOML_EXPR_RE = re.compile(r"^AutoML\((lightgbm|linear|walk_forward),\s*([\d,\s]+)\)$", re.IGNORECASE)
 
 
-@lru_cache(maxsize=8)
-def _load_instruments_cached(market: str) -> tuple:
-    """缓存的股票池加载（按 market 缓存），返回 tuple 满足 lru_cache 要求。
-
-    同一进程内多次调用只会触发一次 qlib D.list_instruments 查询，
-    避免 Alpha158 批量评价等场景里 158 次重复 IO。
-    """
-    from qlib.data import D
-    inst_list = D.instruments(market=market)
-    code_map = D.list_instruments(inst_list, freq="day")
-    codes = sorted(code_map.keys())
-
-    include_bj = settings.quant.get("include_bj", False)
-    if not include_bj:
-        original_count = len(codes)
-        codes = [c for c in codes if not c.lower().startswith("bj")]
-        if original_count != len(codes):
-            logger.info("过滤北交所股票: %d -> %d", original_count, len(codes))
-    return tuple(codes)
-
-
-def _load_instruments(market: str) -> list:
-    """加载股票池代码列表，默认过滤北交所（bj 开头）股票。
-
-    通过 qlib D.list_instruments 获取成分股列表，
-    根据 settings.quant.include_bj 控制是否保留北交所股票。
-    内部走 _load_instruments_cached 实现进程级缓存。
-    """
-    return list(_load_instruments_cached(market))
-
-
 def _instruments_file_signature(market: str):
     """instruments/{market}.txt 的文件签名 (mtime_ns, size)。
 
@@ -83,6 +66,49 @@ def _instruments_file_signature(market: str):
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+# 进程级 D.features 结果 TTL 缓存（性能 round-2 最大头）：
+# 全市场因子/标签/$close 每次加载都是全量 bin IO，deep_analyze_factor 一次请求
+# 就有 3 次加载、FactorCompare 多因子重复加载同一标签/价格。maxsize=8：
+# 单帧（全市场数年日线单列）可达数百 MB，8 帧是内存与命中率的折中。
+_FEATURES_TTL_SECONDS = 600
+_FEATURES_CACHE: TTLCache = TTLCache(maxsize=8, ttl=_FEATURES_TTL_SECONDS)
+
+
+def _cached_d_features(exprs: list, start: str, end: str, market: str) -> pd.DataFrame:
+    """带进程级 TTL 缓存的 qlib D.features 全市场加载。
+
+    key = (provider_uri, 表达式列表, start, end, market, instruments 文件签名)。
+    instruments 签名参与 key：回填/repair 重建成分池后缓存立即失效；
+    TTL 兜底数据文件更新（如 EOD 落 bin）后的陈旧窗口。
+
+    **缓存共享，调用方禁止修改返回的 DataFrame**（只读约定）——全帧 .copy()
+    数百 MB 代价太高。下游需要改名/换序/就地赋值时，先 rename()/unstack()/copy()
+    产生独立副本（本文件内所有调用点均已如此，见各 load_* 函数）。
+
+    注意：空结果不缓存（避免把瞬时空窗钉死在缓存里，调用方照常抛错）。
+    """
+    from qlib.data import D
+
+    key = (
+        settings.qlib_provider_path,
+        tuple(exprs),
+        str(start),
+        str(end),
+        market,
+        _instruments_file_signature(market),
+    )
+    cached = _FEATURES_CACHE.get(key)
+    if cached is not None:
+        return cached
+    df = D.features(
+        _load_instrument_spans(market), list(exprs),
+        start_time=start, end_time=end, freq="day",
+    )
+    if df is not None and not df.empty:
+        _FEATURES_CACHE[key] = df
+    return df
 
 
 @lru_cache(maxsize=16)
@@ -271,14 +297,11 @@ def load_factor_values(
                 f"因子表达式含未注册算子（{factor_expr}），文本因子需重新挖掘以预计算值，不支持实时计算"
             )
         init_qlib()
-        from qlib.data import D
-
-        # 防御性 look-ahead 检查：禁止负数 Ref（未来数据），即便表达式绕过创建时校验
         from app.services.factor.expression import check_lookahead
         check_lookahead(factor_expr)
         market = universe or settings.quant.get("universe", "csi300")
-        instruments = _load_instrument_spans(market)
-        df = D.features(instruments, [factor_expr], start_time=start, end_time=end, freq="day")
+        # 经进程级 TTL 缓存；rename 产生独立副本，下游中性化赋值不会污染缓存帧
+        df = _cached_d_features([factor_expr], start, end, market)
         if df is None or df.empty:
             raise ValueError(f"因子 {factor_expr} 在 {start}~{end} 无数据")
         df = df.rename(columns={df.columns[0]: "factor"})
@@ -308,13 +331,15 @@ def load_factor_values(
 
 
 def load_label(start: str, end: str, label_expr: str = None, universe: str = None) -> pd.DataFrame:
-    """加载前向收益标签。"""
+    """加载前向收益标签。
+
+    结果经进程级 TTL 缓存共享，调用方禁止修改返回的 DataFrame（rename 已产生副本，
+    后续 join/unstack 等只读操作安全；如需就地赋值请先 copy）。
+    """
     init_qlib()
-    from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = _load_instrument_spans(market)
     expr = label_expr or _DEFAULT_LABEL
-    df = D.features(instruments, [expr], start_time=start, end_time=end, freq="day")
+    df = _cached_d_features([expr], start, end, market)
     if df is None or df.empty:
         raise ValueError("标签数据为空")
     return df.rename(columns={df.columns[0]: "label"})
@@ -324,12 +349,12 @@ def load_close_df(start: str, end: str, universe: str = None) -> pd.DataFrame:
     """加载 $close 原始 MultiIndex(instrument, datetime) DataFrame（列 $close）。
 
     供 compute_decay 的 preloaded_close_df、分层回测等复用，避免重复全量 qlib IO。
+    **缓存共享，调用方禁止修改返回的 DataFrame**：deep_analyze_factor 用它做
+    unstack（新对象），compute_decay 的 preloaded 路径先 rename+copy——均不触碰原帧。
     """
     init_qlib()
-    from qlib.data import D
     market = universe or settings.quant.get("universe", "csi300")
-    instruments = _load_instrument_spans(market)
-    close_df = D.features(instruments, ["$close"], start_time=start, end_time=end, freq="day")
+    close_df = _cached_d_features(["$close"], start, end, market)
     if close_df is None or close_df.empty:
         raise ValueError("$close 价格数据为空")
     return close_df
@@ -391,6 +416,7 @@ def compute_ic(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> dict:
     注意：alphalens-reloaded 的 factor_information_coefficient 计算的是
     Spearman Rank IC（即 RankIC），Pearson IC 在此手动计算。
     """
+    alphalens = _get_alphalens()
     factor_data = _to_alphalens_factor_data(factor_df, label_df)
     if factor_data is None or factor_data.empty:
         return {"ic": None, "rank_ic": None, "icir": None, "ir": None, "n_days": 0}
@@ -453,6 +479,7 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
     使用 alphalens 多周期前向收益功能，一次查询 $close 后本地计算各 lag 的 IC。
     优化：调用方可传入 preloaded_close_df 跳过重复 IO（批量评价场景）。
     """
+    alphalens = _get_alphalens()
     start = factor_df.index.get_level_values("datetime").min()
     end = factor_df.index.get_level_values("datetime").max()
 
@@ -465,16 +492,15 @@ def compute_decay(factor_df: pd.DataFrame, label_df: pd.DataFrame, max_lag: int 
 
     if preloaded_close_df is None:
         init_qlib()
-        from qlib.data import D
-        market = settings.quant.get("universe", "csi300")
-        instruments = _load_instrument_spans(market)
 
         try:
-            close_df = D.features(instruments, ["$close"],
-                                  start_time=str(start.date()), end_time=str(end.date()), freq="day")
-            if close_df is None or close_df.empty:
+            raw = _cached_d_features(
+                ["$close"], str(start.date()), str(end.date()),
+                settings.quant.get("universe", "csi300"),
+            )
+            if raw is None or raw.empty:
                 return {}
-            close_df = close_df.rename(columns={"$close": "close"})
+            close_df = raw.rename(columns={"$close": "close"})
         except Exception as e:
             logger.debug("decay 查询 $close 失败: %s", e)
             return {}
@@ -558,14 +584,26 @@ def evaluate_factor(factor_expr: str, start: str, end: str, universe: str = None
     if horizons:
         ic_by_horizon = {}
         signs = []
+        # 额外 horizon 的标签一次 D.features 拉齐（原先每个 horizon 各自全市场 IO）
+        extra_horizons = [h for h in horizons if h != horizon]
+        h_label_dfs = {}
+        if extra_horizons:
+            init_qlib()
+            market = universe or settings.quant.get("universe", "csi300")
+            h_exprs = [forward_return_label(h) for h in extra_horizons]
+            h_raw = _cached_d_features(h_exprs, start, end, market)
+            if h_raw is None or h_raw.empty:
+                raise ValueError("标签数据为空")
+            for e in h_exprs:
+                # 列选 + 改名产生独立副本，不触碰缓存帧
+                h_label_dfs[e] = h_raw[[e]].rename(columns={e: "label"})
         for h in horizons:
             if h == horizon:
                 ic_by_horizon[str(h)] = ic_metrics.get("ic")
                 if ic_metrics.get("ic") is not None:
                     signs.append(1 if ic_metrics["ic"] > 0 else -1)
                 continue
-            h_label = forward_return_label(h)
-            h_df = load_label(start, end, label_expr=h_label, universe=universe)
+            h_df = h_label_dfs[forward_return_label(h)]
             h_ic = compute_ic(factor_df, h_df).get("ic")
             ic_by_horizon[str(h)] = h_ic
             if h_ic is not None:
@@ -629,6 +667,7 @@ def compute_quantile_returns(
         factor_s = factor_s.swaplevel(0, 1).sort_index()
     factor_s.index = factor_s.index.set_names(["date", "asset"])
 
+    alphalens = _get_alphalens()
     try:
         # 使用 alphalens 准备数据（含分位分配）
         factor_data = alphalens.utils.get_clean_factor_and_forward_returns(
@@ -721,6 +760,7 @@ def _daily_rank_ic_series(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> pd
 
     使用 alphalens 的 factor_information_coefficient（Spearman Rank IC）计算。
     """
+    alphalens = _get_alphalens()
     factor_data = _to_alphalens_factor_data(factor_df, label_df)
     if factor_data is None or factor_data.empty:
         return pd.Series(dtype=float)
@@ -728,14 +768,19 @@ def _daily_rank_ic_series(factor_df: pd.DataFrame, label_df: pd.DataFrame) -> pd
     return rank_ic_df["1D"].dropna()
 
 
-def compute_ic_distribution(factor_df: pd.DataFrame, label_df: pd.DataFrame, n_bins: int = 20) -> dict:
+def compute_ic_distribution(factor_df: pd.DataFrame, label_df: pd.DataFrame, n_bins: int = 20,
+                            daily_ic: pd.Series = None) -> dict:
     """IC 分布：每日截面 Spearman IC 序列的分箱统计。
 
+    Args:
+        daily_ic: 预计算的每日 Spearman IC 序列（如 deep_analyze_factor 已与
+            compute_ic_timeseries 共用一次计算）；None 时内部自行计算。
     Returns: {bins, counts, stats: {mean, std, skew, positive_ratio}}
     """
     from scipy import stats
 
-    daily_ic = _daily_rank_ic_series(factor_df, label_df)
+    if daily_ic is None:
+        daily_ic = _daily_rank_ic_series(factor_df, label_df)
     if daily_ic.empty:
         return {
             "bins": [],
@@ -762,12 +807,16 @@ def compute_ic_distribution(factor_df: pd.DataFrame, label_df: pd.DataFrame, n_b
     }
 
 
-def compute_ic_timeseries(factor_df: pd.DataFrame, label_df: pd.DataFrame, window: int = 60) -> dict:
+def compute_ic_timeseries(factor_df: pd.DataFrame, label_df: pd.DataFrame, window: int = 60,
+                          daily_ic: pd.Series = None) -> dict:
     """IC 时序：每日截面 IC + 滚动均线。
 
+    Args:
+        daily_ic: 预计算的每日 Spearman IC 序列；None 时内部自行计算。
     Returns: {dates, ic_series, ic_ma}
     """
-    daily_ic = _daily_rank_ic_series(factor_df, label_df)
+    if daily_ic is None:
+        daily_ic = _daily_rank_ic_series(factor_df, label_df)
     if daily_ic.empty:
         return {"dates": [], "ic_series": [], "ic_ma": []}
 
@@ -1003,8 +1052,10 @@ def deep_analyze_factor(
     close_df = load_close_df(start, end, universe)
     prices_df = close_df["$close"].unstack(level="instrument")
 
-    ic_distribution = compute_ic_distribution(factor_df, label_df)
-    ic_timeseries = compute_ic_timeseries(factor_df, label_df, ic_window)
+    # 每日 Spearman Rank-IC 序列只算一次，分布与时序共用（原先各自重复计算）
+    daily_rank_ic = _daily_rank_ic_series(factor_df, label_df)
+    ic_distribution = compute_ic_distribution(factor_df, label_df, daily_ic=daily_rank_ic)
+    ic_timeseries = compute_ic_timeseries(factor_df, label_df, ic_window, daily_ic=daily_rank_ic)
     ic_significance = compute_ic_significance(
         pd.Series(ic_timeseries["ic_series"]), lags=horizon
     )

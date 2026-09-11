@@ -3,9 +3,12 @@
 compute_ic(factor_df, label_df) -> dict  (纯 pandas)
 compute_turnover(factor_df) -> float      (依赖 settings.quant.topk)
 """
-import pytest
+import time
+from unittest.mock import MagicMock
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.core.config import settings
 from app.services.quant.factor_eval import compute_ic, compute_turnover
@@ -299,13 +302,13 @@ class TestLoadFactorValuesEtfNeutralizeSkip:
     """ETF 标的池加载因子值时跳过市值/行业中性化（S3）。"""
 
     def _fake_feature_df(self):
-        import numpy as np
         dates = pd.date_range("2024-01-01", periods=5, freq="B")
         idx = pd.MultiIndex.from_product([dates, ["sh510300"]], names=["datetime", "instrument"])
         return pd.DataFrame({"factor": [1.0, 2.0, 3.0, 4.0, 5.0]}, index=idx)
 
     def test_etf_universe_skips_neutralize(self):
         from unittest.mock import MagicMock, patch
+
         from app.services.quant import factor_eval as fe
 
         fake_df = self._fake_feature_df()
@@ -325,6 +328,7 @@ class TestLoadFactorValuesEtfNeutralizeSkip:
 
     def test_stock_universe_still_neutralizes(self):
         from unittest.mock import MagicMock, patch
+
         from app.services.quant import factor_eval as fe
 
         fake_df = self._fake_feature_df().copy()
@@ -344,3 +348,154 @@ class TestLoadFactorValuesEtfNeutralizeSkip:
         mock_ind.assert_called_once()
         assert "factor_neutralized" not in df.columns  # 中性化后替换回 factor
         assert list(df["factor"]) == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+
+# ---------- 进程级 D.features TTL 缓存（性能 round-2）----------
+
+
+class TestCachedDFeatures:
+    """进程级 TTL 缓存：同 key 不重复加载、异 key 各自加载、TTL 过期后重载。"""
+
+    def _fake_df(self, exprs):
+        dates = pd.date_range("2024-01-01", periods=3, freq="B")
+        idx = pd.MultiIndex.from_product([["sh600000"], dates],
+                                         names=["instrument", "datetime"])
+        return pd.DataFrame({e: [1.0, 2.0, 3.0] for e in exprs}, index=idx)
+
+    def _patch_env(self, monkeypatch, ttl=600):
+        from cachetools import TTLCache
+
+        import app.services.quant.factor_eval as fe
+
+        counter = []
+
+        def fake_features(instruments, exprs, **kw):
+            counter.append(list(exprs))
+            return self._fake_df(exprs)
+
+        mock_d = MagicMock()
+        mock_d.features.side_effect = fake_features
+        monkeypatch.setattr(fe, "_FEATURES_CACHE", TTLCache(maxsize=8, ttl=ttl))
+        monkeypatch.setattr(fe, "init_qlib", lambda: True)
+        monkeypatch.setattr(fe, "_load_instrument_spans", lambda market: ["sh600000"])
+        monkeypatch.setattr("qlib.data.D", mock_d)
+        return counter
+
+    def test_same_key_hits_cache(self, monkeypatch):
+        """同一 key 二次调用不重复触发底层 D.features，且共享同一缓存对象。"""
+        import app.services.quant.factor_eval as fe
+
+        counter = self._patch_env(monkeypatch)
+        df1 = fe.load_label("2024-01-01", "2024-01-10", universe="csi300")
+        df2 = fe.load_label("2024-01-01", "2024-01-10", universe="csi300")
+        assert len(counter) == 1, "同 key 二次调用不应再触发 D.features"
+        pd.testing.assert_frame_equal(df1, df2)
+        raw1 = fe._cached_d_features(["$close"], "2024-01-01", "2024-01-10", "csi300")
+        raw2 = fe._cached_d_features(["$close"], "2024-01-01", "2024-01-10", "csi300")
+        assert raw1 is raw2, "缓存命中应返回同一对象（只读约定，不做拷贝）"
+
+    def test_different_keys_load_separately(self, monkeypatch):
+        """不同表达式/区间的 key 各自触发加载。"""
+        import app.services.quant.factor_eval as fe
+
+        counter = self._patch_env(monkeypatch)
+        fe.load_label("2024-01-01", "2024-01-10", universe="csi300")
+        fe.load_label("2024-01-01", "2024-01-20", universe="csi300")  # end 不同
+        fe.load_close_df("2024-01-01", "2024-01-10", universe="csi300")  # 表达式不同
+        assert len(counter) == 3
+        assert counter[0] != counter[2]
+
+    def test_ttl_expiry_reloads(self, monkeypatch):
+        """TTL 过期后重新加载（用极小 ttl 验证）。"""
+        import app.services.quant.factor_eval as fe
+
+        counter = self._patch_env(monkeypatch, ttl=0.05)
+        fe.load_label("2024-01-01", "2024-01-10", universe="csi300")
+        assert len(counter) == 1
+        time.sleep(0.08)  # 等待 TTL 过期
+        fe.load_label("2024-01-01", "2024-01-10", universe="csi300")
+        assert len(counter) == 2, "TTL 过期后应重新触发底层加载"
+
+    def test_load_factor_values_uses_cache(self, monkeypatch):
+        """load_factor_values 同参数二次调用也命中缓存（mock 计数=1）。"""
+        import app.services.quant.factor_eval as fe
+
+        counter = self._patch_env(monkeypatch)
+        expr = "$close/Ref($close,5)-1"
+        fe.load_factor_values(expr, "2024-01-01", "2024-01-10", "csi300")
+        fe.load_factor_values(expr, "2024-01-01", "2024-01-10", "csi300")
+        assert len(counter) == 1
+
+
+class TestPrecomputedDailyIC:
+    """deep_analyze 的 Rank-IC 序列去重：预计算参数与缺省行为等价。"""
+
+    def test_distribution_and_timeseries_accept_precomputed(self):
+        from app.services.quant.factor_eval import (
+            _daily_rank_ic_series,
+            compute_ic_distribution,
+            compute_ic_timeseries,
+        )
+
+        fdf, ldf, _cdf = _make_qlib_style_data()
+        pre = _daily_rank_ic_series(fdf, ldf)
+
+        d_default = compute_ic_distribution(fdf, ldf)
+        d_pre = compute_ic_distribution(fdf, ldf, daily_ic=pre)
+        assert d_default["stats"] == d_pre["stats"]
+        assert d_default["counts"] == d_pre["counts"]
+
+        t_default = compute_ic_timeseries(fdf, ldf, 30)
+        t_pre = compute_ic_timeseries(fdf, ldf, 30, daily_ic=pre)
+        assert t_default["ic_series"] == t_pre["ic_series"]
+        assert t_default["ic_ma"] == t_pre["ic_ma"]
+
+    def test_deep_analyze_computes_rank_ic_once(self, monkeypatch):
+        """deep_analyze_factor 只计算一次 Rank-IC 序列（分布/时序共用）。"""
+        import app.services.quant.factor_eval as fe
+        import app.services.quant.monte_carlo as mc
+
+        fdf, ldf, cdf = _make_qlib_style_data()
+        monkeypatch.setattr(fe, "load_factor_values", lambda *a, **k: fdf)
+        monkeypatch.setattr(fe, "load_label", lambda *a, **k: ldf)
+        monkeypatch.setattr(fe, "load_close_df", lambda *a, **k: cdf)
+        monkeypatch.setattr(mc, "permutation_ic_test", lambda *a, **k: {
+            "p_value": 0.1, "significant": False, "n_permutations": 0, "note": "test",
+        })
+        counter = []
+        orig = fe._daily_rank_ic_series
+
+        def counting(f_df, l_df):
+            counter.append(1)
+            return orig(f_df, l_df)
+
+        monkeypatch.setattr(fe, "_daily_rank_ic_series", counting)
+        fe.deep_analyze_factor("$close", "2024-01-01", "2024-12-31")
+        assert len(counter) == 1, "Rank-IC 序列应只计算一次并传给分布/时序"
+
+
+class TestEvaluateFactorMultiHorizonSingleFetch:
+    """多 horizon 标签一次 D.features 拉齐（原先每个 horizon 各自全市场 IO）。"""
+
+    def test_extra_horizons_fetched_in_one_call(self, monkeypatch):
+        import app.services.quant.factor_eval as fe
+
+        fdf, ldf, cdf = _make_qlib_style_data(days=60)
+        calls = []
+
+        def fake_cached(exprs, start, end, market):
+            calls.append(list(exprs))
+            return pd.DataFrame({e: ldf["label"].values for e in exprs}, index=ldf.index)
+
+        monkeypatch.setattr(fe, "load_factor_values", lambda *a, **k: fdf)
+        monkeypatch.setattr(fe, "load_label", lambda *a, **k: ldf)
+        monkeypatch.setattr(fe, "_cached_d_features", fake_cached)
+
+        result = fe.evaluate_factor(
+            "$close", "2024-01-01", "2024-06-30",
+            horizons=[1, 5, 10, 20], preloaded_close_df=cdf,
+        )
+        # 主 horizon(5) 用 load_label，额外 [1,10,20] 一次拉齐
+        assert len(calls) == 1 and len(calls[0]) == 3
+        assert set(result["ic_by_horizon"].keys()) == {"1", "5", "10", "20"}
+        assert "multi_horizon_stability" in result

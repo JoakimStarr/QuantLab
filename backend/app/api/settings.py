@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.core.audit_log import audit
 from app.core.config import is_placeholder_api_key, settings
 from app.schemas.common import ApiResponse
 
@@ -349,6 +350,16 @@ async def save_settings(payload: SaveSettingsRequest):
 
         logger.info("设置已保存并热重载: yaml_sections=%s env_keys=%s",
                     sorted(yaml_updates.keys()), sorted((payload.api_keys or {}).keys()))
+        # 审计：只记变更的键名，绝不记值（api_keys 值可能含密钥）
+        audit(
+            "settings_save",
+            detail="保存系统设置",
+            yaml_sections=sorted(yaml_updates.keys()),
+            changed_keys={
+                section: sorted(values.keys()) for section, values in yaml_updates.items()
+            },
+            api_key_names=sorted((payload.api_keys or {}).keys()),
+        )
         return ApiResponse(ok=True, data={
             "message": "设置已保存，配置已热重载",
             "saved_sections": sorted(yaml_updates.keys()),

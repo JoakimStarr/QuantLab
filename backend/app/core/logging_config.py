@@ -284,6 +284,15 @@ def set_log_level(level: str) -> None:
     for name in ("", *_MANAGED_LOGGERS):
         logging.getLogger(name).setLevel(level)
     logging.getLogger(__name__).info("日志级别已调整为: %s", level)
+    # 级别变更纳入审计（排查动作可回溯；不记调用方密钥等敏感信息）
+    logging.getLogger("audit").info(
+        "日志级别已调整为: %s", level,
+        extra={"extra_fields": {
+            "action": "log_level_change", "user": "anonymous",
+            "resource": "logging", "detail": f"日志级别已调整为 {level}",
+            "level": level,
+        }},
+    )
 
 
 # 清理时的备份文件后缀模式 -> 保留天数（普通日志短、错误日志长）。
@@ -293,6 +302,7 @@ _CLEANUP_PATTERNS = {
     "error.log.[0-9]*": "error_retention_days",
     "sync.log.[0-9]*": "retention_days",
     "mining.log.[0-9]*": "retention_days",
+    "eval.log.[0-9]*": "retention_days",
 }
 
 

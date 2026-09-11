@@ -1,8 +1,11 @@
 """qlib 数据目录磁盘占用：带 TTL 缓存，避免每次状态轮询都全量扫描。"""
+import logging
 import os
 import threading
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _cache = {}  # path -> (expire_ts, size_bytes)
@@ -34,8 +37,9 @@ def _scan_dir(path: Path) -> int:
             for fn in filenames:
                 try:
                     total += os.path.getsize(os.path.join(dirpath, fn))
-                except OSError:
-                    pass
-    except OSError:
-        pass
+                except OSError as e:
+                    # 单文件 stat 失败（竞态删除/权限）属高频噪声，DEBUG 即可
+                    logger.debug("磁盘统计跳过文件 %s/%s: %s", dirpath, fn, e)
+    except OSError as e:
+        logger.warning("磁盘统计目录扫描失败 path=%s: %s", path, e)
     return total

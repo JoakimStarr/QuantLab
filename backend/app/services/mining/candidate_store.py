@@ -70,8 +70,14 @@ async def upsert_candidates(task_id: int, candidates: list[dict], round_no: int 
 
 
 async def list_candidates(task_id: int) -> list[dict]:
-    """查询任务的候选列表（按轮次、id 排序）。"""
+    """查询任务的候选列表（按轮次、id 排序）。
+
+    上限 200 条（按轮次/id 优先保留最早的候选）：防止长迭代任务候选无界膨胀
+    拖垮列表查询与响应载荷。注意 Mining.vue 前端当前展示"共 N 条"依赖本返回
+    长度，超过 200 条时计数会被截断（后端不区分，前端如需精确总数需另加 count 接口）。
+    """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.mining_candidate import MiningCandidate
 
@@ -81,6 +87,7 @@ async def list_candidates(task_id: int) -> list[dict]:
                 select(MiningCandidate)
                 .where(MiningCandidate.task_id == task_id)
                 .order_by(MiningCandidate.round, MiningCandidate.id)
+                .limit(200)
             )
         ).scalars().all()
         return [

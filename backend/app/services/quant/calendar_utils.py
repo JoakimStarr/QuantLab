@@ -87,8 +87,8 @@ def next_trading_day(date, n: int = 1):
     if cal is not None:
         try:
             return cal.date_to_session(pd.Timestamp(date).normalize(), direction="next", offset=n)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("下一交易日查询失败(date=%s, n=%s)，降级工作日近似: %s", date, n, e)
     days = get_trading_days(pd.Timestamp(date).normalize() + pd.Timedelta(days=1),
                             pd.Timestamp(date).normalize() + pd.Timedelta(days=7 * (n + 2)))
     return days[n - 1] if len(days) >= n else days[-1]
@@ -100,8 +100,8 @@ def prev_trading_day(date, n: int = 1):
     if cal is not None:
         try:
             return cal.date_to_session(pd.Timestamp(date).normalize(), direction="previous", offset=n)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("上一交易日查询失败(date=%s, n=%s)，降级工作日近似: %s", date, n, e)
     days = get_trading_days(pd.Timestamp(date).normalize() - pd.Timedelta(days=7 * (n + 2)),
                             pd.Timestamp(date).normalize() - pd.Timedelta(days=1))
     return days[-n] if len(days) >= n else days[0]

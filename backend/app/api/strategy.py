@@ -17,6 +17,8 @@ from app.services.strategy.manager import (
 )
 
 logger = logging.getLogger(__name__)
+# 审计事件走统一 "audit" logger（与 app.core.audit_log 同一管道）；删除/归档类事件用 WARNING 级
+audit_logger = logging.getLogger("audit")
 
 router = APIRouter(prefix="/strategies", tags=["strategy"])
 
@@ -73,6 +75,13 @@ async def delete_result_api(result_id: int):
     ok = await delete_backtest_result(result_id)
     if not ok:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "回测结果不存在", "status": 404})
+    audit_logger.warning(
+        "删除回测结果 %s", result_id,
+        extra={"extra_fields": {
+            "action": "backtest_result_delete", "user": "anonymous",
+            "resource": f"backtest_result:{result_id}", "detail": f"删除回测结果 {result_id}",
+        }},
+    )
     return ApiResponse(ok=True, data={"message": f"回测结果 {result_id} 已删除"})
 
 
@@ -89,6 +98,13 @@ async def archive_strategy_api(strategy_id: int):
     ok = await archive_strategy(strategy_id)
     if not ok:
         return ApiResponse(ok=False, error={"code": "NOT_FOUND", "message": "策略不存在", "status": 404})
+    audit_logger.warning(
+        "归档策略 %s", strategy_id,
+        extra={"extra_fields": {
+            "action": "strategy_archive", "user": "anonymous",
+            "resource": f"strategy:{strategy_id}", "detail": f"归档（删除）策略 {strategy_id}",
+        }},
+    )
     return ApiResponse(ok=True, data={"id": strategy_id, "status": "archived"})
 
 
