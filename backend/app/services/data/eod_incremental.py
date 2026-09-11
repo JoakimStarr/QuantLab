@@ -498,64 +498,29 @@ async def _covered_trade_dates(start, end):
 
 
 
-def incremental_sync_eod_baostock(
-    dates: list,
-    codes: list,
-    provider_uri: str,
-    old_calendar: list,
-    overwrite: bool = False,
-    universe: str = "csi300",
-) -> dict:
-    """baostock 主源增量同步：对每个日期一次拉全市场，按股票分组写 bin。
-
-    流程：
-      1. 对每个 date 调 ``fetch_daily_all_a_stock_sync(date)`` 一次拉全市场
-      2. code 列从 'sh.600000' 转 qlib 格式 'sh600000'（用 from_baostock_code）
-      3. 数值列转 float，按股票池过滤
-      4. 按 code 分组，每只股票调 ``_sync_stock_bin`` 写 bin（复用复权对齐逻辑）
-      5. 提取 isST 字段供 ``_compute_tradable`` 判定 ST 5% 涨跌停
+def _aggregate_baostock_days(dates: list, codes: list, old_calendar: list,
+                             fetch_daily_all_a_stock_sync, from_baostock_code,
+                             BaostockQuotaError) -> tuple:
+    """逐日拉取 baostock 全市场并按股票聚合（候选日期收集/聚合段）。
 
     Args:
-        dates: 待同步日期列表（YYYY-MM-DD）
-        codes: 股票池 qlib 代码列表（用于过滤全市场数据）
-        provider_uri: qlib 数据目录
-        old_calendar: 现有日历
-        overwrite: 是否覆盖已有日期
-        universe: 股票池名（仅用于日志/统计）
+        fetch_daily_all_a_stock_sync/from_baostock_code/BaostockQuotaError:
+            由调用方导入后传入（baostock_client 可用性已在入口校验）。
 
     Returns:
-        dict: {ok, source, total_stocks, success, failed, skipped, dates, new_dates, ...}
+        (per_stock_rows, fetched_dates, all_new_dates)：
+        qlib_code_lower -> list[DataFrame]、成功拉取日期列表、新日历日期集合
     """
-    try:
-        from app.services.data.baostock_client import (
-            BaostockQuotaError,
-            fetch_daily_all_a_stock_sync,
-            from_baostock_code,
-        )
-    except ImportError as e:
-        # baostock_client 尚未就绪（Step1 并行开发中），返回失败由上层回退 akshare
-        return {"ok": False, "error": f"baostock_client 未就绪: {e}"}
-
-    if not dates:
-        return {
-            "ok": True, "source": "baostock", "universe": universe,
-            "total_stocks": len(codes), "success": 0, "failed": 0, "skipped": 0,
-            "dates": [], "new_dates": [],
-            "calendar_before": len(old_calendar),
-            "calendar_after": len(old_calendar),
-        }
+    from app.services.data.sync_progress import update_progress as _up
 
     cal_set = set(old_calendar) if old_calendar else set()
     codes_set = set(c.lower() for c in codes)
-    # 写入字段：OHLCV + preclose/change/factor（后复权口径所需）+ tradable
-    fields_to_write = list(FIELD_MAP.values()) + ["preclose", "change", "factor", "tradable"]
 
     # 按股票聚合各日数据：qlib_code_lower -> list[DataFrame]
     per_stock_rows = {}
     all_new_dates = set()
     fetched_dates = []
 
-    from app.services.data.sync_progress import update_progress as _up
     total_dates = len(dates) if dates else 1
     for date_idx, date in enumerate(dates):
         try:
@@ -597,12 +562,23 @@ def incremental_sync_eod_baostock(
         for qlib_code_lower, grp in df_all.groupby("qlib_code_lower"):
             per_stock_rows.setdefault(qlib_code_lower, []).append(grp)
 
-    # 按股票写 bin
+    return per_stock_rows, fetched_dates, all_new_dates
+
+
+def _write_baostock_bins(per_stock_rows: dict, provider_uri: str, old_calendar: list,
+                         fields_to_write: list, overwrite: bool) -> tuple:
+    """按股票写 bin（含后复权增量变换）并构建 stock_daily 落库记录。
+
+    Returns:
+        (success_count, fail_count, pg_rows)
+    """
+    from app.services.data.sync_progress import update_progress as _up
+    from app.services.data.baostock_backfill import _f, _i  # 延迟导入避免循环依赖（backfill 模块级已 import 本模块）
+
     success_count = 0
     fail_count = 0
     total_stocks = len(per_stock_rows) if per_stock_rows else 1
     pg_rows = []  # stock_daily 落库记录：修复 EOD 只写 bin、repair 以 PG 为权威会丢 EOD 数据
-    from app.services.data.baostock_backfill import _f, _i  # 延迟导入避免循环依赖（backfill 模块级已 import 本模块）
 
     for stock_idx, (qlib_code_lower, grps) in enumerate(per_stock_rows.items()):
         try:
@@ -666,6 +642,68 @@ def incremental_sync_eod_baostock(
             _up(pct=60 + (stock_idx + 1) / total_stocks * 30,
                 status="running",
                 message=f"baostock 写入 {stock_idx + 1}/{total_stocks} (成功{success_count})")
+
+    return success_count, fail_count, pg_rows
+
+
+def incremental_sync_eod_baostock(
+    dates: list,
+    codes: list,
+    provider_uri: str,
+    old_calendar: list,
+    overwrite: bool = False,
+    universe: str = "csi300",
+) -> dict:
+    """baostock 主源增量同步：对每个日期一次拉全市场，按股票分组写 bin。
+
+    流程：
+      1. 对每个 date 调 ``fetch_daily_all_a_stock_sync(date)`` 一次拉全市场
+      2. code 列从 'sh.600000' 转 qlib 格式 'sh600000'（用 from_baostock_code）
+      3. 数值列转 float，按股票池过滤
+      4. 按 code 分组，每只股票调 ``_sync_stock_bin`` 写 bin（复用复权对齐逻辑）
+      5. 提取 isST 字段供 ``_compute_tradable`` 判定 ST 5% 涨跌停
+
+    Args:
+        dates: 待同步日期列表（YYYY-MM-DD）
+        codes: 股票池 qlib 代码列表（用于过滤全市场数据）
+        provider_uri: qlib 数据目录
+        old_calendar: 现有日历
+        overwrite: 是否覆盖已有日期
+        universe: 股票池名（仅用于日志/统计）
+
+    Returns:
+        dict: {ok, source, total_stocks, success, failed, skipped, dates, new_dates, ...}
+    """
+    try:
+        from app.services.data.baostock_client import (
+            BaostockQuotaError,
+            fetch_daily_all_a_stock_sync,
+            from_baostock_code,
+        )
+    except ImportError as e:
+        # baostock_client 尚未就绪（Step1 并行开发中），返回失败由上层回退 akshare
+        return {"ok": False, "error": f"baostock_client 未就绪: {e}"}
+
+    if not dates:
+        return {
+            "ok": True, "source": "baostock", "universe": universe,
+            "total_stocks": len(codes), "success": 0, "failed": 0, "skipped": 0,
+            "dates": [], "new_dates": [],
+            "calendar_before": len(old_calendar),
+            "calendar_after": len(old_calendar),
+        }
+
+    # 写入字段：OHLCV + preclose/change/factor（后复权口径所需）+ tradable
+    fields_to_write = list(FIELD_MAP.values()) + ["preclose", "change", "factor", "tradable"]
+
+    per_stock_rows, fetched_dates, all_new_dates = _aggregate_baostock_days(
+        dates, codes, old_calendar,
+        fetch_daily_all_a_stock_sync, from_baostock_code, BaostockQuotaError,
+    )
+
+    # 按股票写 bin
+    success_count, fail_count, pg_rows = _write_baostock_bins(
+        per_stock_rows, provider_uri, old_calendar, fields_to_write, overwrite)
 
     # 更新日历（合并新日期）
     new_dates_sorted = sorted(all_new_dates)

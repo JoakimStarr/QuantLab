@@ -17,57 +17,17 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def run_vbt_backtest(
-    score_df: pd.DataFrame,
-    start: str = None,
-    end: str = None,
-    topk: int = None,
-    n_drop: int = None,
-    benchmark: str = None,
-    rebalance_freq: str = "day",
-    portfolio_method: str = None,
-    vbt_kwargs: dict = None,
-    capital: float = None,
-    slippage_bps: float = None,
-    cost_buy: float = None,
-    cost_sell: float = None,
-    asset_class: str = "stock",
-) -> dict:
-    """用 VectorBT from_signals 运行 top-k dropout 回测（backend = "vbt"）。
+def _build_signals(score_df: pd.DataFrame, start: str, end: str, topk: int,
+                   n_drop: int, rebalance_freq: str, portfolio_method: str,
+                   init_cash: float, is_etf: bool) -> tuple:
+    """构建逐调仓日 entries/exits/size 信号表（含打分过滤、北交所过滤、调仓日选取）。
 
-    执行/成本参数（用户可选）：
-    - slippage_bps: 滑点（基点），写入 vbt slippage
-    - cost_buy/cost_sell: 费率（vbt 为单费率，取 cost_buy 统一应用）
-    注意：vbt 无原生 A股整手取整，trade_unit 不适用；严格约束请用 backend="qlib"。
-
-    asset_class:
-        - "stock"（默认）: T+1 执行（T-1 信号 → T 成交，与 qlib 后端口径一致）
-        - "etf": T+0 语义（信号日收盘成交）。日频 bar 无法建模盘内买卖，
-          这里用"当日信号当日收盘成交"近似（含轻微前视），快速 A/B 用；
-          严格口径请用 qlib 后端（T+1 时序 + 无整手 + 涨跌停放宽）。
-
-    Args:
-        score_df: MultiIndex (datetime, instrument) 含 'score' 列
-        rebalance_freq: day/week/month
-        vbt_kwargs: 透传给 vbt.Portfolio.from_signals 的额外参数（如 {'fees': 0.001}）
-        capital: 初始资金，作为 vbt init_cash；每个入选股以 capital/topk 金额买入（等权）
+    组合优化（portfolio_method="optimize"）：由因子分数产出目标权重后按权重
+    sizing；优化器内部回退链 skfolio → scipy → 等权（optimizer 内记 WARNING）。
 
     Returns:
-        与 run_backtest 相同格式: {returns, benchmark, turnover, portfolios,
-        start_date, end_date, topk, n_drop, rebalance_freq, benchmark_code, portfolio_method}
+        (price_df, entries, exits, size, used_optimize)
     """
-    is_etf = asset_class == "etf"
-    period = settings.quant.get("default_backtest_period", {})
-    start = start or period.get("start", "2020-01-01")
-    end = end or period.get("end", "2024-12-31")
-    topk = topk if topk is not None else settings.quant.get("topk", 50)
-    n_drop = n_drop if n_drop is not None else settings.quant.get("n_drop", 5)
-    cost_buy = cost_buy if cost_buy is not None else settings.quant.get("cost_buy", 0.0013)
-    cost_sell = cost_sell if cost_sell is not None else settings.quant.get("cost_sell", 0.0023)
-    slippage_bps = slippage_bps if slippage_bps is not None else settings.quant.get("slippage_bps", 0)
-    init_cash = capital or settings.quant.get("initial_capital", 100000000)
-    vbt_kwargs = dict(vbt_kwargs or {})
-
     signal = score_df.copy()
     if "score" not in signal.columns:
         raise ValueError("score_df 必须含 'score' 列")
@@ -183,30 +143,11 @@ def run_vbt_backtest(
                 size.loc[date, buy_insts] = init_cash / topk
         holdings = set(selected)
 
-    if not entries.any().any():
-        raise ValueError("无可交易的调仓信号")
+    return price_df, entries, exits, size, used_optimize
 
-    # vbt from_signals: size_type="Value" + cash_sharing => 每次信号买入 size 金额（绝对量）
-    import vectorbt as vbt
-    pf_kwargs = dict(vbt_kwargs)
-    pf_kwargs.setdefault("init_cash", init_cash)
-    pf_kwargs.setdefault("size_type", "Value")
-    pf_kwargs.setdefault("direction", "longonly")
-    pf_kwargs.setdefault("cash_sharing", True)
-    pf_kwargs.setdefault("fees", cost_buy)
-    if slippage_bps > 0:
-        pf_kwargs.setdefault("slippage", slippage_bps / 10000.0)
-    pf = vbt.Portfolio.from_signals(
-        price_df,
-        entries=entries,
-        exits=exits,
-        size=size,
-        **pf_kwargs,
-    )
-    returns = pf.returns().dropna()
-    returns.name = "return"
 
-    # 逐笔成交明细：直接读取 vectorbt 真实 order records（含成交价/数量/费用）
+def _extract_trades(pf) -> list:
+    """逐笔成交明细：直接读取 vectorbt 真实 order records（含成交价/数量/费用）。"""
     trades = []
     try:
         # vbt 1.x 中 records_readable 是属性，直接返回 DataFrame
@@ -231,6 +172,90 @@ def run_vbt_backtest(
     except Exception as e:
         logger.warning("提取 vbt 成交明细失败，trades 置空: %s", e)
     trades.sort(key=lambda t: (t["date"], t["action"], t["code"]))
+    return trades
+
+
+def run_vbt_backtest(
+    score_df: pd.DataFrame,
+    start: str = None,
+    end: str = None,
+    topk: int = None,
+    n_drop: int = None,
+    benchmark: str = None,
+    rebalance_freq: str = "day",
+    portfolio_method: str = None,
+    vbt_kwargs: dict = None,
+    capital: float = None,
+    slippage_bps: float = None,
+    cost_buy: float = None,
+    cost_sell: float = None,
+    asset_class: str = "stock",
+) -> dict:
+    """用 VectorBT from_signals 运行 top-k dropout 回测（backend = "vbt"）。
+
+    执行/成本参数（用户可选）：
+    - slippage_bps: 滑点（基点），写入 vbt slippage
+    - cost_buy/cost_sell: 费率（vbt 为单费率，取 cost_buy 统一应用）
+    注意：vbt 无原生 A股整手取整，trade_unit 不适用；严格约束请用 backend="qlib"。
+
+    asset_class:
+        - "stock"（默认）: T+1 执行（T-1 信号 → T 成交，与 qlib 后端口径一致）
+        - "etf": T+0 语义（信号日收盘成交）。日频 bar 无法建模盘内买卖，
+          这里用"当日信号当日收盘成交"近似（含轻微前视），快速 A/B 用；
+          严格口径请用 qlib 后端（T+1 时序 + 无整手 + 涨跌停放宽）。
+
+    Args:
+        score_df: MultiIndex (datetime, instrument) 含 'score' 列
+        rebalance_freq: day/week/month
+        vbt_kwargs: 透传给 vbt.Portfolio.from_signals 的额外参数（如 {'fees': 0.001}）
+        capital: 初始资金，作为 vbt init_cash；每个入选股以 capital/topk 金额买入（等权）
+
+    Returns:
+        与 run_backtest 相同格式: {returns, benchmark, turnover, portfolios,
+        start_date, end_date, topk, n_drop, rebalance_freq, benchmark_code, portfolio_method}
+    """
+    is_etf = asset_class == "etf"
+    period = settings.quant.get("default_backtest_period", {})
+    start = start or period.get("start", "2020-01-01")
+    end = end or period.get("end", "2024-12-31")
+    topk = topk if topk is not None else settings.quant.get("topk", 50)
+    n_drop = n_drop if n_drop is not None else settings.quant.get("n_drop", 5)
+    cost_buy = cost_buy if cost_buy is not None else settings.quant.get("cost_buy", 0.0013)
+    cost_sell = cost_sell if cost_sell is not None else settings.quant.get("cost_sell", 0.0023)
+    slippage_bps = slippage_bps if slippage_bps is not None else settings.quant.get("slippage_bps", 0)
+    init_cash = capital or settings.quant.get("initial_capital", 100000000)
+    vbt_kwargs = dict(vbt_kwargs or {})
+
+    price_df, entries, exits, size, used_optimize = _build_signals(
+        score_df, start, end, topk, n_drop, rebalance_freq, portfolio_method,
+        init_cash, is_etf,
+    )
+
+    if not entries.any().any():
+        raise ValueError("无可交易的调仓信号")
+
+    # vbt from_signals: size_type="Value" + cash_sharing => 每次信号买入 size 金额（绝对量）
+    import vectorbt as vbt
+    pf_kwargs = dict(vbt_kwargs)
+    pf_kwargs.setdefault("init_cash", init_cash)
+    pf_kwargs.setdefault("size_type", "Value")
+    pf_kwargs.setdefault("direction", "longonly")
+    pf_kwargs.setdefault("cash_sharing", True)
+    pf_kwargs.setdefault("fees", cost_buy)
+    if slippage_bps > 0:
+        pf_kwargs.setdefault("slippage", slippage_bps / 10000.0)
+    pf = vbt.Portfolio.from_signals(
+        price_df,
+        entries=entries,
+        exits=exits,
+        size=size,
+        **pf_kwargs,
+    )
+    returns = pf.returns().dropna()
+    returns.name = "return"
+
+    # 逐笔成交明细：直接读取 vectorbt 真实 order records（含成交价/数量/费用）
+    trades = _extract_trades(pf)
 
     # 基准
     bench_ret = None

@@ -481,6 +481,72 @@ def compute_existing_ic_series(exprs: list, start: str, end: str,
     return series_list
 
 
+def _compute_ic_block(factor_expr: str, factor_df: pd.DataFrame, label_df: pd.DataFrame,
+                      splits: dict, universe: str = None, horizon: int = 5) -> tuple:
+    """全样本 IC/换手指标 + 分段（train/valid/test）IC 序列。
+
+    复用已加载的 factor_df/label_df，分段计算不再重复 IO。
+
+    Returns:
+        (ic_metrics, turnover, segment_ics)
+    """
+    from app.services.quant.factor_eval import compute_ic, compute_turnover
+    # 2. 全样本 IC 序列（用于向后兼容 compute_ic 的全部指标）
+    ic_metrics = compute_ic(factor_df, label_df)
+    turnover = compute_turnover(factor_df)
+
+    # 3. 分段计算 IC 序列（复用已加载数据，不再重复 IO）
+    segment_ics = {}
+    for seg_name, seg_dates in splits.items():
+        if not seg_dates:
+            continue
+        seg_start = str(seg_dates[0].date())
+        seg_end = str(seg_dates[-1].date())
+        try:
+            seg_ic = compute_daily_ic_series(
+                factor_expr, seg_start, seg_end, universe, horizon,
+                factor_df=factor_df, label_df=label_df,
+            )
+            segment_ics[seg_name] = seg_ic
+        except Exception as e:
+            logger.debug("分段 %s IC 计算失败: %s", seg_name, e)
+            segment_ics[seg_name] = pd.Series(dtype=float)
+    return ic_metrics, turnover, segment_ics
+
+
+def _compute_roll_ics(factor_expr: str, factor_df: pd.DataFrame, label_df: pd.DataFrame,
+                      universe: str = None, horizon: int = 5,
+                      roll_windows: list = None) -> tuple:
+    """滚动窗口重验：把全样本按窗口滑动的多个子段 IC，取中位数作为稳健性。
+
+    Returns:
+        (roll_ics, roll_ic_median)
+    """
+    roll_ics = []
+    if roll_windows:
+        all_dates = sorted(factor_df.index.get_level_values("datetime").unique())
+        for win in roll_windows:
+            if len(all_dates) < win * 2:
+                continue
+            for i in range(0, len(all_dates) - win + 1, max(1, win // 2)):
+                sub_dates = all_dates[i:i + win]
+                if len(sub_dates) < max(10, win // 2):
+                    continue
+                try:
+                    sub_start = str(sub_dates[0].date())
+                    sub_end = str(sub_dates[-1].date())
+                    sub_ic = compute_daily_ic_series(
+                        factor_expr, sub_start, sub_end, universe, horizon,
+                        factor_df=factor_df, label_df=label_df,
+                    )
+                    if len(sub_ic) > 0:
+                        roll_ics.append(float(sub_ic.mean()))
+                except Exception:
+                    continue
+    roll_ic_median = float(np.median(roll_ics)) if roll_ics else None
+    return roll_ics, roll_ic_median
+
+
 def evaluate_factor_with_validation(
     factor_expr: str,
     start: str,
@@ -577,7 +643,7 @@ def evaluate_factor_with_validation(
 
     # 1. 样本分割：基于实际交易日（因子数据真实存在的日期），而非自然日
     from app.services.quant.factor_eval import (
-        load_factor_values, load_label, compute_ic, compute_turnover, forward_return_label
+        load_factor_values, load_label, forward_return_label
     )
     label_expr = forward_return_label(horizon)
     factor_df = load_factor_values(factor_expr, start, end, universe)
@@ -607,26 +673,10 @@ def evaluate_factor_with_validation(
         except Exception as e:
             logger.debug("基准因子加载失败: %s", e)
 
-    # 2. 全样本 IC 序列（用于向后兼容 compute_ic 的全部指标）
-    ic_metrics = compute_ic(factor_df, label_df)
-    turnover = compute_turnover(factor_df)
-
-    # 3. 分段计算 IC 序列（复用已加载数据，不再重复 IO）
-    segment_ics = {}
-    for seg_name, seg_dates in splits.items():
-        if not seg_dates:
-            continue
-        seg_start = str(seg_dates[0].date())
-        seg_end = str(seg_dates[-1].date())
-        try:
-            seg_ic = compute_daily_ic_series(
-                factor_expr, seg_start, seg_end, universe, horizon,
-                factor_df=factor_df, label_df=label_df,
-            )
-            segment_ics[seg_name] = seg_ic
-        except Exception as e:
-            logger.debug("分段 %s IC 计算失败: %s", seg_name, e)
-            segment_ics[seg_name] = pd.Series(dtype=float)
+    # 2/3. 全样本 IC 指标 + 分段 IC 序列（复用已加载数据，不再重复 IO）
+    ic_metrics, turnover, segment_ics = _compute_ic_block(
+        factor_expr, factor_df, label_df, splits, universe=universe, horizon=horizon,
+    )
 
     # 4. 验证集 IC 统计（主筛选指标）
     valid_ic = segment_ics.get("valid", pd.Series(dtype=float))
@@ -645,28 +695,10 @@ def evaluate_factor_with_validation(
     rolling_eval = RollingICEvaluator.evaluate(valid_ic)
 
     # 6.5 滚动窗口重验：把全样本按窗口滑动的多个子段 IC，取中位数作为稳健性
-    roll_ics = []
-    if roll_windows:
-        all_dates = sorted(factor_df.index.get_level_values("datetime").unique())
-        for win in roll_windows:
-            if len(all_dates) < win * 2:
-                continue
-            for i in range(0, len(all_dates) - win + 1, max(1, win // 2)):
-                sub_dates = all_dates[i:i + win]
-                if len(sub_dates) < max(10, win // 2):
-                    continue
-                try:
-                    sub_start = str(sub_dates[0].date())
-                    sub_end = str(sub_dates[-1].date())
-                    sub_ic = compute_daily_ic_series(
-                        factor_expr, sub_start, sub_end, universe, horizon,
-                        factor_df=factor_df, label_df=label_df,
-                    )
-                    if len(sub_ic) > 0:
-                        roll_ics.append(float(sub_ic.mean()))
-                except Exception:
-                    continue
-    roll_ic_median = float(np.median(roll_ics)) if roll_ics else None
+    roll_ics, roll_ic_median = _compute_roll_ics(
+        factor_expr, factor_df, label_df, universe=universe, horizon=horizon,
+        roll_windows=roll_windows,
+    )
 
     # 7. 统计显著性（Newey-West 校正，lags=horizon 对齐标签重叠周期）
     significance = StatisticalSignificance.test(valid_ic, alpha=significance_alpha, lags=horizon)

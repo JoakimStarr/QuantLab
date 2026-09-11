@@ -815,6 +815,39 @@ async def _run_backfill_downloads(
     return success_stocks
 
 
+async def _finalize_instruments_and_status(qlib_dir: str, code_range: dict,
+                                           global_calendar: list, end, universe: str) -> None:
+    """回填收尾：构建动态股票池 instruments（失败回退静态快照）并更新同步状态。"""
+    # 指数成分股 + instruments（动态成分：按点按时点采样，消除幸存者偏差）
+    update_progress(pct=94, status="running", message="构建动态股票池 instruments...")
+    try:
+        _rebuild_dynamic_instruments(qlib_dir, global_calendar)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("动态成分重建失败，回退静态快照: %s", e)
+        hs300 = zz500 = []
+        try:
+            hs300 = [r["code"] for r in await asyncio.to_thread(
+                _fetch_all_sync, "query_hs300_stocks", end.strftime("%Y-%m-%d"))]
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("hs300 成分拉取失败: %s", e2)
+        try:
+            zz500 = [r["code"] for r in await asyncio.to_thread(
+                _fetch_all_sync, "query_zz500_stocks", end.strftime("%Y-%m-%d"))]
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("zz500 成分拉取失败: %s", e2)
+        _build_instruments(qlib_dir, code_range, global_calendar, hs300, zz500)
+    else:
+        # 成功路径：_rebuild_dynamic_instruments 只写 csi300/csi500，
+        # all/csiall 仅在异常回退分支写过 → 必须在此补写，否则 all.txt/
+        # csiall.txt 会停滞在最后一次 repair/回退的日期，universe=all 的
+        # 挖掘/回测会被 qlib 静默截断。传空指数列表即只写 all/csiall，
+        # 不覆盖刚写好的 csi300/csi500（_build_instruments 对空列表会跳过）。
+        _build_instruments(qlib_dir, code_range, global_calendar, [], [])
+
+    # 更新同步状态
+    await _update_sync_status(universe, qlib_dir, global_calendar, code_range)
+
+
 async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "backfill",
                                 refresh_misc: bool = False, skip_broadcast: bool = False) -> dict:
     """baostock 全量回填主入口（最新 → 最旧）。
@@ -960,34 +993,8 @@ async def run_baostock_backfill(years: int, universe: str = "all", kind: str = "
         # trade_calendar 由内存中的 global_calendar 派生，始终随本次回填更新
         await _insert_misc(df_basic, df_industry, global_calendar)
 
-        # 指数成分股 + instruments（动态成分：按点按时点采样，消除幸存者偏差）
-        update_progress(pct=94, status="running", message="构建动态股票池 instruments...")
-        try:
-            _rebuild_dynamic_instruments(qlib_dir, global_calendar)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("动态成分重建失败，回退静态快照: %s", e)
-            hs300 = zz500 = []
-            try:
-                hs300 = [r["code"] for r in await asyncio.to_thread(
-                    _fetch_all_sync, "query_hs300_stocks", end.strftime("%Y-%m-%d"))]
-            except Exception as e2:  # noqa: BLE001
-                logger.warning("hs300 成分拉取失败: %s", e2)
-            try:
-                zz500 = [r["code"] for r in await asyncio.to_thread(
-                    _fetch_all_sync, "query_zz500_stocks", end.strftime("%Y-%m-%d"))]
-            except Exception as e2:  # noqa: BLE001
-                logger.warning("zz500 成分拉取失败: %s", e2)
-            _build_instruments(qlib_dir, code_range, global_calendar, hs300, zz500)
-        else:
-            # 成功路径：_rebuild_dynamic_instruments 只写 csi300/csi500，
-            # all/csiall 仅在异常回退分支写过 → 必须在此补写，否则 all.txt/
-            # csiall.txt 会停滞在最后一次 repair/回退的日期，universe=all 的
-            # 挖掘/回测会被 qlib 静默截断。传空指数列表即只写 all/csiall，
-            # 不覆盖刚写好的 csi300/csi500（_build_instruments 对空列表会跳过）。
-            _build_instruments(qlib_dir, code_range, global_calendar, [], [])
-
-        # 更新同步状态
-        await _update_sync_status(universe, qlib_dir, global_calendar, code_range)
+        # 指数成分股 + instruments（失败回退静态快照）+ 更新同步状态
+        await _finalize_instruments_and_status(qlib_dir, code_range, global_calendar, end, universe)
         finish_progress(True)
         # 延迟清除进度：给前端进度轮询留出读取 done 状态的窗口，否则立即为 None
         await asyncio.sleep(3)

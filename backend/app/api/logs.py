@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import app.core.logging_config as logging_config
 from app.schemas.common import ApiResponse
+from app.schemas.responses import LogFilesData, LogsData
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def _log_files():
     return sorted(_ALLOWED_STATIC)
 
 
-@router.get("/files")
+@router.get("/files", response_model=ApiResponse[LogFilesData])
 async def list_log_files():
     """获取日志文件列表（含轮转备份数量/大小，供清除确认弹窗展示）。"""
     items = []
@@ -76,7 +77,7 @@ async def list_log_files():
     return ApiResponse(ok=True, data={"items": items})
 
 
-@router.get("")
+@router.get("", response_model=ApiResponse[LogsData])
 async def get_logs(
     file: str = Query("error.log"),
     level: str = Query(None, description="ERROR/WARNING/INFO/DEBUG/CRITICAL"),

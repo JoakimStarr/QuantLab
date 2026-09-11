@@ -17,6 +17,98 @@ logger = logging.getLogger(__name__)
 TRADING_DAYS = 252
 
 
+def _run_fold(score_df: pd.DataFrame, window_idx: int,
+              train_start, train_end, test_start, test_end,
+              embargo_days: int, topk_candidates: list, n_drop: int,
+              rebalance: str, benchmark: str) -> dict | None:
+    """跑单个 walk-forward 折叠：训练窗遍历候选 topk 选最优，测试窗做样本外回测。
+
+    Returns:
+        {"window_result": ..., "test_ret_list": [...], "best_param": {...}}；
+        测试期无收益数据或回测异常时返回 None（与原内联 continue 语义一致）。
+    """
+    from app.services.quant.backtest_engine import run_backtest
+    from app.services.quant.portfolio import analyze_portfolio
+
+    # 训练期：遍历 topk 找最优参数
+    best_topk = topk_candidates[0]
+    best_train_sharpe = -999.0
+    for topk in topk_candidates:
+        try:
+            train_bt = run_backtest(
+                score_df,
+                start=str(train_start.date()), end=str(train_end.date()),
+                topk=topk, n_drop=n_drop,
+                rebalance_freq=rebalance,
+                benchmark=benchmark,
+            )
+            train_returns = train_bt.get("returns")
+            if train_returns is None or len(train_returns) < 2:
+                continue
+            train_metrics = analyze_portfolio(train_returns)
+            train_sharpe = train_metrics.get("sharpe")
+            if train_sharpe is None:
+                continue
+            if train_sharpe > best_train_sharpe:
+                best_train_sharpe = train_sharpe
+                best_topk = topk
+        except Exception as e:
+            logger.warning("训练期回测失败 topk=%d: %s", topk, e)
+
+    # 测试期：用最优参数回测
+    try:
+        test_bt = run_backtest(
+            score_df,
+            start=str(test_start.date()), end=str(test_end.date()),
+            topk=best_topk, n_drop=n_drop,
+            rebalance_freq=rebalance,
+            benchmark=benchmark,
+        )
+        test_returns = test_bt.get("returns")
+        if test_returns is None or len(test_returns) == 0:
+            logger.warning("测试期无收益数据 window=%d", window_idx)
+            return None
+
+        test_metrics = analyze_portfolio(test_returns)
+        test_ret_list = [float(r) for r in test_returns.tolist()]
+        nav_series = (1 + test_returns).cumprod()
+        test_nav = [round(float(v), 4) for v in nav_series.tolist()]
+
+        window_result = {
+            "window_idx": window_idx,
+            "train_start": str(train_start.date()),
+            "train_end": str(train_end.date()),
+            "test_start": str(test_start.date()),
+            "test_end": str(test_end.date()),
+            "embargo_days": embargo_days,
+            "best_topk": best_topk,
+            "train_sharpe": round(float(best_train_sharpe), 4),
+            "test_sharpe": test_metrics.get("sharpe"),
+            "test_annual_return": test_metrics.get("annual_return"),
+            "test_max_dd": test_metrics.get("max_drawdown"),
+            "test_returns": test_ret_list,
+            "test_nav": test_nav,
+        }
+        best_param = {
+            "window": window_idx,
+            "topk": best_topk,
+            "sharpe": test_metrics.get("sharpe"),
+        }
+
+        logger.info("Window %d: train=%s~%s, test=%s~%s, topk=%d, test_sharpe=%s",
+                    window_idx, train_start.date(), train_end.date(),
+                    test_start.date(), test_end.date(), best_topk,
+                    test_metrics.get("sharpe"))
+        return {
+            "window_result": window_result,
+            "test_ret_list": test_ret_list,
+            "best_param": best_param,
+        }
+    except Exception as e:
+        logger.error("测试期回测失败 window %d: %s", window_idx, e)
+        return None
+
+
 def run_walk_forward(
     score_df: pd.DataFrame,
     price_df: pd.DataFrame = None,   # 兼容保留，run_backtest 自行加载价格
@@ -59,9 +151,6 @@ def run_walk_forward(
             "best_params_per_window": [{window, topk, sharpe}],
         }
     """
-    from app.services.quant.backtest_engine import run_backtest
-    from app.services.quant.portfolio import analyze_portfolio
-
     if topk_candidates is None:
         topk_candidates = [10, 20, 30, 50]
 
@@ -102,82 +191,14 @@ def run_walk_forward(
             window_idx += 1
             continue
 
-        # 训练期：遍历 topk 找最优参数
-        best_topk = topk_candidates[0]
-        best_train_sharpe = -999.0
-        for topk in topk_candidates:
-            try:
-                train_bt = run_backtest(
-                    score_df,
-                    start=str(train_start.date()), end=str(train_end.date()),
-                    topk=topk, n_drop=n_drop,
-                    rebalance_freq=rebalance,
-                    benchmark=benchmark,
-                )
-                train_returns = train_bt.get("returns")
-                if train_returns is None or len(train_returns) < 2:
-                    continue
-                train_metrics = analyze_portfolio(train_returns)
-                train_sharpe = train_metrics.get("sharpe")
-                if train_sharpe is None:
-                    continue
-                if train_sharpe > best_train_sharpe:
-                    best_train_sharpe = train_sharpe
-                    best_topk = topk
-            except Exception as e:
-                logger.warning("训练期回测失败 topk=%d: %s", topk, e)
-
-        # 测试期：用最优参数回测
-        try:
-            test_bt = run_backtest(
-                score_df,
-                start=str(test_start.date()), end=str(test_end.date()),
-                topk=best_topk, n_drop=n_drop,
-                rebalance_freq=rebalance,
-                benchmark=benchmark,
-            )
-            test_returns = test_bt.get("returns")
-            if test_returns is None or len(test_returns) == 0:
-                logger.warning("测试期无收益数据 window=%d", window_idx)
-                train_start += step_delta
-                window_idx += 1
-                continue
-
-            test_metrics = analyze_portfolio(test_returns)
-            test_ret_list = [float(r) for r in test_returns.tolist()]
-            nav_series = (1 + test_returns).cumprod()
-            test_nav = [round(float(v), 4) for v in nav_series.tolist()]
-
-            window_result = {
-                "window_idx": window_idx,
-                "train_start": str(train_start.date()),
-                "train_end": str(train_end.date()),
-                "test_start": str(test_start.date()),
-                "test_end": str(test_end.date()),
-                "embargo_days": embargo_days,
-                "best_topk": best_topk,
-                "train_sharpe": round(float(best_train_sharpe), 4),
-                "test_sharpe": test_metrics.get("sharpe"),
-                "test_annual_return": test_metrics.get("annual_return"),
-                "test_max_dd": test_metrics.get("max_drawdown"),
-                "test_returns": test_ret_list,
-                "test_nav": test_nav,
-            }
-
-            windows.append(window_result)
-            oos_returns_all.extend(test_ret_list)
-            best_params.append({
-                "window": window_idx,
-                "topk": best_topk,
-                "sharpe": test_metrics.get("sharpe"),
-            })
-
-            logger.info("Window %d: train=%s~%s, test=%s~%s, topk=%d, test_sharpe=%s",
-                        window_idx, train_start.date(), train_end.date(),
-                        test_start.date(), test_end.date(), best_topk,
-                        test_metrics.get("sharpe"))
-        except Exception as e:
-            logger.error("测试期回测失败 window %d: %s", window_idx, e)
+        fold = _run_fold(
+            score_df, window_idx, train_start, train_end, test_start, test_end,
+            embargo_days, topk_candidates, n_drop, rebalance, benchmark,
+        )
+        if fold is not None:
+            windows.append(fold["window_result"])
+            oos_returns_all.extend(fold["test_ret_list"])
+            best_params.append(fold["best_param"])
 
         train_start += step_delta
         window_idx += 1

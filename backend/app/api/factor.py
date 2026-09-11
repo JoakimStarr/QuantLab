@@ -7,6 +7,7 @@ from app.core.audit_log import audit
 from app.core.errors import AppError
 from app.schemas.common import ApiResponse
 from app.schemas.factor import FactorCreate
+from app.schemas.responses import FactorItem, FactorListData
 from app.services.factor.library import (
     list_factors, get_factor, get_factor_summary, add_factor, disable_factor,
 )
@@ -20,7 +21,7 @@ audit_logger = logging.getLogger("audit")
 router = APIRouter(prefix="/factors", tags=["factor"])
 
 
-@router.get("")
+@router.get("", response_model=ApiResponse[FactorListData])
 async def list_factors_api(
     category: str = Query(None),
     status: str = Query("active"),
@@ -68,7 +69,7 @@ async def factor_eval_status_api(factor_id: int):
     })
 
 
-@router.get("/{factor_id}")
+@router.get("/{factor_id}", response_model=ApiResponse[FactorItem])
 async def get_factor_api(factor_id: int):
     item = await get_factor(factor_id)
     if item is None:

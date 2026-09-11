@@ -253,6 +253,38 @@ async def _update_single_factor_metrics(fid: int, metrics: dict) -> None:
         await session.commit()
 
 
+def _spawn_eval_coros(targets: list, expr_map: dict, sem: asyncio.Semaphore,
+                      eval_start: str, eval_end: str, universe: str,
+                      preloaded_label_df, preloaded_close_df) -> list:
+    """创建所有评价协程任务（受信号量控制）。
+
+    传入预加载的共用数据（label + close），避免每个因子重复 IO。
+
+    Args:
+        targets: 待评价因子行（含 id）
+        expr_map: 因子 id -> 表达式
+        sem: 并发信号量（max_concurrent 限制线程池压力）
+    """
+    from app.core.executor import run_io_cpu  # 线程池，qlib 释放 GIL
+    from app.services.quant.factor_eval import evaluate_factor
+
+    async def _eval_one(fid: int) -> tuple:
+        async with sem:
+            expr = expr_map[fid]
+            try:
+                # 传入预加载数据，避免重复 IO
+                metrics = await run_io_cpu(
+                    evaluate_factor, expr, eval_start, eval_end, universe,
+                    preloaded_label_df=preloaded_label_df,
+                    preloaded_close_df=preloaded_close_df,
+                )
+                return fid, metrics, None
+            except Exception as e:
+                return fid, None, str(e)[:200]
+
+    return [_eval_one(r.id) for r in targets]
+
+
 async def batch_evaluate_alpha158(
     batch_size: int = 1,
     max_concurrent: int = 4,
@@ -288,7 +320,7 @@ async def batch_evaluate_alpha158(
     from app.core.database import async_session
     from app.core.executor import run_io_cpu  # 线程池，qlib 释放 GIL
     from app.models.factor import Factor
-    from app.services.quant.factor_eval import evaluate_factor, load_label
+    from app.services.quant.factor_eval import load_label
     from app.services.quant.qlib_init import init_qlib
 
     # 1. 取参数
@@ -346,25 +378,10 @@ async def batch_evaluate_alpha158(
         preloaded_close_df.shape if preloaded_close_df is not None else "N/A",
     )
 
-    # 4. 信号量控制并发
+    # 4/5. 信号量控制并发，创建所有评价任务（受信号量控制）
     sem = asyncio.Semaphore(max_concurrent)
-
-    async def _eval_one(fid: int) -> tuple:
-        async with sem:
-            expr = expr_map[fid]
-            try:
-                # 传入预加载数据，避免重复 IO
-                metrics = await run_io_cpu(
-                    evaluate_factor, expr, eval_start, eval_end, universe,
-                    preloaded_label_df=preloaded_label_df,
-                    preloaded_close_df=preloaded_close_df,
-                )
-                return fid, metrics, None
-            except Exception as e:
-                return fid, None, str(e)[:200]
-
-    # 5. 创建所有任务（受信号量控制）
-    tasks = [_eval_one(r.id) for r in targets]
+    tasks = _spawn_eval_coros(targets, expr_map, sem, eval_start, eval_end, universe,
+                              preloaded_label_df, preloaded_close_df)
 
     # 关键修复：用 asyncio.Queue 把"评价完成"和"DB 写入"解耦。
     # 之前直接在循环里 await _update_single_factor_metrics，评价线程池里

@@ -506,6 +506,151 @@ def _dedupe_intra_batch(candidates: list, diversity_threshold: float = 0.8):
     return keep
 
 
+def _filter_round_candidates(candidates: list, prev_expressions: list, all_best: list) -> tuple:
+    """对一轮候选做沙箱校验 + 表达式去重。
+
+    去重范围：上一轮入选表达式 + 本轮已通过候选 + 已入库最优因子。
+
+    Returns:
+        (valid_exprs, rejected)
+    """
+    valid_exprs = []
+    rejected = []
+    for c in candidates:
+        expr = (c.get("expression") or "").strip()
+        name = (c.get("name") or "").strip()
+        if not expr or not name:
+            rejected.append({"expression": expr, "reason": "表达式或名称为空"})
+            continue
+        try:
+            cleaned = validate_expression(expr)
+        except ExpressionValidationError as e:
+            logger.info("迭代因子 %s 沙箱拒绝: %s", name, e)
+            rejected.append({"expression": expr, "reason": f"沙箱拒绝: {e}"})
+            continue
+        known = [e for e in prev_expressions]
+        known += [v["expression"] for v in valid_exprs]
+        known += [b["expression"] for b in all_best]
+        dup = _is_duplicate(expr, known)
+        if dup:
+            rejected.append({"expression": expr, "reason": dup})
+            continue
+        valid_exprs.append({"name": name, "expression": cleaned, "description": c.get("description", "")})
+    return valid_exprs, rejected
+
+
+async def _score_candidates(valid_exprs: list, existing_ic_series: list, universe: str,
+                            ic_threshold: float, bh_alpha: float) -> tuple:
+    """对一轮有效候选并行 IC 评价（多维验证）+ BH 多重检验校正 + 筛选。
+
+    Returns:
+        (round_results, best_ic, iter_evaluated)
+    """
+    round_results = []
+    best_ic = 0.0
+    iter_evaluated = []  # 落库记录：通过者+未通过者（含原因）
+    eval_results = await asyncio.gather(
+        *[_evaluate_bounded(v["expression"], existing_ic_series=existing_ic_series,
+                            universe=universe, cached=True)
+          for v in valid_exprs],
+        return_exceptions=True,
+    )
+    # BH 多重检验校正
+    p_vals = [
+        None if isinstance(r, Exception) else (r.get("significance") or {}).get("p_value")
+        for r in eval_results
+    ]
+    p_adj = bh_corrected_pvalues(p_vals)
+    for i, pa in enumerate(p_adj):
+        if isinstance(eval_results[i], Exception) or pa is None:
+            continue
+        r = eval_results[i]
+        eval_results[i] = {
+            **r,
+            "significance": {**(r.get("significance") or {}), "p_adj": pa},
+            "p_adj": pa,
+        }
+    for v, ic_result in zip(valid_exprs, eval_results):
+        if isinstance(ic_result, Exception):
+            logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
+            iter_evaluated.append({"name": v["name"], "expression": v["expression"],
+                                   "description": v.get("description", ""),
+                                   "status": "rejected",
+                                   "reason": f"评价异常: {str(ic_result)[:200]}"})
+            continue
+        # BH 校正后显著性约束
+        sig = ic_result.get("significance") or {}
+        p_adj_val = sig.get("p_adj")
+        bh_ok = p_adj_val is None or p_adj_val < bh_alpha
+        # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
+        valid_ic = ic_result.get("valid_ic")
+        passed_ok = (ic_result.get("passed") and valid_ic is not None
+                     and abs(valid_ic) >= ic_threshold)
+        if not passed_ok or not bh_ok:
+            if not bh_ok:
+                logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
+                iter_evaluated.append({
+                    "name": v["name"], "expression": v["expression"],
+                    "description": v.get("description", ""),
+                    "status": "rejected", "ic": ic_result.get("valid_ic"),
+                    "reason": f"未通过 BH 多重检验校正 (p_adj={p_adj_val:.4f})"})
+            else:
+                reasons = (ic_result.get("fail_reasons") or [])
+                logger.info("因子 %s 未通过多维验证: valid_ic=%s, 原因: %s",
+                            v["name"], valid_ic, "; ".join(reasons[:3]))
+                iter_evaluated.append({
+                    "name": v["name"], "expression": v["expression"],
+                    "description": v.get("description", ""),
+                    "status": "rejected", "ic": valid_ic,
+                    "rank_ic": ic_result.get("rank_ic"),
+                    "reason": f"valid_ic={valid_ic}；" + "; ".join(reasons[:3])})
+            # 不做全样本 IC 兜底（理由同单轮挖掘）：未过验证即不稳健
+            continue
+        round_results.append({
+            "name": v["name"],
+            "expression": v["expression"],
+            "description": v.get("description", ""),
+            "ic": valid_ic,
+            "rank_ic": ic_result.get("rank_ic") or 0.0,
+            "icir": ic_result.get("icir") or 0.0,
+            "valid_ic": ic_result.get("valid_ic"),
+            "valid_ic_series": ic_result.get("valid_ic_series"),
+            "passed": ic_result.get("passed", False),
+        })
+        if abs(valid_ic) > abs(best_ic):
+            best_ic = valid_ic
+    return round_results, best_ic, iter_evaluated
+
+
+def _should_stop_early(best_ic: float, best_ic_so_far: float, stall_rounds: int,
+                       empty_rounds: int, has_valid: bool, early_stop: bool,
+                       is_last_round: bool, ic_improve_eps: float,
+                       stall_tolerance: int) -> tuple:
+    """早停判定：连续 stall_tolerance 轮最佳 IC 无改善（或连续全拒）时提前终止。
+
+    Returns:
+        (stopped_early, stop_reason, best_ic_so_far, stall_rounds, empty_rounds)
+    """
+    if not early_stop or is_last_round:
+        return False, None, best_ic_so_far, stall_rounds, empty_rounds
+    improved = abs(best_ic) > best_ic_so_far + ic_improve_eps
+    if improved:
+        best_ic_so_far = abs(best_ic)
+        stall_rounds = 0
+    else:
+        stall_rounds += 1
+    empty_rounds = empty_rounds + 1 if not has_valid else 0
+
+    if stall_rounds >= stall_tolerance:
+        reason = (f"连续 {stall_rounds} 轮最佳 IC 无改善"
+                  f"（{best_ic_so_far:.4f}），已提前停止")
+        return True, reason, best_ic_so_far, stall_rounds, empty_rounds
+    if empty_rounds >= stall_tolerance:
+        reason = f"连续 {empty_rounds} 轮无有效候选（沙箱/去重全拒），已提前停止"
+        return True, reason, best_ic_so_far, stall_rounds, empty_rounds
+    return False, None, best_ic_so_far, stall_rounds, empty_rounds
+
+
 async def iterative_mine_factors(
     template: dict,
     n_rounds: int = 3,
@@ -590,28 +735,7 @@ async def iterative_mine_factors(
                 ], round_no=round_idx + 1)
 
             # 沙箱校验 + 去重
-            valid_exprs = []
-            rejected = []
-            for c in candidates:
-                expr = (c.get("expression") or "").strip()
-                name = (c.get("name") or "").strip()
-                if not expr or not name:
-                    rejected.append({"expression": expr, "reason": "表达式或名称为空"})
-                    continue
-                try:
-                    cleaned = validate_expression(expr)
-                except ExpressionValidationError as e:
-                    logger.info("迭代因子 %s 沙箱拒绝: %s", name, e)
-                    rejected.append({"expression": expr, "reason": f"沙箱拒绝: {e}"})
-                    continue
-                known = [e for e in prev_expressions]
-                known += [v["expression"] for v in valid_exprs]
-                known += [b["expression"] for b in all_best]
-                dup = _is_duplicate(expr, known)
-                if dup:
-                    rejected.append({"expression": expr, "reason": dup})
-                    continue
-                valid_exprs.append({"name": name, "expression": cleaned, "description": c.get("description", "")})
+            valid_exprs, rejected = _filter_round_candidates(candidates, prev_expressions, all_best)
 
             # IC 评价（并行：所有有效因子一次性提交到进程池，使用多维验证）
             round_results = []
@@ -621,76 +745,9 @@ async def iterative_mine_factors(
                 # 多样性检测序列懒加载一次（复用已有因子库）
                 if existing_ic_series is None:
                     existing_ic_series = await _load_existing_ic_series()
-                eval_results = await asyncio.gather(
-                    *[_evaluate_bounded(v["expression"], existing_ic_series=existing_ic_series,
-                                        universe=universe, cached=True)
-                      for v in valid_exprs],
-                    return_exceptions=True,
+                round_results, best_ic, iter_evaluated = await _score_candidates(
+                    valid_exprs, existing_ic_series, universe, ic_threshold, bh_alpha,
                 )
-                # BH 多重检验校正
-                p_vals = [
-                    None if isinstance(r, Exception) else (r.get("significance") or {}).get("p_value")
-                    for r in eval_results
-                ]
-                p_adj = bh_corrected_pvalues(p_vals)
-                for i, pa in enumerate(p_adj):
-                    if isinstance(eval_results[i], Exception) or pa is None:
-                        continue
-                    r = eval_results[i]
-                    eval_results[i] = {
-                        **r,
-                        "significance": {**(r.get("significance") or {}), "p_adj": pa},
-                        "p_adj": pa,
-                    }
-                for v, ic_result in zip(valid_exprs, eval_results):
-                    if isinstance(ic_result, Exception):
-                        logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
-                        iter_evaluated.append({"name": v["name"], "expression": v["expression"],
-                                               "description": v.get("description", ""),
-                                               "status": "rejected",
-                                               "reason": f"评价异常: {str(ic_result)[:200]}"})
-                        continue
-                    # BH 校正后显著性约束
-                    sig = ic_result.get("significance") or {}
-                    p_adj_val = sig.get("p_adj")
-                    bh_ok = p_adj_val is None or p_adj_val < bh_alpha
-                    # 使用 valid_ic 作为主筛选指标，回退到全样本 IC
-                    valid_ic = ic_result.get("valid_ic")
-                    passed_ok = (ic_result.get("passed") and valid_ic is not None
-                                 and abs(valid_ic) >= ic_threshold)
-                    if not passed_ok or not bh_ok:
-                        if not bh_ok:
-                            logger.info("因子 %s 未通过 BH 校正: p_adj=%s", v["name"], p_adj_val)
-                            iter_evaluated.append({
-                                "name": v["name"], "expression": v["expression"],
-                                "description": v.get("description", ""),
-                                "status": "rejected", "ic": ic_result.get("valid_ic"),
-                                "reason": f"未通过 BH 多重检验校正 (p_adj={p_adj_val:.4f})"})
-                        else:
-                            reasons = (ic_result.get("fail_reasons") or [])
-                            logger.info("因子 %s 未通过多维验证: valid_ic=%s, 原因: %s",
-                                        v["name"], valid_ic, "; ".join(reasons[:3]))
-                            iter_evaluated.append({
-                                "name": v["name"], "expression": v["expression"],
-                                "description": v.get("description", ""),
-                                "status": "rejected", "ic": valid_ic,
-                                "rank_ic": ic_result.get("rank_ic"),
-                                "reason": f"valid_ic={valid_ic}；" + "; ".join(reasons[:3])})
-                        # 不做全样本 IC 兜底（理由同单轮挖掘）：未过验证即不稳健
-                        continue
-                    round_results.append({
-                        "name": v["name"],
-                        "expression": v["expression"],
-                        "description": v.get("description", ""),
-                        "ic": valid_ic,
-                        "rank_ic": ic_result.get("rank_ic") or 0.0,
-                        "icir": ic_result.get("icir") or 0.0,
-                        "valid_ic": ic_result.get("valid_ic"),
-                        "valid_ic_series": ic_result.get("valid_ic_series"),
-                        "passed": ic_result.get("passed", False),
-                    })
-                    if abs(valid_ic) > abs(best_ic):
-                        best_ic = valid_ic
 
             # 批内候选互查：同一轮生成的高度相关因子只保留 |IC| 最高者
             if len(round_results) > 1:
@@ -764,26 +821,15 @@ async def iterative_mine_factors(
                         round_idx + 1, len(candidates), len(valid_exprs), best_ic)
 
             # ---- 早停判定（非末轮才检查；末轮自然结束无需早停） ----
-            if early_stop and round_idx < n_rounds - 1:
-                improved = abs(best_ic) > best_ic_so_far + ic_improve_eps
-                if improved:
-                    best_ic_so_far = abs(best_ic)
-                    stall_rounds = 0
-                else:
-                    stall_rounds += 1
-                empty_rounds = empty_rounds + 1 if not valid_exprs else 0
-
-                if stall_rounds >= stall_tolerance:
-                    stopped_early = True
-                    stop_reason = (f"连续 {stall_rounds} 轮最佳 IC 无改善"
-                                   f"（{best_ic_so_far:.4f}），已提前停止")
-                elif empty_rounds >= stall_tolerance:
-                    stopped_early = True
-                    stop_reason = f"连续 {empty_rounds} 轮无有效候选（沙箱/去重全拒），已提前停止"
-
-                if stopped_early:
-                    logger.info("LLM 迭代挖掘提前停止于第 %d 轮: %s", round_idx + 1, stop_reason)
-                    break
+            stopped_early, stop_reason, best_ic_so_far, stall_rounds, empty_rounds = _should_stop_early(
+                best_ic, best_ic_so_far, stall_rounds, empty_rounds,
+                has_valid=bool(valid_exprs), early_stop=early_stop,
+                is_last_round=round_idx >= n_rounds - 1,
+                ic_improve_eps=ic_improve_eps, stall_tolerance=stall_tolerance,
+            )
+            if stopped_early:
+                logger.info("LLM 迭代挖掘提前停止于第 %d 轮: %s", round_idx + 1, stop_reason)
+                break
 
         # 汇总最优因子（已在每轮即时入库，这里仅排序取最终结果）
         all_best.sort(key=lambda x: abs(x.get("ic", 0)), reverse=True)

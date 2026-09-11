@@ -103,6 +103,71 @@ def normalize_benchmark(code: str = None) -> str:
     return code
 
 
+def _render_report(report_normal, positions_normal, portfolio_method) -> dict:
+    """将 qlib 回测原始输出转换为与 run_backtest 兼容的报告字段。
+
+    Returns:
+        {returns, benchmark, turnover, portfolios, trades, portfolio_method}
+    """
+    # 转换为与 run_backtest 兼容的输出格式
+    returns = report_normal["return"].dropna() if "return" in report_normal else pd.Series(dtype=float)
+    bench = report_normal.get("bench")
+    if bench is not None:
+        bench = bench.dropna()
+    turnover = float(report_normal["turnover"].mean()) if "turnover" in report_normal else None
+
+    # 逐笔成交明细：从持仓快照差分还原 BUY/SELL 动作
+    trades = []
+    try:
+        trades = extract_trades_from_positions(positions_normal)
+    except Exception as e:
+        logger.warning("还原成交明细失败，trades 置空: %s", e)
+
+    # portfolios: 前5个调仓日持仓快照（与 run_backtest 对齐）
+    portfolios = []
+    for date_key, pos in _position_dates_mapping(positions_normal)[:5]:
+        holdings = {}
+        try:
+            # QLib Position 对象: get_stock_list() 返回 {instrument: amount}
+            stock_list = pos.get_stock_list() if hasattr(pos, "get_stock_list") else {}
+            for inst_key, amount in stock_list.items():
+                holdings[str(inst_key)] = float(amount)
+        except Exception as e:
+            logger.debug("解析持仓失败 date=%s: %s", date_key, e)
+        portfolios.append({"date": str(date_key), "holdings": holdings})
+
+    if portfolio_method == "optimize":
+        # qlib 后端 TopkDropout 不支持外部权重：明确回退，不让 optimize 静默假装生效
+        logger.warning("qlib 后端不支持 portfolio_method='optimize'，保持 TopkDropout 等权")
+        effective_portfolio_method = "topk_dropout"
+    else:
+        effective_portfolio_method = portfolio_method or "topk_dropout"
+
+    return {
+        "returns": returns,
+        "benchmark": bench,
+        "turnover": turnover,
+        "portfolios": portfolios,
+        "trades": trades,
+        "portfolio_method": effective_portfolio_method,
+    }
+
+
+def _disclosure_fields(cost_buy: float, cost_sell: float, min_cost: float, slippage_bps: float) -> dict:
+    """成交披露元信息：trades 由持仓快照差分重构，非交易所级订单。"""
+    return {
+        "method": "position_snapshot_diff",
+        "note": "成交明细由每日持仓快照差分重构，非交易所级订单；成本按固定费率估算",
+        "deal_price": "每日收盘价（T+1）",
+        "cost_model": {
+            "cost_buy": cost_buy,
+            "cost_sell": cost_sell,
+            "min_cost": min_cost,
+            "impact_cost": slippage_bps / 10000.0 if slippage_bps > 0 else 0.0,
+        },
+    }
+
+
 def run_qlib_backtest(
     score_df: pd.DataFrame,
     start: str = None,
@@ -233,64 +298,22 @@ def run_qlib_backtest(
         strategy=strategy_obj, **backtest_params
     )
 
-    # 转换为与 run_backtest 兼容的输出格式
-    returns = report_normal["return"].dropna() if "return" in report_normal else pd.Series(dtype=float)
-    bench = report_normal.get("bench")
-    if bench is not None:
-        bench = bench.dropna()
-    turnover = float(report_normal["turnover"].mean()) if "turnover" in report_normal else None
-
-    # 逐笔成交明细：从持仓快照差分还原 BUY/SELL 动作
-    trades = []
-    try:
-        trades = extract_trades_from_positions(positions_normal)
-    except Exception as e:
-        logger.warning("还原成交明细失败，trades 置空: %s", e)
-
-    # portfolios: 前5个调仓日持仓快照（与 run_backtest 对齐）
-    portfolios = []
-    for date_key, pos in _position_dates_mapping(positions_normal)[:5]:
-        holdings = {}
-        try:
-            # QLib Position 对象: get_stock_list() 返回 {instrument: amount}
-            stock_list = pos.get_stock_list() if hasattr(pos, "get_stock_list") else {}
-            for inst_key, amount in stock_list.items():
-                holdings[str(inst_key)] = float(amount)
-        except Exception as e:
-            logger.debug("解析持仓失败 date=%s: %s", date_key, e)
-        portfolios.append({"date": str(date_key), "holdings": holdings})
-
-    if portfolio_method == "optimize":
-        # qlib 后端 TopkDropout 不支持外部权重：明确回退，不让 optimize 静默假装生效
-        logger.warning("qlib 后端不支持 portfolio_method='optimize'，保持 TopkDropout 等权")
-        effective_portfolio_method = "topk_dropout"
-    else:
-        effective_portfolio_method = portfolio_method or "topk_dropout"
+    report = _render_report(report_normal, positions_normal, portfolio_method)
 
     return {
-        "returns": returns,
-        "benchmark": bench,
-        "turnover": turnover,
-        "portfolios": portfolios,
-        "trades": trades,
+        "returns": report["returns"],
+        "benchmark": report["benchmark"],
+        "turnover": report["turnover"],
+        "portfolios": report["portfolios"],
+        "trades": report["trades"],
         "start_date": start,
         "end_date": end,
         "topk": topk,
         "n_drop": n_drop,
         "rebalance_freq": rebalance_freq,
         "benchmark_code": benchmark,
-        "portfolio_method": effective_portfolio_method,
+        "portfolio_method": report["portfolio_method"],
         # 成交披露：trades 由持仓快照差分重构，非交易所级订单
         "reconstructed": True,
-        "trade_reconstruction": {
-            "method": "position_snapshot_diff",
-            "note": "成交明细由每日持仓快照差分重构，非交易所级订单；成本按固定费率估算",
-            "deal_price": "每日收盘价（T+1）",
-            "cost_model": {
-                "cost_buy": cost_buy,
-                "cost_sell": cost_sell,
-                "min_cost": min_cost,
-                "impact_cost": slippage_bps / 10000.0 if slippage_bps > 0 else 0.0,
-            },
-        },
+        "trade_reconstruction": _disclosure_fields(cost_buy, cost_sell, min_cost, slippage_bps),
     }

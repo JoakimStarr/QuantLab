@@ -13,6 +13,7 @@ from app.core.cache import TTLCache
 from app.core.errors import AppError
 from app.core.executor import run_io_cpu
 from app.schemas.common import ApiResponse
+from app.schemas.responses import IndexListData, KlineData, OverviewData
 from app.services.quant.qlib_init import init_qlib, is_qlib_available
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -54,7 +55,7 @@ def _quote_from_closes(closes: np.ndarray) -> dict | None:
     return None
 
 
-@router.get("/indices")
+@router.get("/indices", response_model=ApiResponse[IndexListData])
 async def list_indices():
     """列出支持的指数"""
     return ApiResponse(ok=True, data={
@@ -65,7 +66,7 @@ async def list_indices():
     })
 
 
-@router.get("/kline/{index_code}")
+@router.get("/kline/{index_code}", response_model=ApiResponse[KlineData])
 async def get_index_kline(
     index_code: str,
     period: str = Query("1d", description="K线周期: 1d/1w/1M"),
@@ -222,7 +223,7 @@ def _resample_kline(df, freq: str):
     return df.reset_index()
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=ApiResponse[OverviewData])
 async def market_overview():
     """获取市场概览（多指数最新行情）"""
     if not await is_qlib_available():
