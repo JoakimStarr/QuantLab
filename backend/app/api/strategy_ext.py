@@ -98,6 +98,7 @@ async def param_sweep_api(
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
 
+    from app.core.logging_config import get_request_id
     from app.services.strategy.strategy_worker import is_task_running, spawn_strategy_worker
     if is_task_running("param-sweep", strategy_id):
         return ApiResponse(ok=True, data={
@@ -117,7 +118,7 @@ async def param_sweep_api(
         "task_result_id": task_result_id,
         "topk_list": topk_list, "rebalance_list": rebalance_list,
         "start": start, "end": end,
-    })
+    }, request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": f"参数扫描已提交（{len(topk_list)} x {len(rebalance_list)} = {len(topk_list) * len(rebalance_list)} 组合，独立进程执行）",
         "strategy_id": strategy_id,
@@ -402,6 +403,7 @@ async def walk_forward_api(
     start = period.get("start", "2020-01-01")
     end = period.get("end", "2024-12-31")
 
+    from app.core.logging_config import get_request_id
     from app.services.strategy.strategy_worker import is_task_running, spawn_strategy_worker
     if is_task_running("walk-forward", strategy_id):
         return ApiResponse(ok=True, data={
@@ -422,7 +424,7 @@ async def walk_forward_api(
         "train_window": train_window, "test_window": test_window, "step": step,
         "topk_list": topk_candidates, "n_drop": n_drop, "rebalance": rebalance,
         "universe": universe, "start": start, "end": end,
-    })
+    }, request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": "Walk-forward 滚动回测已提交（独立进程执行）",
         "strategy_id": strategy_id,

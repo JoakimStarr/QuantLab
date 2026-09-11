@@ -12,6 +12,7 @@
 用法（scheduler 通过 spawn_decay_check_worker 调用）:
     python -m app.services.quant.factor_monitor_worker
 """
+import argparse
 import json
 import logging
 import os
@@ -69,12 +70,17 @@ def is_decay_check_running() -> bool:
         return False
 
 
-def spawn_decay_check_worker() -> subprocess.Popen:
-    """启动独立衰减检测 worker 子进程并立即返回。"""
+def spawn_decay_check_worker(request_id: str | None = None) -> subprocess.Popen:
+    """启动独立衰减检测 worker 子进程并立即返回。
+
+    request_id：可选请求关联 ID（scheduler 触发无请求上下文，通常不传）。
+    """
     from app.core.config import settings
 
     backend_dir = str(settings.PROJECT_ROOT / "backend")
     cmd = [sys.executable, "-m", "app.services.quant.factor_monitor_worker"]
+    if request_id:
+        cmd += ["--request-id", request_id]
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
     env["PYTHONUNBUFFERED"] = "1"
@@ -130,6 +136,17 @@ async def _run() -> None:
 
 def main() -> None:
     from app.core.config import settings
+
+    # 目前唯一由 scheduler 触发（无 --request-id）；保留参数以支持未来 API 触发
+    parser = argparse.ArgumentParser(description="QuantLab 因子衰减检测独立 worker")
+    parser.add_argument("--request-id", dest="request_id", default=None,
+                        help="API 透传的请求关联 ID")
+    args = parser.parse_args()
+
+    # request_id 贯通：必须在 setup_logging 之前设置 contextvar
+    from app.core.logging_config import set_request_id
+
+    set_request_id(args.request_id)
 
     from app.core.logging_config import setup_logging
 

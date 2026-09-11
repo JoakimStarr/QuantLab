@@ -28,8 +28,9 @@ def _parse_date(value: str | None, name: str) -> date | None:
 @router.post("/sync")
 async def policy_sync_api():
     """手动触发新闻联播同步（增量，独立 worker 后台执行；只存库不写 bin）。"""
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("policy", "policy")
+    spawn_sync_worker("policy", "policy", request_id=get_request_id())
     return ApiResponse(ok=True, data={"message": "政策风向同步已提交（独立进程后台执行）"})
 
 
@@ -53,8 +54,10 @@ async def policy_ai_sync_api(
         raise HTTPException(status_code=409, detail="已有 AI 政策解读任务在运行，请稍后再试")
     probe.release()
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("policy_ai", "policy_ai", days=backfill_days)
+    spawn_sync_worker("policy_ai", "policy_ai", days=backfill_days,
+                      request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": f"AI 政策解读已提交（回填 {backfill_days} 天，待处理 {len(pending)} 天，后台执行）",
         "pending_count": len(pending),

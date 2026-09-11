@@ -55,9 +55,10 @@ async def create_eval_job_api(
     start = start_date or period.get("start", "2020-01-01")
     end = end_date or period.get("end", "2024-12-31")
     job = await create_eval_job(kind, factor_ids, start, end, universe)
+    from app.core.logging_config import get_request_id
     from app.services.factor.factor_eval_worker import spawn_factor_eval_worker
 
-    spawn_factor_eval_worker(job["id"])
+    spawn_factor_eval_worker(job["id"], request_id=get_request_id())
     return ApiResponse(ok=True, data={
         **job, "message": "评价任务已提交，后台计算中，完成后列表自动刷新",
     })

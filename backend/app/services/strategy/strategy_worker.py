@@ -88,11 +88,13 @@ def is_task_running(kind: str, strategy_id: int) -> bool:
         return False
 
 
-def spawn_strategy_worker(kind: str, strategy_id: int, params: dict = None) -> subprocess.Popen:
+def spawn_strategy_worker(kind: str, strategy_id: int, params: dict = None,
+                          request_id: str | None = None) -> subprocess.Popen:
     """启动独立策略任务 worker 子进程并立即返回。
 
     start_new_session=True：uvicorn --reload 重启不会等待/杀掉它。
     日志写入 logs/sync.log（worker_kind=strategy:{kind} 区分）。
+    request_id：API 调用点传入的请求关联 ID，透传使 worker 日志行带 request_id。
     """
     from app.core.config import settings
 
@@ -103,6 +105,8 @@ def spawn_strategy_worker(kind: str, strategy_id: int, params: dict = None) -> s
     ]
     if params:
         cmd += ["--params", json.dumps(params, ensure_ascii=False)]
+    if request_id:
+        cmd += ["--request-id", request_id]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
@@ -309,7 +313,14 @@ def main() -> None:
                         required=True)
     parser.add_argument("--strategy-id", type=int, required=True)
     parser.add_argument("--params", default="{}")
+    parser.add_argument("--request-id", dest="request_id", default=None,
+                        help="API 透传的请求关联 ID")
     args = parser.parse_args()
+
+    # request_id 贯通：必须在 setup_logging 之前设置 contextvar
+    from app.core.logging_config import set_request_id
+
+    set_request_id(args.request_id)
 
     from app.core.logging_config import setup_logging
 

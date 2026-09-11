@@ -72,8 +72,11 @@ def is_eval_worker_alive(job_id: int) -> bool:
         return False
 
 
-def spawn_factor_eval_worker(job_id: int) -> subprocess.Popen:
-    """启动独立的因子评价 worker 子进程并立即返回。"""
+def spawn_factor_eval_worker(job_id: int, request_id: str | None = None) -> subprocess.Popen:
+    """启动独立的因子评价 worker 子进程并立即返回。
+
+    request_id：API 调用点传入的请求关联 ID，透传使 worker 日志行带 request_id。
+    """
     from app.core.config import settings
 
     backend_dir = str(settings.PROJECT_ROOT / "backend")
@@ -83,6 +86,8 @@ def spawn_factor_eval_worker(job_id: int) -> subprocess.Popen:
         sys.executable, "-m", "app.services.factor.factor_eval_worker",
         "--job-id", str(job_id),
     ]
+    if request_id:
+        cmd += ["--request-id", request_id]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
@@ -298,7 +303,14 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="QuantLab 因子评价独立 worker")
     parser.add_argument("--job-id", type=int, required=True)
+    parser.add_argument("--request-id", dest="request_id", default=None,
+                        help="API 透传的请求关联 ID")
     args = parser.parse_args()
+
+    # request_id 贯通：必须在 setup_logging 之前设置 contextvar
+    from app.core.logging_config import set_request_id
+
+    set_request_id(args.request_id)
 
     from app.core.logging_config import setup_logging
 

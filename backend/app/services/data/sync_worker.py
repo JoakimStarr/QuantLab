@@ -38,6 +38,7 @@ def spawn_sync_worker(
     source: str = None,
     broadcast: bool = False,
     refresh_misc: bool = False,
+    request_id: str | None = None,
 ) -> subprocess.Popen:
     """启动一个独立的同步 worker 子进程并立即返回。
 
@@ -45,6 +46,8 @@ def spawn_sync_worker(
     - uvicorn --reload 重启时不会等待/杀掉它
     - web 进程崩溃也不影响它继续跑
     日志由 worker 自身写入 logs/sync.log（structlog JSON，worker_kind 字段区分类型）。
+    request_id：API 调用点传入的请求关联 ID（get_request_id()），透传给 worker
+    使其日志行带 request_id；恢复路径（scheduler/启动恢复）不传，保持为空。
     """
     from app.core.config import settings
 
@@ -67,6 +70,8 @@ def spawn_sync_worker(
         cmd += ["--broadcast"]
     if refresh_misc:
         cmd += ["--refresh-misc"]
+    if request_id:
+        cmd += ["--request-id", request_id]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
@@ -327,7 +332,15 @@ def main() -> None:
                         help="backfill: 强制重拉 stock_basic/stock_industry（默认已入库则跳过）")
     parser.add_argument("--source", choices=["baostock", "akshare", "tencent"], default=None)
     parser.add_argument("--broadcast", action="store_true", help="fundamental: 拉取后同时 PIT 广播写 bin（校验/补齐阶段用）")
+    parser.add_argument("--request-id", dest="request_id", default=None,
+                        help="API 透传的请求关联 ID（恢复路径不传，保持为空）")
     args = parser.parse_args()
+
+    # request_id 贯通：必须在 setup_logging 之前设置 contextvar，
+    # 使 worker 后续所有结构化日志行自然携带 request_id
+    from app.core.logging_config import set_request_id
+
+    set_request_id(args.request_id)
 
     # 统一日志：与 web 进程共用 setup_logging（structlog JSON 管道）。
     # 全部 worker 写同一个 sync.log，行内 worker_kind 字段区分任务类型；

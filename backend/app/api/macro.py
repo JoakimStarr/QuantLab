@@ -32,8 +32,10 @@ async def macro_sync_api(
     if broadcast:
         ensure_no_bin_sync(suffix="；宏观 bin 广播需等当前同步完成（日历对齐）后执行")
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("macro", "macro", broadcast=broadcast)
+    spawn_sync_worker("macro", "macro", broadcast=broadcast,
+                      request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": "宏观指标同步已提交（独立进程后台执行）"
                    + ("" if not broadcast else "，含 bin 广播"),
@@ -55,8 +57,10 @@ async def macro_global_sync_api(
     if broadcast:
         ensure_no_bin_sync(suffix="；全球宏观 bin 广播需等当前同步完成（日历对齐）后执行")
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("global_macro", "global_macro", broadcast=broadcast)
+    spawn_sync_worker("global_macro", "global_macro", broadcast=broadcast,
+                      request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": "全球宏观指标同步已提交（独立进程后台执行）"
                    + ("" if not broadcast else "，含 bin 广播"),

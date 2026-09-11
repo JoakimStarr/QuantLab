@@ -69,8 +69,9 @@ async def _ensure_sync_idle() -> str | None:
 
 def _spawn(task_id: int, task_type: str, params: dict) -> None:
     """启动独立挖掘子进程（不阻塞事件循环）。"""
+    from app.core.logging_config import get_request_id
     from app.services.mining.mining_worker import spawn_mining_worker
-    spawn_mining_worker(task_id, task_type, params)
+    spawn_mining_worker(task_id, task_type, params, request_id=get_request_id())
 
 
 def _task_dict(r: MiningTask, include_result: bool = True) -> dict:

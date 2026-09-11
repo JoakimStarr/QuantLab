@@ -504,8 +504,10 @@ async def eod_sync_api(
     if source not in ("baostock", "akshare"):
         raise AppError("VALIDATION_ERROR", "source 仅支持 baostock/akshare", 422)
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("eod", universe, days=days, overwrite=overwrite, source=source)
+    spawn_sync_worker("eod", universe, days=days, overwrite=overwrite, source=source,
+                      request_id=get_request_id())
     audit(
         "eod_sync_submit",
         detail=f"触发 EOD 增量同步（universe={universe}, days={days}, source={source}）",
@@ -553,8 +555,10 @@ async def sync_full_api(
 
     ensure_no_bin_sync("full")
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("full", universe, years=years, refresh_misc=refresh_misc)
+    spawn_sync_worker("full", universe, years=years, refresh_misc=refresh_misc,
+                      request_id=get_request_id())
     audit(
         "sync_full_submit",
         detail=f"触发一键全同步（years={years}, universe={universe}）",
@@ -583,8 +587,9 @@ async def sync_indices_api():
 
     ensure_no_bin_sync()
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("indices", "indices")
+    spawn_sync_worker("indices", "indices", request_id=get_request_id())
     return ApiResponse(ok=True, data={"message": "指数同步已提交，独立进程后台执行中"})
 
 
@@ -611,8 +616,10 @@ async def sync_etf_api(years: int = Query(None, description="回看年数，默�
     # years（如前端"同步 X 年"输入框）转自然日；days 显式传入时优先
     if days is None:
         days = years * 365 if years else 730
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("etf", "all", days=days, overwrite=overwrite, source=source)
+    spawn_sync_worker("etf", "all", days=days, overwrite=overwrite, source=source,
+                      request_id=get_request_id())
     msg = "ETF 同步已提交（腾讯 qfq 对齐现有时间范围）" if source == "tencent" \
         else f"ETF 同步已提交（约 {days / 365:.1f} 年历史），独立进程后台执行中"
     return ApiResponse(ok=True, data={"message": msg})
@@ -684,6 +691,7 @@ async def validate_trigger_api(universe: str = Query("all")):
     校验扫描 5400+ 标的 bin 完整性/日历对齐/DB 覆盖，耗时数十秒到分钟。
     改独立子进程后前端先 POST 提交，再轮询 /validate/status 直到 done。
     """
+    from app.core.logging_config import get_request_id
     from app.services.data.validation_worker import (
         is_validation_running,
         spawn_validation_worker,
@@ -693,7 +701,7 @@ async def validate_trigger_api(universe: str = Query("all")):
             "status": "running",
             "message": "数据校验正在执行中，请稍候",
         })
-    spawn_validation_worker(universe)
+    spawn_validation_worker(universe, request_id=get_request_id())
     audit(
         "validate_submit",
         detail=f"触发数据校验（universe={universe}）",
@@ -756,8 +764,10 @@ async def repair_api(
     rec.last_updated = datetime.now()
     await db.commit()
 
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
-    spawn_sync_worker("repair", universe, include_baostock=req.include_baostock)
+    spawn_sync_worker("repair", universe, include_baostock=req.include_baostock,
+                      request_id=get_request_id())
     audit(
         "repair_submit",
         detail=f"触发数据补齐（universe={universe}, include_baostock={req.include_baostock}）",
@@ -782,11 +792,13 @@ async def fundamental_sync_api(
     broadcast=False（默认）只拉数据入库 PG，不写 bin——回填期间也安全；
     bin 广播（$roe/$netprofit_yoy 等）留到数据校验/补齐阶段（日历对齐后）。
     """
+    from app.core.logging_config import get_request_id
     from app.services.data.sync_worker import spawn_sync_worker
 
     if broadcast:
         ensure_no_bin_sync(suffix="；财报 bin 广播需等当前同步完成（日历对齐）后执行")
-    spawn_sync_worker("fundamental", "all", broadcast=broadcast)
+    spawn_sync_worker("fundamental", "all", broadcast=broadcast,
+                      request_id=get_request_id())
     return ApiResponse(ok=True, data={
         "message": "财报同步已提交（独立进程后台执行，全市场逐股拉取）"
                    + ("" if not broadcast else "，含 PIT 广播写 bin"),

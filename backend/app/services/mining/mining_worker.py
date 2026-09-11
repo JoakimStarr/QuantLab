@@ -81,13 +81,16 @@ def is_mining_worker_alive(task_id: int) -> bool:
         return False
 
 
-def spawn_mining_worker(task_id: int, task_type: str, params: dict) -> subprocess.Popen:
+def spawn_mining_worker(task_id: int, task_type: str, params: dict,
+                        request_id: str | None = None) -> subprocess.Popen:
     """启动一个独立的挖掘 worker 子进程并立即返回。
 
     start_new_session=True 使 worker 脱离 web 进程的进程组：
     - uvicorn --reload 重启时不会等待/杀掉它
     - web 进程崩溃也不影响它继续跑
     日志由 worker 自身写入 logs/mining.log（structlog JSON，worker_kind 区分类型）。
+    request_id：API 调用点传入的请求关联 ID，透传使 worker 日志行带 request_id；
+    恢复路径（scheduler/启动恢复）不传，保持为空。
     """
     from app.core.config import settings
 
@@ -99,6 +102,8 @@ def spawn_mining_worker(task_id: int, task_type: str, params: dict) -> subproces
         "--task-id", str(task_id), "--type", task_type,
         "--params", json.dumps(params, ensure_ascii=False),
     ]
+    if request_id:
+        cmd += ["--request-id", request_id]
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", backend_dir)
@@ -211,7 +216,14 @@ def main() -> None:
     parser.add_argument("--task-id", type=int, required=True)
     parser.add_argument("--type", choices=["llm", "symbolic", "automl", "text"], required=True)
     parser.add_argument("--params", default="{}")
+    parser.add_argument("--request-id", dest="request_id", default=None,
+                        help="API 透传的请求关联 ID（恢复路径不传，保持为空）")
     args = parser.parse_args()
+
+    # request_id 贯通：必须在 setup_logging 之前设置 contextvar
+    from app.core.logging_config import set_request_id
+
+    set_request_id(args.request_id)
 
     # 统一日志：与 web 进程共用 setup_logging（structlog JSON 管道）。
     # 挖掘 worker 写 mining.log，跨进程写入/轮转由 LockedRotatingFileHandler 保证安全。

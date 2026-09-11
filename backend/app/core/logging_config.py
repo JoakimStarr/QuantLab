@@ -16,6 +16,8 @@ import logging
 import logging.config
 import os
 import sys
+import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -33,6 +35,137 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id
 worker_kind_var: contextvars.ContextVar[str] = contextvars.ContextVar("worker_kind", default="")
 # 日志目录，由 logs API 路由引用
 log_dir: Path = Path("logs")
+
+
+def get_request_id() -> str | None:
+    """取当前请求的 request_id（spawn 调用点传给 worker 子进程用）。
+
+    asgi-correlation-id 安装版本只暴露 correlation_id contextvar（无
+    get_request_id 函数）；web 进程的 RequestContextMiddleware（app/core/
+    middleware.py）同时设置它与本模块的 request_id_var，这里统一取值：
+    优先 request_id_var（含 X-Request-ID 头回退），空则查 correlation_id。
+    无请求上下文（scheduler/启动恢复）返回 None，调用点不传即可。
+    """
+    rid = request_id_var.get("")
+    if rid:
+        return rid
+    try:
+        from asgi_correlation_id import correlation_id
+        return correlation_id.get()
+    except Exception:  # noqa: BLE001  # 包未安装/无上下文时静默
+        return None
+
+
+def set_request_id(rid: str | None) -> None:
+    """worker 子进程入口：把 API 透传的 request_id 设置进上下文。
+
+    同时设置两个 contextvar：
+    - request_id_var：_request_id_processor 读它注入日志行（关键）
+    - asgi_correlation_id.correlation_id：worker 内如有代码读该包保持一致
+    rid 为空时不设（保持现状：无请求上下文的恢复路径不伪造 request_id）。
+    必须在 setup_logging() 之前调用。
+    """
+    if not rid:
+        return
+    request_id_var.set(rid)
+    try:
+        from asgi_correlation_id import correlation_id
+        correlation_id.set(rid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class RateLimitFilter(logging.Filter):
+    """日志风暴限速过滤器：同一 (logger 名, level, 消息模板) 在窗口内只放行首条。
+
+    设计：
+    - key = (record.name, record.levelno, 消息模板)。模板取 record.msg
+      （stdlib %-风格日志即格式串，天然是"模板"；structlog 日志 msg 是
+      事件字典，取其 repr 保证同事件同 key），不做参数插值，避免把每条
+      不同参数的日志判为不同消息而失效。
+    - 窗口内重复记录静默计数；窗口结束时由 Timer 在后台线程追加一条
+      "<模板> (suppressed N duplicates in last Ws)" 摘要（计数>0 才发），
+      保证风暴规模可回溯、首条永远可见。
+    - ERROR/WARNING 同样限速（这正是本过滤器的目的），audit logger
+      完全豁免（审计事件一条都不能少）。
+    - 线程安全：web 进程多线程 + reaper 线程共用同一实例（dictConfig 按
+      名字共享单例），全部状态访问持 self._lock；Timer 线程写日志也安全
+      （logging 内部线程安全，handler 锁为 RLock 同线程可重入）。
+    - 新窗口由下一条同 key 记录或 Timer 触发，旧窗口的 gen 号保护摘要
+      不会被新窗口误发/误清。
+    """
+
+    def __init__(self, window: float = 60.0):
+        super().__init__()
+        self.window = float(window)
+        self._lock = threading.Lock()
+        # key -> {"start": 窗口起点(monotonic), "suppressed": 抑制计数, "gen": 窗口号}
+        self._windows: dict = {}
+        # key -> threading.Timer（窗口结束时发摘要）
+        self._timers: dict = {}
+
+    @staticmethod
+    def _msg_key(record: logging.LogRecord):
+        # record.msg 可能是 structlog 事件字典（含时间戳等逐行变化字段）：
+        # 取其 "event" 键作模板；非字符串/无 event 键则退化为 repr
+        msg = record.msg
+        if isinstance(msg, dict):
+            event = msg.get("event")
+            msg = event if isinstance(event, str) else repr(msg)
+        elif not isinstance(msg, str):
+            try:
+                msg = repr(msg)
+            except Exception:  # noqa: BLE001
+                msg = "<unrepr-able>"
+        return (record.name, record.levelno, msg)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # 同一 LogRecord 会依次流经多个 handler（file/error/console），
+        # 决策结果缓存在 record 上：对一条记录只判定一次，所有 handler 一致放行/抑制
+        cached = getattr(record, "_ratelimit_decision", None)
+        if cached is not None:
+            return cached
+        # audit 事件跳过限速：审计日志完整性优先
+        if record.name == "audit":
+            record._ratelimit_decision = True
+            return True
+        key = self._msg_key(record)
+        now = time.monotonic()
+        with self._lock:
+            st = self._windows.get(key)
+            if st is None or now - st["start"] >= self.window:
+                # 新窗口（或首条）：本条永远放行
+                gen = st["gen"] + 1 if st else 0
+                self._windows[key] = {"start": now, "suppressed": 0, "gen": gen}
+                # 旧窗口残留的摘要 Timer 作废（gen 保护，双保险），清掉重排
+                old = self._timers.pop(key, None)
+                if old is not None:
+                    old.cancel()
+                record._ratelimit_decision = True
+                return True
+            st["suppressed"] += 1
+            if key not in self._timers:
+                delay = max(0.01, st["start"] + self.window - now)
+                t = threading.Timer(delay, self._flush, args=(key, st["gen"], record.levelno))
+                t.daemon = True
+                self._timers[key] = t
+                t.start()
+            record._ratelimit_decision = False
+            return False
+
+    def _flush(self, key, gen: int, levelno: int) -> None:
+        with self._lock:
+            self._timers.pop(key, None)
+            st = self._windows.get(key)
+            if st is None or st["gen"] != gen:
+                return  # 窗口已被新记录/新窗口接管，不重复发摘要
+            suppressed = st["suppressed"]
+            self._windows.pop(key, None)
+        if suppressed > 0:
+            name, _, msg = key
+            logging.getLogger(name).log(
+                levelno, "%s (suppressed %d duplicates in last %ds)",
+                msg, suppressed, max(1, int(self.window)))
 
 
 class LockedRotatingFileHandler(RotatingFileHandler):
@@ -210,6 +343,7 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
             "backupCount": 5,
             "encoding": "utf-8",
             "formatter": "structlog",
+            "filters": ["ratelimit"],
         },
     }
     if error_file:
@@ -221,12 +355,14 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
             "encoding": "utf-8",
             "level": "WARNING",
             "formatter": "structlog",
+            "filters": ["ratelimit"],
         }
     if console:
         handlers["console"] = {
             "class": "logging.StreamHandler",
             "stream": sys.stdout,
             "formatter": "structlog",
+            "filters": ["ratelimit"],
         }
 
     # 显式管理的第三方 logger：让 uvicorn 启动/重载日志落盘、压制噪音刷屏。
@@ -247,6 +383,13 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO", json_format: bool 
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": formatters,
+        # 限速过滤器：dictConfig 按名字共享同一实例（web 进程各 handler、
+        # reaper 线程共用一份窗口状态）；audit 事件在过滤器内部豁免
+        "filters": {
+            "ratelimit": {
+                "()": "app.core.logging_config.RateLimitFilter",
+            },
+        },
         "handlers": handlers,
         "loggers": loggers,
         "root": {
