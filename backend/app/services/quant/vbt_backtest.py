@@ -261,8 +261,9 @@ def run_vbt_backtest(
     bench_ret = None
     if benchmark:
         try:
-            from app.services.quant.qlib_backtest import normalize_benchmark
             from qlib.data import D
+
+            from app.services.quant.qlib_backtest import normalize_benchmark
             bench_code = normalize_benchmark(benchmark)
             bench_price = D.features([bench_code], ["$close"], start_time=start, end_time=end, freq="day")
             if bench_price is not None and not bench_price.empty:

@@ -8,17 +8,20 @@
 - 批量入库：通过评价的因子用 add_factors_batch 单次 commit
 - iterative_mine_factors 迭代因子挖掘 —— 每轮生成→校验→IC评价→反馈给 LLM
 """
-import json
-import logging
 import asyncio
 import hashlib
+import json
+import logging
 from datetime import datetime
+
+import numpy as np
 from cachetools import LRUCache
+
 from app.core.config import settings
-from app.core.gpu_utils import is_gpu_available
-from app.services.factor.expression import validate_expression, ExpressionValidationError
-from app.services.factor.library import add_factor, add_factors_batch, update_factor_metrics
 from app.core.executor import run_cpu
+from app.core.gpu_utils import is_gpu_available
+from app.services.factor.expression import ExpressionValidationError, validate_expression
+from app.services.factor.library import add_factor, add_factors_batch, update_factor_metrics
 from app.services.mining.task_utils import update_task_status as _update_task
 from app.services.quant.factor_validator import bh_corrected_pvalues
 
@@ -128,7 +131,8 @@ async def _load_existing_ic_series() -> list:
     - 只取 llm/symbolic 挖掘因子（Alpha158 基准因子量大且相关性高，不参与去重）
     - 数量上限 diversity_max_factors（默认 20），带内存缓存，重复挖掘不重复计算
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from app.core.database import async_session
     from app.models.factor import Factor
     from app.services.quant.factor_validator import compute_existing_ic_series
@@ -180,7 +184,6 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
     mining_cfg = settings.mining.get("llm", {})
     n_candidates = n_candidates or mining_cfg.get("candidates_per_run", 10)
     ic_threshold = mining_cfg.get("ic_threshold", 0.03)
-    significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     # BH 多重检验的 FDR 水平与显著性 alpha 解耦：批内候选多（如 50 个）时
     # p_adj 按 m 倍放大，用同一 alpha 会堵死产出；bh_alpha 单独控制假阳性率。
     bh_alpha = mining_cfg.get("bh_alpha", 0.20)
@@ -270,7 +273,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
         passed = []  # [(candidate, metrics), ...]
         best_ic = 0.0
         evaluated = []  # 候选评价记录（落库用）
-        for v, result in zip(valid, eval_results):
+        for v, result in zip(valid, eval_results, strict=False):
             if isinstance(result, Exception):
                 logger.warning("因子 %s 评价失败: %s", v["name"], result)
                 evaluated.append({"name": v["name"], "expression": v["expression"],
@@ -332,7 +335,7 @@ async def mine_with_llm(task_id: int, n_candidates: int = None, universe: str = 
                 for v, _ in passed
             ]
             factors = await add_factors_batch(factor_dicts, skip_validation=True)
-            for factor, (_, metrics) in zip(factors, passed):
+            for factor, (_, metrics) in zip(factors, passed, strict=False):
                 await update_factor_metrics(factor["id"], metrics)
                 passed_ids.append(factor["id"])
 
@@ -570,7 +573,7 @@ async def _score_candidates(valid_exprs: list, existing_ic_series: list, univers
             "significance": {**(r.get("significance") or {}), "p_adj": pa},
             "p_adj": pa,
         }
-    for v, ic_result in zip(valid_exprs, eval_results):
+    for v, ic_result in zip(valid_exprs, eval_results, strict=False):
         if isinstance(ic_result, Exception):
             logger.warning("因子评价失败: %s, expr=%s", ic_result, v["expression"])
             iter_evaluated.append({"name": v["name"], "expression": v["expression"],
@@ -679,7 +682,6 @@ async def iterative_mine_factors(
     """
     mining_cfg = settings.mining.get("llm", {})
     ic_threshold = template.get("ic_threshold") or mining_cfg.get("ic_threshold", 0.03)
-    significance_alpha = mining_cfg.get("significance_alpha", 0.05)
     bh_alpha = mining_cfg.get("bh_alpha", 0.20)
     # 早停：连续 stall_tolerance 轮最佳 IC 无实质改善（或连续全拒）时提前终止，
     # 避免在模型输出质量停滞时继续消耗 LLM 调用与算力

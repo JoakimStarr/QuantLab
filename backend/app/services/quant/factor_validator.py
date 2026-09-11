@@ -10,8 +10,9 @@ from collections import deque
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 from cachetools import LRUCache
+from scipy import stats
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,7 @@ def bh_corrected_pvalues(p_values: list) -> list:
     q[order] = q_sorted
     q = np.clip(q, 0.0, 1.0)
     out = [None] * len(p_values)
-    for i, val in zip(valid_idx, q.tolist()):
+    for i, val in zip(valid_idx, q.tolist(), strict=False):
         out[i] = float(val)
     return out
 
@@ -422,7 +423,7 @@ def compute_daily_ic_series(factor_expr: str, start: str, end: str,
     Returns:
         pd.Series(index=datetime, values=daily_rank_ic)
     """
-    from app.services.quant.factor_eval import load_factor_values, load_label, forward_return_label
+    from app.services.quant.factor_eval import forward_return_label, load_factor_values, load_label
     label_expr = forward_return_label(horizon)
     if factor_df is None:
         factor_df = load_factor_values(factor_expr, start, end, universe)
@@ -642,9 +643,7 @@ def evaluate_factor_with_validation(
         return cached
 
     # 1. 样本分割：基于实际交易日（因子数据真实存在的日期），而非自然日
-    from app.services.quant.factor_eval import (
-        load_factor_values, load_label, forward_return_label
-    )
+    from app.services.quant.factor_eval import forward_return_label, load_factor_values, load_label
     label_expr = forward_return_label(horizon)
     factor_df = load_factor_values(factor_expr, start, end, universe)
     label_df = load_label(start, end, label_expr=label_expr, universe=universe)
@@ -654,8 +653,8 @@ def evaluate_factor_with_validation(
     # 行业中性化（可选）：消除行业暴露造成的假 IC
     if industry_neutralize_enabled:
         try:
-            from app.services.factor.neutralize import industry_neutralize
             from app.services.data.industry_sync import load_industry_map
+            from app.services.factor.neutralize import industry_neutralize
             ind_map = load_industry_map()
             if ind_map:
                 factor_df = industry_neutralize(factor_df, industry_map=ind_map)

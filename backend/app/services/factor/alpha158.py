@@ -2,13 +2,13 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # Alpha158 的 158 个因子表达式（qlib 标准定义，硬编码避免运行时依赖 qlib.contrib）
-ALPHA158_EXPRESSIONS: List[Dict] = [
+ALPHA158_EXPRESSIONS: list[dict] = [
     {"name": "KMID", "expr": "($close-$open)/$open", "category": "alpha158", "description": "中间价位置"},
     {"name": "KLEN", "expr": "($high-$low)/$open", "category": "alpha158", "description": "K线长度"},
     {"name": "KMID2", "expr": "($close-$open)/($high-$low+1e-12)", "category": "alpha158", "description": "中间价占比"},
@@ -290,8 +290,8 @@ async def batch_evaluate_alpha158(
     max_concurrent: int = 4,
     eval_start: str = None,
     eval_end: str = None,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    factor_ids: Optional[List[int]] = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    factor_ids: list[int] | None = None,
     universe: str = None,
 ) -> dict:
     """批量并行评价 Alpha158 因子（优化版：预加载共用数据 + 线程池 + 实时写入）。
@@ -316,6 +316,7 @@ async def batch_evaluate_alpha158(
         progress_callback: 进度回调 (done, total, current_name)，每次完成都触发
     """
     from sqlalchemy import select
+
     from app.core.config import settings
     from app.core.database import async_session
     from app.core.executor import run_io_cpu  # 线程池，qlib 释放 GIL
@@ -467,7 +468,7 @@ async def batch_evaluate_alpha158(
     }
 
 
-async def seed_alpha158(progress_callback: Optional[Callable[[int, int, str], None]] = None) -> dict:
+async def seed_alpha158(progress_callback: Callable[[int, int, str], None] | None = None) -> dict:
     """将 Alpha158 的 158 个因子批量导入因子库，并行计算评价指标。
 
     行为：
@@ -476,6 +477,7 @@ async def seed_alpha158(progress_callback: Optional[Callable[[int, int, str], No
     - 单个因子评价失败不阻塞整体流程，记录日志后继续
     """
     from sqlalchemy import select
+
     from app.core.config import settings
     from app.core.database import async_session
     from app.models.factor import Factor
@@ -554,8 +556,8 @@ async def seed_alpha158(progress_callback: Optional[Callable[[int, int, str], No
 
 
 async def backfill_alpha158_metrics(
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    factor_ids: Optional[List[int]] = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    factor_ids: list[int] | None = None,
     eval_start: str = None,
     eval_end: str = None,
     universe: str = None,
@@ -568,6 +570,7 @@ async def backfill_alpha158_metrics(
     - universe：标的池（None=config 默认），如 etf_all
     """
     from sqlalchemy import select
+
     from app.core.config import settings
     from app.core.database import async_session
     from app.models.factor import Factor

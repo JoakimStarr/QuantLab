@@ -479,8 +479,9 @@ async def _covered_trade_dates(start, end):
     start/end 为 ``datetime.date``；返回 None 表示查询失败（调用方回退旧行为）。
     """
     try:
-        from app.core.database import async_session
         from sqlalchemy import text
+
+        from app.core.database import async_session
         async with async_session() as session:
             rows = (await session.execute(
                 text("SELECT DISTINCT trade_date FROM stock_daily "
@@ -572,8 +573,8 @@ def _write_baostock_bins(per_stock_rows: dict, provider_uri: str, old_calendar: 
     Returns:
         (success_count, fail_count, pg_rows)
     """
-    from app.services.data.sync_progress import update_progress as _up
     from app.services.data.baostock_backfill import _f, _i  # 延迟导入避免循环依赖（backfill 模块级已 import 本模块）
+    from app.services.data.sync_progress import update_progress as _up
 
     success_count = 0
     fail_count = 0

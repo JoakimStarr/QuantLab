@@ -12,9 +12,11 @@
 - https://deepwiki.com/shiyu-coder/Kronos/4.9-backtesting-with-qlib
 """
 import logging
+
 import pandas as pd
-from app.services.quant.qlib_init import init_qlib
+
 from app.core.config import settings
+from app.services.quant.qlib_init import init_qlib
 
 logger = logging.getLogger(__name__)
 

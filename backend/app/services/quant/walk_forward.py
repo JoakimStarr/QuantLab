@@ -9,6 +9,7 @@
 因此本模块不直接消费 price_df / cost_*（保留参数仅为 API 兼容）。
 """
 import logging
+
 import numpy as np
 import pandas as pd
 
@@ -253,9 +254,9 @@ def build_score_df_from_exprs(factor_exprs: dict, weights: dict,
     复用 _compute_backtest_sync 的组合逻辑，仅返回 score_df。
     universe: 标的池（None=config 默认）。
     """
-    from app.services.quant.qlib_init import init_qlib
-    from app.services.quant.factor_eval import load_factor_values
     from app.services.quant.backtest_engine import combine_factors
+    from app.services.quant.factor_eval import load_factor_values
+    from app.services.quant.qlib_init import init_qlib
 
     init_qlib()
     factor_values = {}
